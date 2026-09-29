@@ -1,0 +1,2 @@
+# Built files are hashed (sha256 in @require): store them byte-for-byte.
+dist/** -text

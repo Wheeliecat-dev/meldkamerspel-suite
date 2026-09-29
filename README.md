@@ -42,4 +42,6 @@ node build.js           # beta only
 node build.js release   # beta + stable (bump VERSION in build.js first)
 ```
 
+The installable `.user.js` files are short loaders (only the header). The code is in `dist/lib/`, loaded with `@require` and checked with a sha256 hash, so Tampermonkey stores it locally and runs it without delay.
+
 Commit and push `dist/`. Tampermonkey picks up the new version via `@updateURL`.

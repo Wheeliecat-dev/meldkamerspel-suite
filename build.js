@@ -3,14 +3,19 @@
 //   node build.js          beta only   -> dist/meldkamerspel-suite-beta.user.js
 //   node build.js release  stable+beta -> also dist/meldkamerspel-suite.user.js
 //
+// The .user.js files are tiny loaders (just the header). The code itself
+// is dist/lib/*.js, pulled in with @require. Tampermonkey downloads it once
+// per version, stores it, and checks it against the sha256 in the URL, so
+// it runs from local storage (no delay, no flash) and can't be swapped out.
 // Push dist/ to GitHub and Tampermonkey updates everyone by itself
 // (@updateURL). Stable is what you share; beta is for live testing.
 // The beta version gets a timestamp suffix, so every beta build counts as
 // an update. Bump VERSION for each stable release.
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const REPO = 'Wheeliecat-dev/meldkamerspel-suite'; // GitHub user/repo
 const BRANCH = 'main';
 
@@ -45,7 +50,9 @@ function stamp() {
 function build(channel) {
     const beta = channel === 'beta';
     const file = beta ? 'meldkamerspel-suite-beta.user.js' : 'meldkamerspel-suite.user.js';
-    const url = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/dist/${file}`;
+    const lib = beta ? 'suite-beta.js' : 'suite.js';
+    const raw = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/dist`;
+    const url = `${raw}/${file}`;
     const version = beta ? `${VERSION}.${stamp()}` : VERSION;
     const vars = {
         VERSION: version,
@@ -54,16 +61,21 @@ function build(channel) {
         UPDATE_URL: url,
         CHANNEL: channel,
     };
-    const parts = [
-        read('src/core/header.js'),
+    const fill = (text) => text.replace(/\{\{(\w+)\}\}/g, (all, k) => (k in vars ? vars[k] : all));
+    const code = fill([
+        `/* ${vars.NAME} v${version} — https://github.com/${REPO} */`,
         read('src/core/core.js'),
         ...MODULES.map((m) => `/* ==== module: ${m} ${'='.repeat(Math.max(0, 60 - m.length))} */\n${read(`src/modules/${m}.js`)}`),
         'MKS.boot();',
-    ];
-    const out = parts.join('\n\n').replace(/\{\{(\w+)\}\}/g, (all, k) => (k in vars ? vars[k] : all)) + '\n';
-    fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
-    fs.writeFileSync(path.join(__dirname, 'dist', file), out);
-    console.log(`built dist/${file} v${version} (${MODULES.length} modules, ${(out.length / 1024).toFixed(0)} KB)`);
+    ].join('\n\n')) + '\n';
+    const hash = crypto.createHash('sha256').update(code, 'utf8').digest('hex');
+    vars.REQUIRE_URL = `${raw}/lib/${lib}?v=${version}#sha256=${hash}`;
+    const loader = fill(read('src/core/header.js')) + '\n';
+
+    fs.mkdirSync(path.join(__dirname, 'dist/lib'), { recursive: true });
+    fs.writeFileSync(path.join(__dirname, 'dist/lib', lib), code);
+    fs.writeFileSync(path.join(__dirname, 'dist', file), loader);
+    console.log(`built dist/${file} v${version} (${loader.split('\n').length} lines) + dist/lib/${lib} (${(code.length / 1024).toFixed(0)} KB)`);
 }
 
 build('beta');

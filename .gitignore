@@ -2,6 +2,7 @@
 # data, old standalone scripts, notes) stays local.
 /*
 !/.gitignore
+!/.gitattributes
 !/README.md
 !/build.js
 !/src/
