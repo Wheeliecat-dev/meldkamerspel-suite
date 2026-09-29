@@ -141,12 +141,16 @@ MKS.module({
                 log('Bestaande voorstellen controleren op verouderde waarden (alleen lezen)…');
                 status();
                 const changed = [];
+                let i = 0;
                 for (const p of toCheck) {
                     if (!running) break;
+                    i++;
+                    ctx.status(`Controleren ${i}/${toCheck.length}: ${p.c}`, { tone: 'busy', progress: [i, toCheck.length], dock: true });
                     const editDoc = await get(st.existing.get(capOf(p.c)));
                     const form = [...editDoc.forms].find(f => /\/aaos\/\d+$/.test(f.action) || f.querySelector('[name=_method]'));
                     const diff = form && diffPreset(form, p);
-                    if (diff) changed.push({ p, diff });
+                    if (diff) { changed.push({ p, diff }); log(`(${i}/${toCheck.length}) wijkt af:`, p.c, diff); }
+                    else if (i % 25 === 0) log(`(${i}/${toCheck.length}) gecontroleerd…`);
                     await sleep(CONFIG.THROTTLE_MS);
                 }
                 toUpdate = changed;
