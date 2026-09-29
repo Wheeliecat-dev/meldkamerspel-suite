@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.2.0.202609291702 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.0.202609291709 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.2.0.202609291702';
+    const VERSION = '1.3.0.202609291709';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1838,171 +1838,176 @@ MKS.module({
     name: 'Meldinghelper',
     icon: '📋',
     category: 'missions',
-    description: 'Een compact vak bovenin het alarmeervenster met wat de inzet vraagt: benodigde voertuigen, kansen op extra voertuigen, '
-        + 'patiënten, transportkans, afdeling, gevangenen en credits. De gegevens komen uit de hulppagina van het spel zelf, dus altijd actueel. '
-        + 'Klik op de titel om het vak in of uit te klappen.',
+    description: 'Rechtsboven in het alarmeervenster een lijstje met wat je moet sturen: de benodigde voertuigen, water en personeel. '
+        + 'De gegevens komen uit de hulppagina van het spel zelf. Op de kaartpagina worden ze alvast opgehaald voor de inzetten in je lijst, '
+        + 'zodat het lijstje meteen staat als je een inzet opent.',
     at: 'ready',
     frames: 'all',
-    pages: /^\/missions\/\d+/,
-    pageNote: 'Alleen in het alarmeervenster',
+    pages: /^\/(missions\/\d+\/?)?$/,
+    pageNote: 'In het alarmeervenster (en op de kaartpagina om vooruit te laden)',
     live: true,
     settings: [
-        { key: 'chances', label: 'Kansen op extra voertuigen tonen', type: 'bool', default: true },
-        { key: 'credits', label: 'Credits tonen', type: 'bool', default: true },
-        { key: 'prereq', label: 'Voorwaarden tonen', type: 'bool', default: false, help: 'Benodigde posten en uitbreidingen om de inzet te krijgen.' },
-        { key: 'variants', label: 'Missievariaties tonen', type: 'bool', default: false },
+        { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: false,
+            help: 'Bijvoorbeeld "Hoogwerker 80%". Die hoef je niet meteen te sturen.' },
     ],
 
     run(ctx) {
-        const header = document.querySelector('.mission_header_info');
-        const link = document.querySelector('#mission-type-helper-mobile, a[href^="/einsaetze/"]');
-        if (!header || !link) return;
+        const CACHE_KEY = 'mks-mission-helper-v2';
+        const CACHE_MS = 3 * 24 * 3600 * 1000;
+        const esc = ctx.esc;
+        // Left over from the first beta version.
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
-        const STATE_KEY = 'mks-mission-helper-open';
-        const CACHE_KEY = 'mks-mission-helper-cache';
-        const CACHE_MS = 24 * 3600 * 1000;
+        /* ========================================================================
+         * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
+         * From the "Voertuig en personeel vereisten" table:
+         *   "Benodigde X" = n       -> send n × X
+         *   "X benodigd" = amount   -> e.g. water in litres
+         *   "X benodigd waarschijnlijkheid" = % -> chance (optional)
+         * and "Benodigde Personeel" from "Overige informatie".
+         * Parsed result is cached per type + overlays in localStorage.
+         * ==================================================================== */
+        const keyOf = (type, overlays) => `${type}|${overlays || ''}`;
+        const urlOf = (type, overlays) => `/einsaetze/${type}${overlays ? `?additive_overlays=${encodeURIComponent(overlays)}` : ''}`;
 
-        // The help page depends on the mission type and its overlays, not on
-        // the mission itself, so cache it per type + overlays for a day.
-        const url = new URL(link.getAttribute('href'), location.origin);
-        const typeKey = url.pathname + '?' + (url.searchParams.get('additive_overlays') || '') + '|' + (url.searchParams.get('overlay_index') || '');
+        function readCache() {
+            try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) { return {}; }
+        }
+        function cached(key) {
+            const hit = readCache()[key];
+            return hit && Date.now() - hit.at < CACHE_MS ? hit : null;
+        }
+        function store(key, data) {
+            const all = readCache();
+            const now = Date.now();
+            for (const k in all) if (now - all[k].at > CACHE_MS) delete all[k];
+            all[key] = { at: now, ...data };
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
+        }
+
+        function parse(html) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const need = [], chance = [];
+            for (const table of doc.querySelectorAll('table')) {
+                const title = ((table.querySelector('thead th') || {}).textContent || '').trim();
+                const vehicles = /voertuig|personeel/i.test(title);
+                const other = /overige/i.test(title);
+                if (!vehicles && !other) continue;
+                for (const tr of table.querySelectorAll('tbody tr')) {
+                    if (tr.cells.length < 2) continue;
+                    const label = tr.cells[0].textContent.trim().replace(/\s+/g, ' ');
+                    const value = tr.cells[1].textContent.trim().replace(/\s+/g, ' ');
+                    let m;
+                    if ((m = label.match(/^(.*?)\s+benodigd waarschijnlijkheid$/i))) chance.push({ name: m[1], v: value });
+                    else if (other && !/^Benodigde? Personeel$/i.test(label)) continue;
+                    else if ((m = label.match(/^Benodigd(?:e)?(?: aantal)?\s+(.*)$/i))) need.push({ name: m[1], v: value });
+                    else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
+                }
+            }
+            return { need, chance };
+        }
+
+        async function fetchType(type, overlays) {
+            const res = await fetch(urlOf(type, overlays), { credentials: 'same-origin' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = parse(await res.text());
+            store(keyOf(type, overlays), data);
+            return data;
+        }
+
+        /* ========================================================================
+         * MAP PAGE — warm the cache for the missions in the list, slowly
+         * (one help page every 1.5 s, only types not cached yet).
+         * ==================================================================== */
+        if (location.pathname === '/') {
+            if (window.top !== window.self) return;
+            let stopped = false;
+            let busy = false;
+            async function warm() {
+                if (busy || stopped) return;
+                busy = true;
+                try {
+                    const todo = new Map();
+                    document.querySelectorAll('.missionSideBarEntry[mission_type_id]').forEach((el) => {
+                        const type = el.getAttribute('mission_type_id');
+                        const ov = el.getAttribute('data-additive-overlays') || '';
+                        if (!/^\d+$/.test(type)) return;
+                        const k = keyOf(type, ov);
+                        if (!todo.has(k) && !cached(k)) todo.set(k, [type, ov]);
+                    });
+                    for (const [type, ov] of todo.values()) {
+                        if (stopped) break;
+                        try { await fetchType(type, ov); } catch (e) { ctx.warn('prefetch failed', type, e); }
+                        await new Promise((r) => setTimeout(r, 1500));
+                    }
+                } finally { busy = false; }
+            }
+            const first = setTimeout(warm, 5000);
+            const timer = setInterval(warm, 60000);
+            return { stop() { stopped = true; clearTimeout(first); clearInterval(timer); } };
+        }
+
+        /* ========================================================================
+         * MISSION WINDOW — list in the right half of the header, under the
+         * progress bar. Drawn synchronously from cache, so nothing moves.
+         * ==================================================================== */
+        const info = document.getElementById('mission_general_info');
+        const right = document.getElementById('mission_progress_info');
+        if (!info || !right) return;
+        const type = info.getAttribute('data-mission-type');
+        if (!/^\d+$/.test(type || '')) return; // own/alliance large-scale events have no type
+        const overlays = (info.getAttribute('data-additive-overlays') || '').replace(/^null$/, '');
+        const key = keyOf(type, overlays);
 
         const style = document.createElement('style');
         style.textContent = `
-            .mks-mh { margin: 6px 0 10px; border: 1px solid rgba(128,128,128,.35); border-left: 4px solid #31c4dd; border-radius: 6px;
-                padding: 6px 10px; font-size: 13px; background: rgba(128,128,128,.06); }
-            .mks-mh-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-weight: 600; }
-            .mks-mh-head .mks-mh-sum { font-weight: normal; opacity: .75; font-size: 12px; }
-            .mks-mh-head .mks-mh-arrow { margin-left: auto; opacity: .6; }
-            .mks-mh-body { margin-top: 6px; }
-            .mks-mh.closed .mks-mh-body { display: none; }
-            .mks-mh-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
-            .mks-mh-chip { display: inline-flex; gap: 4px; align-items: baseline; padding: 1px 7px; border-radius: 10px;
-                background: rgba(128,128,128,.18); white-space: nowrap; }
-            .mks-mh-chip b { font-variant-numeric: tabular-nums; }
-            .mks-mh-chip.chance { background: transparent; border: 1px dashed rgba(128,128,128,.6); }
-            .mks-mh-info { display: grid; grid-template-columns: max-content 1fr; gap: 1px 12px; font-size: 12px; }
-            .mks-mh-info dt { font-weight: normal; opacity: .7; }
-            .mks-mh-info dd { margin: 0; }
-            .mks-mh-sec { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin-top: 4px; }
+            .mks-mh { margin-top: 6px; font-size: 14px; line-height: 1.35; min-height: 44px; }
+            .mks-mh-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; }
+            .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+            .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
+            .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
+            .mks-mh-chance { opacity: .6; font-size: 12px; margin-top: 3px; }
+            .mks-mh-note { opacity: .6; font-size: 12px; }
         `;
         document.head.appendChild(style);
 
         const box = document.createElement('div');
         box.className = 'mks-mh';
-        let open = true;
-        try { open = localStorage.getItem(STATE_KEY) !== '0'; } catch (e) { /* ignore */ }
-        box.classList.toggle('closed', !open);
-        box.innerHTML = '<div class="mks-mh-head">Meldinghelper <span class="mks-mh-sum">laden…</span><span class="mks-mh-arrow"></span></div><div class="mks-mh-body"></div>';
-        header.insertAdjacentElement('afterend', box);
-        const head = box.querySelector('.mks-mh-head');
-        const body = box.querySelector('.mks-mh-body');
-        const arrow = () => { box.querySelector('.mks-mh-arrow').textContent = box.classList.contains('closed') ? '▸' : '▾'; };
-        arrow();
-        head.addEventListener('click', () => {
-            box.classList.toggle('closed');
-            try { localStorage.setItem(STATE_KEY, box.classList.contains('closed') ? '0' : '1'); } catch (e) { /* ignore */ }
-            arrow();
-        });
+        right.appendChild(box);
 
-        /* ========================================================================
-         * DATA — the game's own help page (/einsaetze/{type}), three tables:
-         *   "Beloning en voorwaarden"        credits, POI, needed buildings
-         *   "Voertuig en personeel vereisten" "Benodigde X" = n, "X benodigd waarschijnlijkheid" = %
-         *   "Overige informatie"              patients, transport chance, department, ...
-         * ==================================================================== */
-        function readCache() {
-            try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) { return {}; }
-        }
-        function writeCache(all) {
-            const now = Date.now();
-            for (const k in all) if (now - all[k].at > CACHE_MS) delete all[k];
-            try { localStorage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
-        }
-
-        async function load() {
-            const all = readCache();
-            const hit = all[typeKey];
-            if (hit && Date.now() - hit.at < CACHE_MS) return hit.tables;
-            const res = await fetch(url.pathname + url.search, { credentials: 'same-origin' });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-            const tables = [...doc.querySelectorAll('table')].map((t) => ({
-                title: (t.querySelector('thead th') || {}).textContent || '',
-                rows: [...t.querySelectorAll('tbody tr')].map((tr) => [...tr.cells].map((td) => td.textContent.trim().replace(/\s+/g, ' ')))
-                    .filter((r) => r.length >= 2 && r[0]),
-            })).map((t) => ({ ...t, title: t.title.trim() }));
-            all[typeKey] = { at: Date.now(), tables };
-            writeCache(all);
-            return tables;
-        }
-
-        const esc = ctx.esc;
         const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
-        function render(tables) {
-            const find = (re) => tables.find((t) => re.test(t.title)) || { rows: [] };
-            const reward = find(/beloning|voorwaarden/i).rows;
-            const vehicles = find(/voertuig|personeel/i).rows;
-            const other = find(/overige/i).rows;
-
-            const need = [], chance = [], extra = [];
-            for (const [label, value] of vehicles) {
-                let m;
-                if ((m = label.match(/^(.*?)\s+benodigd waarschijnlijkheid$/i))) chance.push({ name: m[1], v: `${value}%` });
-                else if ((m = label.match(/^Benodigd(?:e)?(?: aantal)?\s+(.*)$/i))) need.push({ name: m[1], v: value });
-                else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
-                else extra.push([label, value]);
+        function render(data) {
+            if (!data) { box.innerHTML = '<span class="mks-mh-note">Meldinghelper laden…</span>'; return; }
+            // Plain counts go in the grid; water, foam and personnel rules
+            // ("1 per 100 reddingswerkers") go on one line underneath.
+            const litres = (x) => /water|schuim/i.test(x.name) && /^\d+$/.test(x.v.replace(/\./g, ''));
+            const counts = data.need.filter((x) => /^\d+$/.test(x.v) && !litres(x));
+            const rest = data.need.filter((x) => !counts.includes(x));
+            if (!data.need.length) {
+                box.innerHTML = '<span class="mks-mh-note">Geen voertuigeisen: alleen patiënten of ambulance.</span>';
+            } else {
+                box.innerHTML = `<div class="mks-mh-list">${counts.map((x) =>
+                    `<div class="mks-mh-row" title="${esc(`${x.v}× ${x.name}`)}"><span class="mks-mh-n">${esc(x.v)}×</span>`
+                    + `<span class="mks-mh-name">${esc(cap(x.name))}</span></div>`).join('')}</div>`;
+                if (rest.length) {
+                    box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest">${rest.map((x) => `<span><b>${esc(cap(x.name))}</b> `
+                        + `${esc(litres(x) ? `${ctx.nl(Number(x.v.replace(/\./g, '')))} l` : x.v)}</span>`).join('')}</div>`);
+                }
             }
-
-            let credits = null, poi = null;
-            const prereq = [];
-            for (const [label, value] of reward) {
-                if (/credits/i.test(label)) credits = value;
-                else if (/point of interest/i.test(label)) poi = value;
-                else if (!/incident keuze/i.test(label)) prereq.push([label.replace(/^Benodigd(?:e)?(?: aantal)?\s+/i, ''), value]);
+            if (ctx.cfg.chances && data.chance.length) {
+                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
             }
-
-            const info = [];
-            for (const [label, value] of other) {
-                if (/variaties/i.test(label) && !ctx.cfg.variants) continue;
-                if (/benodigd waarschijnlijkheid$/i.test(label)) { chance.push({ name: label.replace(/\s+benodigd waarschijnlijkheid$/i, ''), v: `${value}%` }); continue; }
-                const short = label
-                    .replace(/^Waarschijnlijkheid dat een patiënt getransporteerd moet worden$/i, 'Transportkans')
-                    .replace(/^Gespecialiseerde afdeling voor patiënten$/i, 'Afdeling');
-                const val = /kans|waarschijnlijkheid/i.test(short) && /^\d+$/.test(value) ? `${value}%` : value;
-                info.push([short, val]);
-            }
-            info.push(...extra);
-
-            const chips = (list, cls) => `<div class="mks-mh-chips">${list.map((x) =>
-                `<span class="mks-mh-chip ${cls}"><b>${esc(x.v)}</b>${/^\d+$/.test(x.v) ? '×' : ''} ${esc(cap(x.name))}</span>`).join('')}</div>`;
-            const dl = (list) => `<dl class="mks-mh-info">${list.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
-
-            let html = '';
-            if (need.length) html += chips(need, '');
-            else html += '<div class="mks-mh-chips"><span class="mks-mh-chip">Geen voertuigeisen (alleen ambulance of patiënten)</span></div>';
-            if (ctx.cfg.chances && chance.length) html += `<div class="mks-mh-sec">Kans op</div>${chips(chance, 'chance')}`;
-            const top = [];
-            if (poi) top.push(['POI', poi]);
-            if (info.length || top.length) html += dl(top.concat(info));
-            if (ctx.cfg.prereq && prereq.length) html += `<div class="mks-mh-sec">Voorwaarden</div>${dl(prereq)}`;
-            body.innerHTML = html;
-
-            const total = need.reduce((a, x) => a + (/^\d+$/.test(x.v) ? Number(x.v) : 0), 0);
-            const sum = [total ? `${total} voertuigen` : '', ctx.cfg.credits && credits ? `${ctx.nl(Number(credits.replace(/\D/g, '')))} credits` : '']
-                .filter(Boolean).join(' · ');
-            head.querySelector('.mks-mh-sum').textContent = sum;
         }
 
-        let tables = null;
-        load()
-            .then((t) => { tables = t; render(t); })
-            .catch((e) => {
-                ctx.warn('help page failed', e);
-                head.querySelector('.mks-mh-sum').textContent = 'kon de hulppagina niet laden';
-            });
-        ctx.onSettings(() => { if (tables) render(tables); });
+        let data = cached(key);
+        render(data);
+        if (!data) {
+            fetchType(type, overlays)
+                .then((d) => { data = d; render(d); })
+                .catch((e) => { ctx.warn('help page failed', e); box.innerHTML = '<span class="mks-mh-note">Meldinghelper: hulppagina niet geladen.</span>'; });
+        }
+        ctx.onSettings(() => render(data));
 
         return {
             stop() {
@@ -8300,15 +8305,18 @@ MKS.module({
     name: 'Plaatsingsadvies',
     icon: '📍',
     category: 'map',
-    description: 'Tijdens het bouwen of verplaatsen van een gebouw: toont het adres en welke echte OpenStreetMap-objecten binnen een straal van de gekozen plek liggen, '
-        + 'zodat je ziet of het een geloofwaardige echte locatie is. Een echte post van hetzelfde type wordt groen gemarkeerd. Blokkeert of vult nooit iets in.',
+    description: 'Tijdens het bouwen of verplaatsen van een gebouw: toont de echte hulpdienstposten (brandweer, ambulance, politie, ziekenhuis, heli, KNRM, '
+        + 'Rijkswaterstaat, defensie) in de buurt van de marker, volgens OpenStreetMap. Klik op een post en de marker springt erheen. '
+        + 'Vult verder niets in en koopt nooit iets: bouwen doe je zelf.',
     tagline: 'Verschijnt bij gebouw plaatsen',
     at: 'load',
     frames: 'all',
     live: true,
     settings: [
-        { key: 'radius', label: 'Zoekstraal', type: 'range', default: 50, min: 10, max: 150, step: 5, unit: ' m' },
-        { key: 'address', label: 'Adres tonen (Nominatim)', type: 'bool', default: true },
+        { key: 'radiusKm', label: 'Zoekstraal', type: 'range', default: 5, min: 0.5, max: 10, step: 0.5, unit: ' km' },
+        { key: 'onlyType', label: 'Alleen posten van het gekozen gebouwtype', type: 'bool', default: true,
+            help: 'Uit: alle soorten hulpdienstposten. Bij een gebouwtype zonder echte tegenhanger zie je altijd alles.' },
+        { key: 'address', label: 'Adres van de marker tonen (Nominatim)', type: 'bool', default: true },
         { key: 'debug', label: 'Uitgebreid loggen in console', type: 'bool', default: false },
     ],
 
@@ -8316,83 +8324,76 @@ MKS.module({
         /* ========================================================================
          * CONFIG
          * ====================================================================
-         * Purely advisory: never fills in a name, never blocks the submit
-         * button, never touches the form. It only shows a panel of what
-         * OpenStreetMap says is at the coordinates the game's own lat/lng
-         * fields currently hold.
+         * The posts come from dist/data/posts-nl.json in the suite repo
+         * (made by `node build.js osm`), not from a live Overpass query: that
+         * query takes minutes and the public server is often overloaded. The
+         * file is cached in GM storage and refreshed once a week.
+         *
+         * The only thing this module changes is the position of the game's
+         * own placement marker, and only when you click a post.
          * ==================================================================== */
         const CONFIG = {
             get DEBUG() { return ctx.cfg.debug; },
-            get RADIUS_METERS() { return ctx.cfg.radius; },
+            get RADIUS_M() { return ctx.cfg.radiusKm * 1000; },
             POLL_MS: 500,       // how often to check whether the lat/lng fields changed
-            DEBOUNCE_MS: 900,   // wait this long after the last change before querying
-            // overpass-api.de is the only reliable public instance. The others
-            // are fallbacks and often down.
-            OVERPASS_ENDPOINTS: [
-                'https://overpass-api.de/api/interpreter',
-                'https://overpass.private.coffee/api/interpreter',
-                'https://overpass.kumi.systems/api/interpreter',
-            ],
+            DEBOUNCE_MS: 400,   // wait this long after the last change before searching
+            DATA_URL: 'https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/data/posts-nl.json',
+            DATA_CACHE_KEY: 'mks.placementAdvisor.posts',
+            DATA_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
             NOMINATIM_URL: 'https://nominatim.openstreetmap.org/reverse',
             // Sent only by the GM_xmlhttpRequest fallback; page fetch() cannot
             // set a User-Agent.
             USER_AGENT: 'Meldkamerspel-Suite (github.com/Wheeliecat-dev/meldkamerspel-suite)',
             REQUEST_TIMEOUT_MS: 20 * 1000,
-            RETRIES: 2,         // extra tries per endpoint on 429/504 (server busy)
-            MAX_ROWS: 15,
+            ON_SPOT_M: 60,      // marker this close to a post = "on" that post
+            MAX_ROWS: 25,
         };
 
         const esc = ctx.esc;
         const log = (...a) => { if (CONFIG.DEBUG) console.log('%c[PlacementAdvisor]', 'color:#a06', ...a); };
         const warn = (...a) => console.warn('[PlacementAdvisor]', ...a);
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
         /* ========================================================================
-         * Gebouwtype (building_type) -> the OSM tags a real one has. `match` is
-         * used to highlight a real post of the same type in the list; `hint` is
-         * shown next to the chosen type. Values match the game's own
-         * <select id="building_building_type"> options.
+         * Post categories (codes as written by build.js) and which category
+         * belongs to each game building type (<select id="building_building_type">).
+         * Types without a real counterpart (e.g. uitgangsstelling) show all.
          * ==================================================================== */
-        const is = (key, ...values) => (t) => values.includes(t[key]);
-        const any = (...fns) => (t) => fns.some((f) => f(t));
-        const TYPES = {
-            '0': { hint: 'brandweerkazerne', match: is('amenity', 'fire_station') },
-            '17': { hint: 'brandweerkazerne', match: is('amenity', 'fire_station') },
-            '3': { hint: 'ambulancepost', match: is('emergency', 'ambulance_station') },
-            '13': { hint: 'ambulancepost', match: is('emergency', 'ambulance_station') },
-            '2': { hint: 'ziekenhuis', match: any(is('amenity', 'hospital'), is('healthcare', 'hospital')) },
-            '5': { hint: 'politiebureau', match: is('amenity', 'police') },
-            '11': { hint: 'politiebureau', match: is('amenity', 'police') },
-            '18': { hint: 'politiebureau', match: is('amenity', 'police') },
-            '6': { hint: 'helikopterplatform', match: is('aeroway', 'helipad', 'heliport') },
-            '9': { hint: 'helikopterplatform', match: is('aeroway', 'helipad', 'heliport') },
-            '21': { hint: 'helikopterplatform', match: is('aeroway', 'helipad', 'heliport') },
-            '7': { hint: 'hogeschool/universiteit', match: is('amenity', 'university', 'college') },
-            '16': { hint: 'reddingsbrigade', match: any(is('emergency', 'lifeguard', 'lifeguard_base'), is('amenity', 'lifeboat_station')) },
-            '19': { hint: 'kustwacht/reddingsstation', match: any(is('emergency', 'lifeboat_station', 'water_rescue'), is('amenity', 'lifeboat_station')) },
-            '22': { hint: 'overheidskantoor', match: is('office', 'government') },
-            '23': { hint: 'militair terrein', match: (t) => !!t.military },
-            '25': { hint: 'kazerne (militair)', match: (t) => !!t.military },
+        const CATS = {
+            F: { icon: '🚒', label: 'Brandweerkazerne' },
+            A: { icon: '🚑', label: 'Ambulancepost' },
+            P: { icon: '🚓', label: 'Politiebureau' },
+            H: { icon: '🏥', label: 'Ziekenhuis' },
+            L: { icon: '🚁', label: 'Helikopterplatform' },
+            W: { icon: '🛟', label: 'Reddingsbrigade / KNRM' },
+            R: { icon: '🚧', label: 'Rijkswaterstaat' },
+            M: { icon: '🪖', label: 'Defensie' },
+        };
+        const TYPE_CAT = {
+            0: 'F', 17: 'F', 4: 'F',
+            3: 'A', 13: 'A',
+            2: 'H',
+            5: 'P', 11: 'P', 18: 'P', 8: 'P',
+            6: 'L', 9: 'L', 21: 'L',
+            16: 'W', 19: 'W', 20: 'W',
+            22: 'R',
+            23: 'M', 25: 'M', 26: 'M',
         };
 
         /* ========================================================================
          * HTTP
          * ====================================================================
-         * Page fetch() first: overpass-api.de answers HTTP 406 to requests that
-         * carry a browser User-Agent but no Origin/Sec-Fetch headers, which is
-         * exactly what GM_xmlhttpRequest sends. A real page fetch has those
-         * headers, and both Overpass and Nominatim allow CORS. GM is only the
-         * fallback (e.g. when fetch is blocked), with our own User-Agent.
+         * Page fetch() first (GitHub raw and Nominatim both allow CORS).
+         * GM_xmlhttpRequest is the fallback when fetch is blocked.
          * ==================================================================== */
         class HttpError extends Error {
             constructor(status) { super(`HTTP ${status}`); this.status = status; }
         }
 
-        async function pageFetch(url, opts) {
+        async function pageFetch(url) {
             const ac = new AbortController();
             const t = setTimeout(() => ac.abort(), CONFIG.REQUEST_TIMEOUT_MS);
             try {
-                const res = await fetch(url, { ...opts, signal: ac.signal, credentials: 'omit' });
+                const res = await fetch(url, { signal: ac.signal, credentials: 'omit' });
                 if (!res.ok) throw new HttpError(res.status);
                 return await res.text();
             } finally {
@@ -8400,13 +8401,12 @@ MKS.module({
             }
         }
 
-        function gmFetch(url, opts) {
+        function gmFetch(url) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
-                    method: opts.method || 'GET',
+                    method: 'GET',
                     url,
-                    data: opts.body,
-                    headers: { ...(opts.headers || {}), 'User-Agent': CONFIG.USER_AGENT },
+                    headers: { 'User-Agent': CONFIG.USER_AGENT },
                     timeout: CONFIG.REQUEST_TIMEOUT_MS,
                     onload: (res) => {
                         if (res.status >= 200 && res.status < 300) resolve(res.responseText);
@@ -8418,48 +8418,45 @@ MKS.module({
             });
         }
 
-        // Retries on "server busy" (429, 504), then falls back to GM.
-        async function request(url, opts = {}) {
-            for (let attempt = 0; ; attempt++) {
-                try {
-                    return await pageFetch(url, opts);
-                } catch (e) {
-                    const busy = e instanceof HttpError && (e.status === 429 || e.status === 504);
-                    if (busy && attempt < CONFIG.RETRIES) { await sleep(2000 * (attempt + 1)); continue; }
-                    if (e instanceof HttpError) throw e;
-                    log(`fetch ${url} failed (${e.message}), trying GM_xmlhttpRequest`);
-                    return gmFetch(url, opts);
-                }
+        async function request(url) {
+            try {
+                return await pageFetch(url);
+            } catch (e) {
+                if (e instanceof HttpError) throw e;
+                log(`fetch ${url} failed (${e.message}), trying GM_xmlhttpRequest`);
+                return gmFetch(url);
             }
         }
 
         /* ========================================================================
-         * OVERPASS + NOMINATIM
+         * DATA
          * ==================================================================== */
-        const QUERY_KEYS = ['name', 'amenity', 'emergency', 'office', 'military', 'healthcare', 'aeroway'];
+        function readCache() {
+            try { return JSON.parse(GM_getValue(CONFIG.DATA_CACHE_KEY, 'null')); } catch (e) { return null; }
+        }
 
-        async function queryOverpass(lat, lon, radius) {
-            // Only tagged objects with a key we care about. A bare
-            // node(around) also returns every untagged way vertex.
-            const around = `around:${radius},${lat},${lon}`;
-            const parts = QUERY_KEYS.map((k) => `nwr(${around})[${k}];`).join('');
-            const query = `[out:json][timeout:15];(${parts});out center tags;`;
-            const body = `data=${encodeURIComponent(query)}`;
-            let lastErr;
-            for (const endpoint of CONFIG.OVERPASS_ENDPOINTS) {
-                try {
-                    const text = await request(endpoint, {
-                        method: 'POST',
-                        body,
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    });
-                    return JSON.parse(text);
-                } catch (e) {
-                    lastErr = e;
-                    warn(`Overpass ${endpoint} failed, trying next`, e);
-                }
+        let postsPromise = null;
+        // -> [[lat, lon, cat, name, osmId], ...]
+        function loadPosts() {
+            if (postsPromise) return postsPromise;
+            const cached = readCache();
+            if (cached && Date.now() - cached.t < CONFIG.DATA_MAX_AGE_MS) {
+                postsPromise = Promise.resolve(cached.posts);
+                return postsPromise;
             }
-            throw lastErr;
+            postsPromise = request(CONFIG.DATA_URL)
+                .then((text) => {
+                    const data = JSON.parse(text);
+                    GM_setValue(CONFIG.DATA_CACHE_KEY, JSON.stringify({ t: Date.now(), date: data.date, posts: data.posts }));
+                    log(`loaded ${data.posts.length} posts (OSM ${data.date})`);
+                    return data.posts;
+                })
+                .catch((e) => {
+                    postsPromise = null;
+                    if (cached) { warn('could not refresh posts, using old copy', e); return cached.posts; }
+                    throw e;
+                });
+            return postsPromise;
         }
 
         async function reverseGeocode(lat, lon) {
@@ -8481,40 +8478,87 @@ MKS.module({
             return 2 * R * Math.asin(Math.sqrt(a));
         }
 
-        // Which tag on an element best describes it, for display.
-        function describeElement(tags) {
-            const keys = ['amenity', 'emergency', 'healthcare', 'office', 'military', 'aeroway', 'shop', 'tourism', 'leisure', 'railway', 'highway', 'building'];
-            for (const key of keys) {
-                if (tags[key] && tags[key] !== 'yes') return `${key}=${tags[key]}`;
+        function nearbyPosts(posts, lat, lon, cat) {
+            const rows = [];
+            for (const [plat, plon, pcat, name, osm] of posts) {
+                if (cat && pcat !== cat) continue;
+                const distance = distanceMeters(lat, lon, plat, plon);
+                if (distance > CONFIG.RADIUS_M) continue;
+                rows.push({ lat: plat, lon: plon, cat: pcat, name, osm, distance });
             }
-            return tags.building ? 'building' : '';
+            rows.sort((a, b) => a.distance - b.distance);
+            return rows;
         }
 
-        // Tag keys worth showing even without a name (institutional).
-        const NAMELESS_WORTHY_KEYS = ['amenity', 'emergency', 'office', 'military', 'healthcare', 'aeroway'];
+        const fmtDist = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
+        const osmUrl = (id) => `https://www.openstreetmap.org/${{ n: 'node', w: 'way', r: 'relation' }[id[0]]}/${id.slice(1)}`;
 
-        // NOTE: for a way (a building outline, a platform, ...) `out center`
-        // gives the centroid of the whole way, which can lie outside the
-        // radius although the way crosses it. Distances are an estimate.
-        function relevantElements(elements, lat, lon, type) {
-            const rows = [];
-            for (const el of elements) {
-                const tags = el.tags || {};
-                if (!tags.name && !NAMELESS_WORTHY_KEYS.some((k) => tags[k])) continue;
-                const elat = el.lat ?? el.center?.lat;
-                const elon = el.lon ?? el.center?.lon;
-                if (elat === undefined || elon === undefined) continue;
-                rows.push({
-                    name: tags.name || '(zonder naam)',
-                    desc: describeElement(tags),
-                    distance: Math.round(distanceMeters(lat, lon, elat, elon)),
-                    match: !!(type && type.match(tags)),
-                    osm: `https://www.openstreetmap.org/${el.type}/${el.id}`,
-                });
+        /* ========================================================================
+         * GAME MARKER
+         * ====================================================================
+         * The game shows a draggable Leaflet marker while you place a building
+         * and writes its position into #building_latitude/#building_longitude.
+         * We find that marker on the map (the draggable one closest to the
+         * current field values), move it, and fire the drag events so the
+         * game's own handlers run as if you dragged it.
+         * ==================================================================== */
+        function gameMap() {
+            // The form can sit in a lightbox iframe; the map lives in the top window.
+            for (const w of [ctx.W, window.parent, window.top]) {
+                try {
+                    const W = w.wrappedJSObject || w;
+                    if (W.map && W.L && typeof W.map.eachLayer === 'function') return { map: W.map, L: W.L };
+                } catch (e) { /* cross-origin frame */ }
             }
-            // A real post of the chosen type first, then by distance.
-            rows.sort((a, b) => (b.match - a.match) || (a.distance - b.distance));
-            return rows;
+            return null;
+        }
+
+        function findPlacementMarker(map, L, lat, lon) {
+            let best = null;
+            let bestD = Infinity;
+            map.eachLayer((layer) => {
+                if (!(layer instanceof L.Marker)) return;
+                const draggable = layer.options.draggable || (layer.dragging && layer.dragging.enabled());
+                if (!draggable) return;
+                const ll = layer.getLatLng();
+                const d = Math.abs(ll.lat - lat) + Math.abs(ll.lng - lon);
+                if (d < bestD) { bestD = d; best = layer; }
+            });
+            return best;
+        }
+
+        function setField(input, value) {
+            input.value = value;
+            const $ = ctx.W.jQuery || ctx.W.$;
+            if (typeof $ === 'function') $(input).trigger('change');
+            else input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function moveMarker(lat, lon) {
+            const fields = findLatLngInputs();
+            const g = gameMap();
+            let moved = false;
+            if (g) {
+                const curLat = fields ? Number(fields.lat.value) : lat;
+                const curLon = fields ? Number(fields.lon.value) : lon;
+                const marker = findPlacementMarker(g.map, g.L, curLat, curLon);
+                if (marker) {
+                    marker.setLatLng([lat, lon]);
+                    marker.fire('dragstart');
+                    marker.fire('drag');
+                    marker.fire('dragend', { target: marker, distance: 1 });
+                    g.map.panTo([lat, lon]);
+                    moved = true;
+                }
+            }
+            // Make sure the form has the new position even if the game's
+            // handler did not write it.
+            if (fields) {
+                setField(fields.lat, lat);
+                setField(fields.lon, lon);
+            }
+            if (!moved) warn('placement marker not found on the map; only the form fields were set');
+            log(`moved marker to ${lat}, ${lon}`);
         }
 
         /* ========================================================================
@@ -8522,6 +8566,7 @@ MKS.module({
          * ==================================================================== */
         let panelEl = null;
         let dismissedKey = null; // coordinates the user closed the panel for
+        let shownRows = [];
 
         function ensurePanel() {
             if (panelEl && document.body.contains(panelEl)) return panelEl;
@@ -8529,8 +8574,15 @@ MKS.module({
             panelEl.id = 'pa-panel';
             panelEl.style.cssText = 'position:fixed;top:70px;right:8px;z-index:99999;background:#111;color:#eee;font:12px/1.4 sans-serif;padding:10px 12px;border-radius:6px;opacity:0.95;width:320px;max-height:70vh;overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
             panelEl.addEventListener('click', (e) => {
-                if (e.target.closest('.pa-close')) { dismissedKey = lastKey; removePanel(); }
-                if (e.target.closest('.pa-retry')) { lastKey = null; lastRawFieldValue = null; }
+                if (e.target.closest('.pa-close')) { dismissedKey = lastKey; removePanel(); return; }
+                if (e.target.closest('.pa-retry')) { recheck(); return; }
+                if (e.target.closest('.pa-all')) { ctx.set('onlyType', !ctx.cfg.onlyType); recheck(); return; }
+                if (e.target.closest('a')) return; // OSM link
+                const row = e.target.closest('.pa-row');
+                if (row) {
+                    const r = shownRows[Number(row.dataset.i)];
+                    if (r) moveMarker(r.lat, r.lon);
+                }
             });
             document.body.appendChild(panelEl);
             return panelEl;
@@ -8550,42 +8602,52 @@ MKS.module({
         }
 
         const muted = (s) => `<div style="color:#999;">${s}</div>`;
+        const link = (cls, text) => `<span class="${cls}" style="color:#7ad;cursor:pointer;text-decoration:underline;">${text}</span>`;
 
         function renderIdle() {
-            show(muted(`Typ een adres of sleep de marker. Dan zie je wat daar echt staat (OpenStreetMap, straal ${CONFIG.RADIUS_METERS} m).`));
+            show(muted(`Typ een adres of sleep de marker. Je ziet dan de echte hulpdienstposten binnen ${fmtDist(CONFIG.RADIUS_M)}.`));
         }
 
-        function headerHtml(lat, lon, typeLabel, type, address) {
-            return muted(`${lat.toFixed(5)}, ${lon.toFixed(5)} · straal ${CONFIG.RADIUS_METERS} m`)
-                + (address ? `<div style="margin:2px 0;">🏠 ${esc(address)}</div>` : '')
-                + (typeLabel ? `<div style="color:#7ad;margin:2px 0 6px;">Gekozen type: ${esc(typeLabel)}${type ? ` <span style="color:#999;">(zoek: ${esc(type.hint)})</span>` : ''}</div>` : '');
-        }
-
-        function renderLoading(lat, lon) {
-            show(muted(`Zoeken rond ${lat.toFixed(5)}, ${lon.toFixed(5)} ...`));
+        function renderLoading() {
+            show(muted('Posten laden...'));
         }
 
         function renderError(msg) {
-            show(`<div style="color:#e66;">${esc(msg)}</div>`
-                + '<button type="button" class="pa-retry" style="margin-top:6px;color:#222;">Opnieuw proberen</button>');
+            show(`<div style="color:#e66;">${esc(msg)}</div><div style="margin-top:6px;">${link('pa-retry', 'Opnieuw proberen')}</div>`);
         }
 
-        function renderResults(lat, lon, rows, typeLabel, type, address) {
-            let html = headerHtml(lat, lon, typeLabel, type, address);
-            if (type) {
-                const hit = rows.find((r) => r.match);
-                html += hit
-                    ? `<div style="color:#5c5;margin-bottom:6px;">✔ Echte ${esc(type.hint)} op ${hit.distance} m</div>`
-                    : `<div style="color:#e90;margin-bottom:6px;">Geen ${esc(type.hint)} binnen ${CONFIG.RADIUS_METERS} m</div>`;
+        function renderResults(rows, typeLabel, cat, address) {
+            const radius = fmtDist(CONFIG.RADIUS_M);
+            let html = address ? `<div style="margin-bottom:2px;">🏠 ${esc(address)}</div>` : '';
+            if (typeLabel) {
+                html += `<div style="color:#7ad;">Gekozen type: ${esc(typeLabel)}</div>`;
             }
-            if (!rows.length) {
-                show(html + muted(`Niets met een naam binnen ${CONFIG.RADIUS_METERS} m volgens OpenStreetMap.`));
+            if (cat) {
+                html += muted(ctx.cfg.onlyType
+                    ? `Alleen ${esc(CATS[cat].label.toLowerCase())} · ${link('pa-all', 'toon alle posten')}`
+                    : `Alle posten · ${link('pa-all', `alleen ${esc(CATS[cat].label.toLowerCase())}`)}`);
+            }
+            const onSpot = rows.find((r) => r.distance <= CONFIG.ON_SPOT_M && (!cat || r.cat === cat));
+            if (onSpot) html += `<div style="color:#5c5;margin-top:4px;">✔ Marker staat op ${esc(onSpot.name || CATS[onSpot.cat].label)}</div>`;
+            html += '<div style="margin-bottom:4px;"></div>';
+
+            shownRows = rows.slice(0, CONFIG.MAX_ROWS);
+            if (!shownRows.length) {
+                show(html + muted(`Geen echte ${cat && ctx.cfg.onlyType ? esc(CATS[cat].label.toLowerCase()) : 'hulpdienstpost'} binnen ${radius}.`));
                 return;
             }
-            html += rows.slice(0, CONFIG.MAX_ROWS).map((r) => `<div style="padding:3px 0;border-top:1px solid #333;${r.match ? 'color:#5c5;' : ''}">`
-                + `<a href="${r.osm}" target="_blank" rel="noopener" style="color:inherit;font-weight:bold;">${esc(r.name)}</a><br>`
-                + `<span style="color:#999;">${esc(r.desc)} · ${r.distance} m</span></div>`).join('');
-            if (rows.length > CONFIG.MAX_ROWS) html += muted(`+ ${rows.length - CONFIG.MAX_ROWS} meer`);
+            html += shownRows.map((r, i) => {
+                const c = CATS[r.cat];
+                const match = cat && r.cat === cat;
+                return `<div class="pa-row" data-i="${i}" title="Klik: marker hierheen" style="padding:4px 2px;border-top:1px solid #333;cursor:pointer;${match ? 'color:#5c5;' : ''}"`
+                    + ' onmouseover="this.style.background=\'#222\'" onmouseout="this.style.background=\'\'">'
+                    + `${c.icon} <b>${esc(r.name || '(zonder naam)')}</b><br>`
+                    + `<span style="color:#999;">${esc(c.label)} · ${fmtDist(r.distance)} · `
+                    + `<a href="${osmUrl(r.osm)}" target="_blank" rel="noopener" style="color:#999;">OSM</a></span></div>`;
+            }).join('');
+            if (rows.length > shownRows.length) html += muted(`+ ${rows.length - shownRows.length} verder weg`);
+            html += muted('<div style="margin-top:6px;">Klik op een post om de marker erheen te zetten.</div>'
+                + '<div style="font-size:10px;">Gegevens © OpenStreetMap-bijdragers (ODbL)</div>');
             show(html);
         }
 
@@ -8603,9 +8665,15 @@ MKS.module({
 
         let lastKey = null;
         let lastRawFieldValue = null;
+        let lastAddress = { key: null, text: '' };
         let debounceTimer = null;
         let seq = 0;            // drops answers for coordinates that are no longer current
         let formOpen = false;
+
+        function recheck() {
+            lastKey = null;
+            lastRawFieldValue = null;
+        }
 
         function scheduleCheck(latVal, lonVal, typeSelect) {
             clearTimeout(debounceTimer);
@@ -8613,28 +8681,38 @@ MKS.module({
                 const lat = Number(latVal);
                 const lon = Number(lonVal);
                 if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
-                const key = `${lat.toFixed(6)},${lon.toFixed(6)},${typeSelect ? typeSelect.value : ''},${CONFIG.RADIUS_METERS}`;
+                const typeValue = typeSelect ? typeSelect.value : '';
+                const key = `${lat.toFixed(6)},${lon.toFixed(6)},${typeValue},${CONFIG.RADIUS_M},${ctx.cfg.onlyType}`;
                 if (key === lastKey) return;
                 lastKey = key;
                 const mySeq = ++seq;
 
                 const typeLabel = typeSelect?.selectedOptions[0]?.textContent.trim() || '';
-                const type = typeSelect ? TYPES[typeSelect.value] : null;
+                const typeCat = TYPE_CAT[typeValue] || null;
+                const filterCat = ctx.cfg.onlyType ? typeCat : null;
 
-                renderLoading(lat, lon);
-                const addressP = ctx.cfg.address
-                    ? reverseGeocode(lat, lon).catch((e) => { warn('Nominatim failed', e); return ''; })
-                    : Promise.resolve('');
+                // Address only when the position changed, not on a type/filter change.
+                const posKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+                const addressP = !ctx.cfg.address ? Promise.resolve('')
+                    : lastAddress.key === posKey ? Promise.resolve(lastAddress.text)
+                        : reverseGeocode(lat, lon)
+                            .then((text) => { lastAddress = { key: posKey, text }; return text; })
+                            .catch((e) => { warn('Nominatim failed', e); return ''; });
+
+                if (!postsPromise) renderLoading();
                 try {
-                    const [data, address] = await Promise.all([queryOverpass(lat, lon, CONFIG.RADIUS_METERS), addressP]);
+                    const posts = await loadPosts();
                     if (mySeq !== seq) return;
-                    const rows = relevantElements(data.elements || [], lat, lon, type);
-                    renderResults(lat, lon, rows, typeLabel, type, address);
-                    log(`checked ${key}: ${rows.length} feature(s)`);
+                    const rows = nearbyPosts(posts, lat, lon, filterCat);
+                    renderResults(rows, typeLabel, typeCat, lastAddress.key === posKey ? lastAddress.text : '');
+                    log(`checked ${key}: ${rows.length} post(s)`);
+                    // The address is slower; add it when it arrives.
+                    const address = await addressP;
+                    if (mySeq === seq && address) renderResults(rows, typeLabel, typeCat, address);
                 } catch (e) {
                     if (mySeq !== seq) return;
-                    warn('Overpass query failed', e);
-                    renderError(`OpenStreetMap-server reageert niet (${e.message}). Probeer het zo opnieuw.`);
+                    warn('could not load posts', e);
+                    renderError(`Kon de lijst met posten niet laden (${e.message}).`);
                 }
             }, CONFIG.DEBOUNCE_MS);
         }
@@ -8652,21 +8730,21 @@ MKS.module({
                 }
                 return;
             }
-            if (!formOpen) { formOpen = true; renderIdle(); }
+            if (!formOpen) { formOpen = true; renderIdle(); loadPosts().catch(() => {}); }
             const latVal = fields.lat.value;
             const lonVal = fields.lon.value;
             if (!latVal || !lonVal) return;
             const typeSelect = findGebouwtypeSelect();
             // Only reschedule on a real change: scheduleCheck() resets its
             // debounce timer, so calling it every tick would never let it fire.
-            const rawKey = `${latVal}|${lonVal}|${typeSelect ? typeSelect.value : ''}|${CONFIG.RADIUS_METERS}`;
+            const rawKey = `${latVal}|${lonVal}|${typeSelect ? typeSelect.value : ''}|${CONFIG.RADIUS_M}|${ctx.cfg.onlyType}`;
             if (rawKey === lastRawFieldValue) return;
             lastRawFieldValue = rawKey;
             scheduleCheck(latVal, lonVal, typeSelect);
         }
 
-        // Radius and address apply on the next check; no reload needed.
-        ctx.onSettings(() => { lastRawFieldValue = null; });
+        // Settings apply on the next check; no reload needed.
+        ctx.onSettings(recheck);
 
         log('watching for building placement fields...');
         const timer = setInterval(poll, CONFIG.POLL_MS);
