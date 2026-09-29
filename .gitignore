@@ -1,0 +1,8 @@
+# Only the suite is published. Everything else in this folder (research
+# data, old standalone scripts, notes) stays local.
+/*
+!/.gitignore
+!/README.md
+!/build.js
+!/src/
+!/dist/

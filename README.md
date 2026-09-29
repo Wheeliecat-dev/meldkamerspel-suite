@@ -1,0 +1,47 @@
+# Meldkamerspel Suite
+
+> **Work in progress.** These scripts are still changing a lot and may contain bugs. Use them at your own risk and check what they do.
+
+All my [meldkamerspel.com](https://meldkamerspel.com) userscripts in one Tampermonkey script, with a dashboard to turn each one on or off and change its settings. Open it via **⚙️ Scripts → Dashboard** in the game's navbar.
+
+## Install
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/).
+2. Click the install link:
+   - **[Install Meldkamerspel Suite](https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/meldkamerspel-suite.user.js)**
+3. Tampermonkey checks for updates by itself, so you always get the latest version.
+
+Install only one channel. If both are installed, the second one to load does nothing.
+
+**Beta** (for testing, updates often, may break):
+[meldkamerspel-suite-beta.user.js](https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/meldkamerspel-suite-beta.user.js)
+
+## What's inside
+
+| Script | What it does |
+|---|---|
+| Donker thema | Dark version of the game UI |
+| Kleinere kaarticonen | Smaller vehicle and building icons on the map |
+| Voertuig zoeken | Search bar in the alarm window |
+| Ontbrekende voertuigen laden | Loads the full vehicle list in the alarm window |
+| Creditfilter | Hide missions by credit range |
+| Inzetvoorstellen maken | Creates **a lot** (570+) of dispatch presets. Only runs when you click it |
+| Spraakaanvragen beantwoorden | Answers transport requests to the nearest free hospital/cell |
+| Voertuignamen | Renames vehicles to real Dutch call signs. **Cannot be undone.** Off by default |
+| Gebouwnamen | Renames buildings to real names. **Cannot be undone.** Off by default |
+| Personeel | All personnel in one table, with stats |
+| Bemanningstekort | Which vehicles can't leave for lack of trained crew |
+| Inkomsten | Tracks your credits over time |
+| Dekkingskaart | Map layer showing response-time coverage |
+| Plaatsingsadvies | Shows real OpenStreetMap features while placing a building |
+
+## Development
+
+Source is in `src/` (`src/core` = dashboard, `src/modules` = one file per script). Build:
+
+```
+node build.js           # beta only
+node build.js release   # beta + stable (bump VERSION in build.js first)
+```
+
+Commit and push `dist/`. Tampermonkey picks up the new version via `@updateURL`.
