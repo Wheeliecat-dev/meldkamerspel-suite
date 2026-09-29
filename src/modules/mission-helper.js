@@ -12,7 +12,7 @@ MKS.module({
     pageNote: 'In het alarmeervenster (en op de kaartpagina om vooruit te laden)',
     live: true,
     settings: [
-        { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: false,
+        { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: true,
             help: 'Bijvoorbeeld "Hoogwerker 80%". Die hoef je niet meteen te sturen.' },
         { key: 'moveMissing', label: 'Ontbrekende voertuigen links ernaast', type: 'bool', default: true,
             help: 'Zet het rode vak "Missende voertuigen" van het spel in de linkerhelft, naast het lijstje, in plaats van eronder.' },
@@ -134,7 +134,7 @@ MKS.module({
             .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
             .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
-            .mks-mh-chance { opacity: .6; font-size: 12px; margin-top: 3px; }
+            .mks-mh-chance { opacity: .75; font-size: 13px; margin-top: 3px; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
             #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
