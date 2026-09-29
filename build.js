@@ -3,6 +3,8 @@
 //   node build.js                beta only   -> dist/meldkamerspel-suite-beta.user.js
 //   node build.js release        stable+beta, bumps the patch version (1.0.1 -> 1.0.2)
 //   node build.js release minor  same, bumps minor (1.0.1 -> 1.1.0); also: major
+//   node build.js osm            refresh dist/data/posts-nl.json (real emergency
+//                                posts from OpenStreetMap, for Plaatsingsadvies)
 //
 // The .user.js files are tiny loaders (just the header). The code itself
 // is dist/lib/*.js, pulled in with @require. Tampermonkey downloads it once
@@ -47,7 +49,7 @@ const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8').replace(/\r
 
 const present = fs.readdirSync(path.join(__dirname, 'src/modules')).map((f) => f.replace(/\.js$/, ''));
 const unlisted = present.filter((m) => !MODULES.includes(m));
-if (unlisted.length) throw new Error(`src/modules not listed in build.js: ${unlisted.join(', ')}`);
+if (unlisted.length && process.argv[2] !== 'osm') throw new Error(`src/modules not listed in build.js: ${unlisted.join(', ')}`);
 
 function stamp() {
     const d = new Date();
@@ -72,6 +74,7 @@ function build(channel) {
         NAMESPACE: beta ? 'https://meldkamerspel.com/suite-beta' : 'https://meldkamerspel.com/suite',
         UPDATE_URL: url,
         CHANNEL: channel,
+        DATA_URL: `${raw}/data/posts-nl.json`,
     };
     const fill = (text) => text.replace(/\{\{(\w+)\}\}/g, (all, k) => (k in vars ? vars[k] : all));
     const code = fill([
@@ -99,15 +102,88 @@ function build(channel) {
     console.log(`built dist/${file} v${version} (${loader.split('\n').length} lines) + dist/lib/${lib} (${(code.length / 1024).toFixed(0)} KB)`);
 }
 
-const release = process.argv[2] === 'release';
-if (release) {
-    const part = process.argv[3] || 'patch';
-    const v = VERSION.split('.').map(Number);
-    if (part === 'major') { v[0]++; v[1] = 0; v[2] = 0; } else if (part === 'minor') { v[1]++; v[2] = 0; } else v[2]++;
-    const next = v.join('.');
-    const self = path.join(__dirname, 'build.js');
-    fs.writeFileSync(self, fs.readFileSync(self, 'utf8').replace(`let VERSION = '${VERSION}';`, `let VERSION = '${next}';`));
-    VERSION = next;
+/* ============================================================================
+ * OSM POSTS: every real emergency post in the Netherlands, for the
+ * placement-advisor module. The public Overpass server takes minutes for
+ * this query and is often overloaded, so players never query it live: they
+ * download this file from GitHub. Categories match the module's CATS.
+ * ========================================================================== */
+async function fetchPosts() {
+    const filters = [
+        '[amenity~"^(fire_station|police|hospital|lifeboat_station|lifeboat)$"]',
+        '[emergency~"^(ambulance_station|lifeguard_base|water_rescue|lifeboat_station)$"]',
+        '[healthcare=hospital]',
+        '[aeroway~"^(helipad|heliport)$"]',
+        '[military~"^(barracks|base|airfield|naval_base)$"]',
+        '[office=government][name~"Rijkswaterstaat",i]',
+    ];
+    const query = `[out:json][timeout:600];area["ISO3166-1"="NL"][admin_level=2]->.nl;(${filters.map((f) => `nwr(area.nl)${f};`).join('')});out center tags;`;
+    console.log('querying Overpass (takes a few minutes)...');
+    let res;
+    // 429/504 = server busy: wait and try again.
+    for (let attempt = 1; ; attempt++) {
+        res = await fetch('https://overpass-api.de/api/interpreter', {
+            method: 'POST',
+            body: `data=${encodeURIComponent(query)}`,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': `Meldkamerspel-Suite (github.com/${REPO})` },
+        });
+        if (res.ok || ![429, 504].includes(res.status) || attempt === 8) break;
+        console.log(`Overpass busy (HTTP ${res.status}), retry ${attempt} in 30 s`);
+        await new Promise((r) => setTimeout(r, 30000));
+    }
+    if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+    const { elements } = await res.json();
+
+    const category = (t) => {
+        if (t.amenity === 'fire_station') return 'F';
+        if (t.emergency === 'ambulance_station') return 'A';
+        if (t.amenity === 'police') return 'P';
+        if (t.amenity === 'hospital' || t.healthcare === 'hospital') return 'H';
+        if (/^(lifeboat_station|lifeboat|water_rescue|lifeguard_base)$/.test(t.amenity || t.emergency || '')) return 'W';
+        if (t.military) return 'M';
+        if (t.aeroway === 'helipad' || t.aeroway === 'heliport') return 'L';
+        if (t.office === 'government') return 'R';
+        return null;
+    };
+    const posts = [];
+    for (const el of elements) {
+        const t = el.tags || {};
+        const cat = category(t);
+        const lat = el.lat ?? el.center?.lat;
+        const lon = el.lon ?? el.center?.lon;
+        if (!cat || lat === undefined || lon === undefined) continue;
+        posts.push([+lat.toFixed(5), +lon.toFixed(5), cat, t.name || '', `${el.type[0]}${el.id}`]);
+    }
+    // One post is often mapped twice (a node and a building outline): keep
+    // one per category within 100 m, preferring the one with a name.
+    posts.sort((a, b) => (b[3] ? 1 : 0) - (a[3] ? 1 : 0));
+    const kept = [];
+    for (const p of posts) {
+        const dup = kept.some((k) => k[2] === p[2] && Math.abs(k[0] - p[0]) < 0.0009 && Math.abs(k[1] - p[1]) < 0.0015);
+        if (!dup) kept.push(p);
+    }
+    kept.sort((a, b) => a[0] - b[0]);
+    const out = { date: new Date().toISOString().slice(0, 10), license: 'ODbL, (c) OpenStreetMap contributors', posts: kept };
+    fs.mkdirSync(path.join(__dirname, 'dist/data'), { recursive: true });
+    fs.writeFileSync(path.join(__dirname, 'dist/data/posts-nl.json'), JSON.stringify(out));
+    const counts = {};
+    for (const p of kept) counts[p[2]] = (counts[p[2]] || 0) + 1;
+    console.log(`wrote dist/data/posts-nl.json: ${kept.length} posts`, counts);
 }
-build('beta');
-if (release) build('stable');
+
+if (process.argv[2] === 'osm') {
+    fetchPosts().catch((e) => { console.error(e); process.exit(1); });
+} else {
+    const release = process.argv[2] === 'release';
+    if (release) {
+        const part = process.argv[3] || 'patch';
+        const v = VERSION.split('.').map(Number);
+        if (part === 'major') { v[0]++; v[1] = 0; v[2] = 0; } else if (part === 'minor') { v[1]++; v[2] = 0; } else v[2]++;
+        const next = v.join('.');
+        const self = path.join(__dirname, 'build.js');
+        fs.writeFileSync(self, fs.readFileSync(self, 'utf8').replace(`let VERSION = '${VERSION}';`, `let VERSION = '${next}';`));
+        VERSION = next;
+    }
+    build('beta');
+    if (release) build('stable');
+}

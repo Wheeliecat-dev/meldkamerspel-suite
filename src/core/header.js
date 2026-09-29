@@ -20,6 +20,7 @@
 // @connect      overpass.kumi.systems
 // @connect      overpass.openstreetmap.ru
 // @connect      overpass.private.coffee
+// @connect      raw.githubusercontent.com
 // @require      {{REQUIRE_URL}}
 // @run-at       document-start
 // ==/UserScript==
