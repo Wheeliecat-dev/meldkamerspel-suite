@@ -21,7 +21,7 @@
 // @connect      overpass.openstreetmap.ru
 // @connect      overpass.private.coffee
 // @connect      raw.githubusercontent.com
-// @require      https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/lib/suite-beta-1.3.1.202609291735.js#sha256=2fd6648a431bac0c7d8c1a5db1079665a222a83715aec657404db3ee8d1ae503
+// @require      https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/lib/suite-beta-1.3.1.202609291735.js#sha256=50cf4856b36f9b5d012bcbd996eaf50fa7bf99f4ab1196f4f54fea149d45f11b
 // @run-at       document-start
 // ==/UserScript==
 

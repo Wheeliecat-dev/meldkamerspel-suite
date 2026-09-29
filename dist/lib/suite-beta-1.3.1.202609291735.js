@@ -1854,11 +1854,11 @@ MKS.module({
     ],
 
     run(ctx) {
-        const CACHE_KEY = 'mks-mission-helper-v2';
+        const CACHE_KEY = 'mks-mission-helper-v3';
         const CACHE_MS = 3 * 24 * 3600 * 1000;
         const esc = ctx.esc;
         // Left over from the first beta version.
-        try { ['mks-mission-helper-cache', 'mks-mission-helper-open'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
         /* ========================================================================
          * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
@@ -1889,7 +1889,7 @@ MKS.module({
 
         function parse(html) {
             const doc = new DOMParser().parseFromString(html, 'text/html');
-            const need = [], chance = [];
+            const need = [], chance = [], patients = {};
             for (const table of doc.querySelectorAll('table')) {
                 const title = ((table.querySelector('thead th') || {}).textContent || '').trim();
                 const vehicles = /voertuig|personeel/i.test(title);
@@ -1901,12 +1901,15 @@ MKS.module({
                     const value = tr.cells[1].textContent.trim().replace(/\s+/g, ' ');
                     let m;
                     if ((m = label.match(/^(.*?)\s+benodigd waarschijnlijkheid$/i))) chance.push({ name: m[1], v: value });
+                    else if (/^Minimaal aantal patiënten$/i.test(label)) patients.min = value;
+                    else if (/^Maximale? aantal patiënten$/i.test(label)) patients.max = value;
+                    else if (/patiënt getransporteerd/i.test(label)) patients.transport = value;
                     else if (other && !/^Benodigde? Personeel$/i.test(label)) continue;
                     else if ((m = label.match(/^Benodigd(?:e)?(?: aantal)?\s+(.*)$/i))) need.push({ name: m[1], v: value });
                     else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
                 }
             }
-            return { need, chance };
+            return { need, chance, patients };
         }
 
         async function fetchType(type, overlays) {
@@ -1998,6 +2001,12 @@ MKS.module({
                     box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest">${rest.map((x) => `<span><b>${esc(cap(x.name))}</b> `
                         + `${esc(litres(x) ? `${ctx.nl(Number(x.v.replace(/\./g, '')))} l` : x.v)}</span>`).join('')}</div>`);
                 }
+            }
+            const p = data.patients || {};
+            if (p.max) {
+                const n = p.min && p.min !== p.max ? `${p.min}-${p.max}` : p.max;
+                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest"><span><b>Patiënten</b> ${esc(n)}</span>`
+                    + `${p.transport ? `<span><b>Transport</b> ${esc(p.transport)}%</span>` : ''}</div>`);
             }
             if (ctx.cfg.chances && data.chance.length) {
                 box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
