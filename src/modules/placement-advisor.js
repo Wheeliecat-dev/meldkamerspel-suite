@@ -368,6 +368,9 @@ MKS.module({
             scheduleCheck(latVal, lonVal, typeSelect);
         }
 
+        // Radius and address apply on the next check; no reload needed.
+        ctx.onSettings(() => { lastRawFieldValue = null; });
+
         log('watching for building placement fields...');
         const timer = setInterval(poll, CONFIG.POLL_MS);
 
