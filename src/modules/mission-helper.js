@@ -14,6 +14,8 @@ MKS.module({
     settings: [
         { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: false,
             help: 'Bijvoorbeeld "Hoogwerker 80%". Die hoef je niet meteen te sturen.' },
+        { key: 'moveMissing', label: 'Ontbrekende voertuigen links ernaast', type: 'bool', default: true,
+            help: 'Zet het rode vak "Missende voertuigen" van het spel in de linkerhelft, naast het lijstje, in plaats van eronder.' },
     ],
 
     run(ctx) {
@@ -134,6 +136,7 @@ MKS.module({
             .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
             .mks-mh-chance { opacity: .6; font-size: 12px; margin-top: 3px; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
+            #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
         document.head.appendChild(style);
 
@@ -165,6 +168,18 @@ MKS.module({
             }
         }
 
+        // The game's "missing vehicles" alert, moved into the left half of the
+        // header so it sits next to the list. The game updates its contents in
+        // place, so moving the element itself is safe; stop() puts it back.
+        const missing = document.querySelector('.alert.alert-missing-vehicles');
+        const home = missing && { parent: missing.parentNode, next: missing.nextSibling };
+        function placeMissing() {
+            if (!missing) return;
+            if (ctx.cfg.moveMissing) info.appendChild(missing);
+            else if (missing.parentNode !== home.parent) home.parent.insertBefore(missing, home.next);
+        }
+        placeMissing();
+
         let data = cached(key);
         render(data);
         if (!data) {
@@ -172,12 +187,13 @@ MKS.module({
                 .then((d) => { data = d; render(d); })
                 .catch((e) => { ctx.warn('help page failed', e); box.innerHTML = '<span class="mks-mh-note">Meldinghelper: hulppagina niet geladen.</span>'; });
         }
-        ctx.onSettings(() => render(data));
+        ctx.onSettings(() => { render(data); placeMissing(); });
 
         return {
             stop() {
                 box.remove();
                 style.remove();
+                if (missing && missing.parentNode !== home.parent) home.parent.insertBefore(missing, home.next);
             },
         };
     },

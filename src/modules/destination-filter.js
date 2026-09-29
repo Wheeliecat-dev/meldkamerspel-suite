@@ -56,39 +56,50 @@ MKS.module({
          * CANDIDATES
          * Hospitals: tables #own-hospitals and #alliance-hospitals, one row per
          * hospital, button a[href*="/patient/"]. Own hospitals have no cost column.
-         * Cells: buttons a[href*="/gefangener/"] with distance, free cells and
-         * cost in the button text; red = full, orange = not enough room.
+         * Cells: either table rows like hospitals (button a[href*="/gefangener/"])
+         * or loose buttons with distance, free cells and cost in the text.
+         * Red (btn-danger / row .danger / 0 free) = full, orange = not enough room.
          * ==================================================================== */
+        const DEST = 'a[href*="/patient/"], a[href*="/gefangener/"]';
+        const isRed = (el) => !!el && (el.classList.contains('btn-danger') || el.classList.contains('danger')
+            || el.classList.contains('label-danger'));
         function candidates() {
             const out = [];
+            const seen = new Set();
             for (const table of document.querySelectorAll('table')) {
                 const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
                 const iDist = heads.findIndex((h) => h.startsWith('afstand'));
                 if (iDist < 0) continue;
-                const iBeds = heads.findIndex((h) => h.startsWith('vrije'));
-                const iCost = heads.findIndex((h) => h.startsWith('kosten'));
+                const iFree = heads.findIndex((h) => h.startsWith('vrij'));
+                const iCost = heads.findIndex((h) => h.startsWith('kosten') || h.startsWith('belasting'));
                 const iDep = heads.findIndex((h) => h.startsWith('afdeling'));
                 for (const tr of table.querySelectorAll('tbody > tr')) {
-                    const a = tr.querySelector('a.btn[href*="/patient/"]');
+                    const a = tr.querySelector(DEST);
                     if (!a) continue;
-                    const beds = cell(tr, iBeds);
+                    seen.add(a);
+                    const kind = /\/gefangener\//.test(a.getAttribute('href')) ? 'cell' : 'hospital';
+                    const free = iFree >= 0 ? num(cell(tr, iFree).split('/')[0]) : Infinity;
+                    const red = isRed(a) || isRed(tr) || (iFree >= 0 && isRed(tr.cells[iFree] && tr.cells[iFree].querySelector('.label')));
                     out.push({
-                        el: tr, a, kind: 'hospital', own: table.id === 'own-hospitals',
+                        el: tr, a, kind, own: table.id === 'own-hospitals',
                         dist: num(cell(tr, iDist)),
-                        free: iBeds >= 0 ? num(beds.split('/')[0]) : Infinity,
+                        free: red ? 0 : (isNaN(free) ? Infinity : free),
+                        short: a.classList.contains('btn-warning') || tr.classList.contains('warning'),
                         cost: iCost >= 0 ? num(cell(tr, iCost)) || 0 : 0,
-                        dep: iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
+                        dep: kind === 'cell' || iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
                     });
                 }
             }
-            for (const a of document.querySelectorAll('a.btn[href*="/gefangener/"]')) {
+            for (const a of document.querySelectorAll('a[href*="/gefangener/"]')) {
+                if (seen.has(a)) continue;
                 const t = a.textContent.replace(/\s+/g, ' ');
                 const km = t.match(/(\d+(?:[.,]\d+)?)\s*km/);
                 const pct = t.match(/(\d+)\s*%/);
+                const freeTxt = t.match(/vrij\w*\s*(?:cel\w*)?\s*:?\s*(\d+)/i);
                 out.push({
                     el: a, a, kind: 'cell',
                     dist: km ? parseFloat(km[1].replace(',', '.')) : NaN,
-                    free: a.classList.contains('btn-danger') ? 0 : Infinity,
+                    free: isRed(a) ? 0 : (freeTxt ? Number(freeTxt[1]) : Infinity),
                     short: a.classList.contains('btn-warning'),
                     cost: pct ? Number(pct[1]) : 0,
                     dep: true,
@@ -103,7 +114,7 @@ MKS.module({
             if (c.a.classList.contains('disabled')) return 'niet beschikbaar';
             if (cfg.full && c.free <= 0) return 'vol';
             if (c.kind === 'hospital' && c.free < Number(cfg.minBeds)) return 'te weinig bedden';
-            if (c.kind === 'cell' && cfg.cellsShort && c.short) return 'te weinig cellen';
+            if (c.kind === 'cell' && cfg.cellsShort && c.short && c.free !== 0) return 'te weinig cellen';
             if (c.kind === 'hospital' && cfg.department && !c.dep) return 'geen afdeling';
             if (c.cost > Number(cfg.maxCost)) return 'te duur';
             if (Number(cfg.maxKm) > 0 && c.dist > Number(cfg.maxKm)) return 'te ver';
@@ -137,7 +148,7 @@ MKS.module({
                 const tag = document.createElement('span');
                 tag.className = 'mks-dest-tag';
                 tag.textContent = ctx.cfg.enter ? 'Beste keuze · Enter' : 'Beste keuze';
-                (best.kind === 'hospital' ? best.el.cells[0] : best.a).appendChild(tag);
+                (best.el.tagName === 'TR' ? best.el.cells[0] : best.a).appendChild(tag);
             }
             const hidden = list.length - shown.length;
             const parts = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ');

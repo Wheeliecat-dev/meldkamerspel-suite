@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.2.0.202609291704 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.0.202609291711 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.2.0.202609291704';
+    const VERSION = '1.3.0.202609291711';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1838,176 +1838,197 @@ MKS.module({
     name: 'Meldinghelper',
     icon: '📋',
     category: 'missions',
-    description: 'Een compact vak bovenin het alarmeervenster met wat de inzet vraagt: benodigde voertuigen, kansen op extra voertuigen, '
-        + 'patiënten, transportkans, afdeling, gevangenen en credits. De gegevens komen uit de hulppagina van het spel zelf, dus altijd actueel. '
-        + 'Klik op de titel om het vak in of uit te klappen.',
+    description: 'Rechtsboven in het alarmeervenster een lijstje met wat je moet sturen: de benodigde voertuigen, water en personeel. '
+        + 'De gegevens komen uit de hulppagina van het spel zelf. Op de kaartpagina worden ze alvast opgehaald voor de inzetten in je lijst, '
+        + 'zodat het lijstje meteen staat als je een inzet opent.',
     at: 'ready',
     frames: 'all',
-    pages: /^\/missions\/\d+/,
-    pageNote: 'Alleen in het alarmeervenster',
+    pages: /^\/(missions\/\d+\/?)?$/,
+    pageNote: 'In het alarmeervenster (en op de kaartpagina om vooruit te laden)',
     live: true,
     settings: [
-        { key: 'chances', label: 'Kansen op extra voertuigen tonen', type: 'bool', default: true },
-        { key: 'credits', label: 'Credits tonen', type: 'bool', default: true },
-        { key: 'prereq', label: 'Voorwaarden tonen', type: 'bool', default: false, help: 'Benodigde posten en uitbreidingen om de inzet te krijgen.' },
-        { key: 'variants', label: 'Missievariaties tonen', type: 'bool', default: false },
+        { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: false,
+            help: 'Bijvoorbeeld "Hoogwerker 80%". Die hoef je niet meteen te sturen.' },
+        { key: 'moveMissing', label: 'Ontbrekende voertuigen links ernaast', type: 'bool', default: true,
+            help: 'Zet het rode vak "Missende voertuigen" van het spel in de linkerhelft, naast het lijstje, in plaats van eronder.' },
     ],
 
     run(ctx) {
-        const header = document.querySelector('.mission_header_info');
-        const link = document.querySelector('#mission-type-helper-mobile, a[href^="/einsaetze/"]');
-        if (!header || !link) return;
+        const CACHE_KEY = 'mks-mission-helper-v2';
+        const CACHE_MS = 3 * 24 * 3600 * 1000;
+        const esc = ctx.esc;
+        // Left over from the first beta version.
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
-        const STATE_KEY = 'mks-mission-helper-open';
-        const CACHE_KEY = 'mks-mission-helper-cache';
-        const CACHE_MS = 24 * 3600 * 1000;
+        /* ========================================================================
+         * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
+         * From the "Voertuig en personeel vereisten" table:
+         *   "Benodigde X" = n       -> send n × X
+         *   "X benodigd" = amount   -> e.g. water in litres
+         *   "X benodigd waarschijnlijkheid" = % -> chance (optional)
+         * and "Benodigde Personeel" from "Overige informatie".
+         * Parsed result is cached per type + overlays in localStorage.
+         * ==================================================================== */
+        const keyOf = (type, overlays) => `${type}|${overlays || ''}`;
+        const urlOf = (type, overlays) => `/einsaetze/${type}${overlays ? `?additive_overlays=${encodeURIComponent(overlays)}` : ''}`;
 
-        // The help page depends on the mission type and its overlays, not on
-        // the mission itself, so cache it per type + overlays for a day.
-        const url = new URL(link.getAttribute('href'), location.origin);
-        const typeKey = url.pathname + '?' + (url.searchParams.get('additive_overlays') || '') + '|' + (url.searchParams.get('overlay_index') || '');
+        function readCache() {
+            try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) { return {}; }
+        }
+        function cached(key) {
+            const hit = readCache()[key];
+            return hit && Date.now() - hit.at < CACHE_MS ? hit : null;
+        }
+        function store(key, data) {
+            const all = readCache();
+            const now = Date.now();
+            for (const k in all) if (now - all[k].at > CACHE_MS) delete all[k];
+            all[key] = { at: now, ...data };
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
+        }
+
+        function parse(html) {
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            const need = [], chance = [];
+            for (const table of doc.querySelectorAll('table')) {
+                const title = ((table.querySelector('thead th') || {}).textContent || '').trim();
+                const vehicles = /voertuig|personeel/i.test(title);
+                const other = /overige/i.test(title);
+                if (!vehicles && !other) continue;
+                for (const tr of table.querySelectorAll('tbody tr')) {
+                    if (tr.cells.length < 2) continue;
+                    const label = tr.cells[0].textContent.trim().replace(/\s+/g, ' ');
+                    const value = tr.cells[1].textContent.trim().replace(/\s+/g, ' ');
+                    let m;
+                    if ((m = label.match(/^(.*?)\s+benodigd waarschijnlijkheid$/i))) chance.push({ name: m[1], v: value });
+                    else if (other && !/^Benodigde? Personeel$/i.test(label)) continue;
+                    else if ((m = label.match(/^Benodigd(?:e)?(?: aantal)?\s+(.*)$/i))) need.push({ name: m[1], v: value });
+                    else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
+                }
+            }
+            return { need, chance };
+        }
+
+        async function fetchType(type, overlays) {
+            const res = await fetch(urlOf(type, overlays), { credentials: 'same-origin' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = parse(await res.text());
+            store(keyOf(type, overlays), data);
+            return data;
+        }
+
+        /* ========================================================================
+         * MAP PAGE — warm the cache for the missions in the list, slowly
+         * (one help page every 1.5 s, only types not cached yet).
+         * ==================================================================== */
+        if (location.pathname === '/') {
+            if (window.top !== window.self) return;
+            let stopped = false;
+            let busy = false;
+            async function warm() {
+                if (busy || stopped) return;
+                busy = true;
+                try {
+                    const todo = new Map();
+                    document.querySelectorAll('.missionSideBarEntry[mission_type_id]').forEach((el) => {
+                        const type = el.getAttribute('mission_type_id');
+                        const ov = el.getAttribute('data-additive-overlays') || '';
+                        if (!/^\d+$/.test(type)) return;
+                        const k = keyOf(type, ov);
+                        if (!todo.has(k) && !cached(k)) todo.set(k, [type, ov]);
+                    });
+                    for (const [type, ov] of todo.values()) {
+                        if (stopped) break;
+                        try { await fetchType(type, ov); } catch (e) { ctx.warn('prefetch failed', type, e); }
+                        await new Promise((r) => setTimeout(r, 1500));
+                    }
+                } finally { busy = false; }
+            }
+            const first = setTimeout(warm, 5000);
+            const timer = setInterval(warm, 60000);
+            return { stop() { stopped = true; clearTimeout(first); clearInterval(timer); } };
+        }
+
+        /* ========================================================================
+         * MISSION WINDOW — list in the right half of the header, under the
+         * progress bar. Drawn synchronously from cache, so nothing moves.
+         * ==================================================================== */
+        const info = document.getElementById('mission_general_info');
+        const right = document.getElementById('mission_progress_info');
+        if (!info || !right) return;
+        const type = info.getAttribute('data-mission-type');
+        if (!/^\d+$/.test(type || '')) return; // own/alliance large-scale events have no type
+        const overlays = (info.getAttribute('data-additive-overlays') || '').replace(/^null$/, '');
+        const key = keyOf(type, overlays);
 
         const style = document.createElement('style');
         style.textContent = `
-            .mks-mh { margin: 6px 0 10px; border: 1px solid rgba(128,128,128,.35); border-left: 4px solid #31c4dd; border-radius: 6px;
-                padding: 6px 10px; font-size: 13px; background: rgba(128,128,128,.06); }
-            .mks-mh-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-weight: 600; }
-            .mks-mh-head .mks-mh-sum { font-weight: normal; opacity: .75; font-size: 12px; }
-            .mks-mh-head .mks-mh-arrow { margin-left: auto; opacity: .6; }
-            .mks-mh-body { margin-top: 6px; }
-            .mks-mh.closed .mks-mh-body { display: none; }
-            .mks-mh-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
-            .mks-mh-chip { display: inline-flex; gap: 4px; align-items: baseline; padding: 1px 7px; border-radius: 10px;
-                background: rgba(128,128,128,.18); white-space: nowrap; }
-            .mks-mh-chip b { font-variant-numeric: tabular-nums; }
-            .mks-mh-chip.chance { background: transparent; border: 1px dashed rgba(128,128,128,.6); }
-            .mks-mh-info { display: grid; grid-template-columns: max-content 1fr; gap: 1px 12px; font-size: 12px; }
-            .mks-mh-info dt { font-weight: normal; opacity: .7; }
-            .mks-mh-info dd { margin: 0; }
-            .mks-mh-sec { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; margin-top: 4px; }
+            .mks-mh { margin-top: 6px; font-size: 14px; line-height: 1.35; min-height: 44px; }
+            .mks-mh-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; }
+            .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+            .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
+            .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
+            .mks-mh-chance { opacity: .6; font-size: 12px; margin-top: 3px; }
+            .mks-mh-note { opacity: .6; font-size: 12px; }
+            #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
         document.head.appendChild(style);
 
         const box = document.createElement('div');
         box.className = 'mks-mh';
-        let open = true;
-        try { open = localStorage.getItem(STATE_KEY) !== '0'; } catch (e) { /* ignore */ }
-        box.classList.toggle('closed', !open);
-        box.innerHTML = '<div class="mks-mh-head">Meldinghelper <span class="mks-mh-sum">laden…</span><span class="mks-mh-arrow"></span></div><div class="mks-mh-body"></div>';
-        header.insertAdjacentElement('afterend', box);
-        const head = box.querySelector('.mks-mh-head');
-        const body = box.querySelector('.mks-mh-body');
-        const arrow = () => { box.querySelector('.mks-mh-arrow').textContent = box.classList.contains('closed') ? '▸' : '▾'; };
-        arrow();
-        head.addEventListener('click', () => {
-            box.classList.toggle('closed');
-            try { localStorage.setItem(STATE_KEY, box.classList.contains('closed') ? '0' : '1'); } catch (e) { /* ignore */ }
-            arrow();
-        });
+        right.appendChild(box);
 
-        /* ========================================================================
-         * DATA — the game's own help page (/einsaetze/{type}), three tables:
-         *   "Beloning en voorwaarden"        credits, POI, needed buildings
-         *   "Voertuig en personeel vereisten" "Benodigde X" = n, "X benodigd waarschijnlijkheid" = %
-         *   "Overige informatie"              patients, transport chance, department, ...
-         * ==================================================================== */
-        function readCache() {
-            try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) { return {}; }
-        }
-        function writeCache(all) {
-            const now = Date.now();
-            for (const k in all) if (now - all[k].at > CACHE_MS) delete all[k];
-            try { localStorage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (e) { /* ignore */ }
-        }
-
-        async function load() {
-            const all = readCache();
-            const hit = all[typeKey];
-            if (hit && Date.now() - hit.at < CACHE_MS) return hit.tables;
-            const res = await fetch(url.pathname + url.search, { credentials: 'same-origin' });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-            const tables = [...doc.querySelectorAll('table')].map((t) => ({
-                title: (t.querySelector('thead th') || {}).textContent || '',
-                rows: [...t.querySelectorAll('tbody tr')].map((tr) => [...tr.cells].map((td) => td.textContent.trim().replace(/\s+/g, ' ')))
-                    .filter((r) => r.length >= 2 && r[0]),
-            })).map((t) => ({ ...t, title: t.title.trim() }));
-            all[typeKey] = { at: Date.now(), tables };
-            writeCache(all);
-            return tables;
-        }
-
-        const esc = ctx.esc;
         const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
-        function render(tables) {
-            const find = (re) => tables.find((t) => re.test(t.title)) || { rows: [] };
-            const reward = find(/beloning|voorwaarden/i).rows;
-            const vehicles = find(/voertuig|personeel/i).rows;
-            const other = find(/overige/i).rows;
-
-            const need = [], chance = [], extra = [];
-            for (const [label, value] of vehicles) {
-                let m;
-                if ((m = label.match(/^(.*?)\s+benodigd waarschijnlijkheid$/i))) chance.push({ name: m[1], v: `${value}%` });
-                else if ((m = label.match(/^Benodigd(?:e)?(?: aantal)?\s+(.*)$/i))) need.push({ name: m[1], v: value });
-                else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
-                else extra.push([label, value]);
+        function render(data) {
+            if (!data) { box.innerHTML = '<span class="mks-mh-note">Meldinghelper laden…</span>'; return; }
+            // Plain counts go in the grid; water, foam and personnel rules
+            // ("1 per 100 reddingswerkers") go on one line underneath.
+            const litres = (x) => /water|schuim/i.test(x.name) && /^\d+$/.test(x.v.replace(/\./g, ''));
+            const counts = data.need.filter((x) => /^\d+$/.test(x.v) && !litres(x));
+            const rest = data.need.filter((x) => !counts.includes(x));
+            if (!data.need.length) {
+                box.innerHTML = '<span class="mks-mh-note">Geen voertuigeisen: alleen patiënten of ambulance.</span>';
+            } else {
+                box.innerHTML = `<div class="mks-mh-list">${counts.map((x) =>
+                    `<div class="mks-mh-row" title="${esc(`${x.v}× ${x.name}`)}"><span class="mks-mh-n">${esc(x.v)}×</span>`
+                    + `<span class="mks-mh-name">${esc(cap(x.name))}</span></div>`).join('')}</div>`;
+                if (rest.length) {
+                    box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest">${rest.map((x) => `<span><b>${esc(cap(x.name))}</b> `
+                        + `${esc(litres(x) ? `${ctx.nl(Number(x.v.replace(/\./g, '')))} l` : x.v)}</span>`).join('')}</div>`);
+                }
             }
-
-            let credits = null, poi = null;
-            const prereq = [];
-            for (const [label, value] of reward) {
-                if (/credits/i.test(label)) credits = value;
-                else if (/point of interest/i.test(label)) poi = value;
-                else if (!/incident keuze/i.test(label)) prereq.push([label.replace(/^Benodigd(?:e)?(?: aantal)?\s+/i, ''), value]);
+            if (ctx.cfg.chances && data.chance.length) {
+                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
             }
-
-            const info = [];
-            for (const [label, value] of other) {
-                if (/variaties/i.test(label) && !ctx.cfg.variants) continue;
-                if (/benodigd waarschijnlijkheid$/i.test(label)) { chance.push({ name: label.replace(/\s+benodigd waarschijnlijkheid$/i, ''), v: `${value}%` }); continue; }
-                const short = label
-                    .replace(/^Waarschijnlijkheid dat een patiënt getransporteerd moet worden$/i, 'Transportkans')
-                    .replace(/^Gespecialiseerde afdeling voor patiënten$/i, 'Afdeling');
-                const val = /kans|waarschijnlijkheid/i.test(short) && /^\d+$/.test(value) ? `${value}%` : value;
-                info.push([short, val]);
-            }
-            info.push(...extra);
-
-            const chips = (list, cls) => `<div class="mks-mh-chips">${list.map((x) =>
-                `<span class="mks-mh-chip ${cls}"><b>${esc(x.v)}</b>${/^\d+$/.test(x.v) ? '×' : ''} ${esc(cap(x.name))}</span>`).join('')}</div>`;
-            const dl = (list) => `<dl class="mks-mh-info">${list.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
-
-            let html = '';
-            if (need.length) html += chips(need, '');
-            else html += '<div class="mks-mh-chips"><span class="mks-mh-chip">Geen voertuigeisen (alleen ambulance of patiënten)</span></div>';
-            if (ctx.cfg.chances && chance.length) html += `<div class="mks-mh-sec">Kans op</div>${chips(chance, 'chance')}`;
-            const top = [];
-            if (poi) top.push(['POI', poi]);
-            if (info.length || top.length) html += dl(top.concat(info));
-            if (ctx.cfg.prereq && prereq.length) html += `<div class="mks-mh-sec">Voorwaarden</div>${dl(prereq)}`;
-            body.innerHTML = html;
-
-            const total = need.reduce((a, x) => a + (/^\d+$/.test(x.v) ? Number(x.v) : 0), 0);
-            const sum = [total ? `${total} voertuigen` : '', ctx.cfg.credits && credits ? `${ctx.nl(Number(credits.replace(/\D/g, '')))} credits` : '']
-                .filter(Boolean).join(' · ');
-            head.querySelector('.mks-mh-sum').textContent = sum;
         }
 
-        let tables = null;
-        load()
-            .then((t) => { tables = t; render(t); })
-            .catch((e) => {
-                ctx.warn('help page failed', e);
-                head.querySelector('.mks-mh-sum').textContent = 'kon de hulppagina niet laden';
-            });
-        ctx.onSettings(() => { if (tables) render(tables); });
+        // The game's "missing vehicles" alert, moved into the left half of the
+        // header so it sits next to the list. The game updates its contents in
+        // place, so moving the element itself is safe; stop() puts it back.
+        const missing = document.querySelector('.alert.alert-missing-vehicles');
+        const home = missing && { parent: missing.parentNode, next: missing.nextSibling };
+        function placeMissing() {
+            if (!missing) return;
+            if (ctx.cfg.moveMissing) info.appendChild(missing);
+            else if (missing.parentNode !== home.parent) home.parent.insertBefore(missing, home.next);
+        }
+        placeMissing();
+
+        let data = cached(key);
+        render(data);
+        if (!data) {
+            fetchType(type, overlays)
+                .then((d) => { data = d; render(d); })
+                .catch((e) => { ctx.warn('help page failed', e); box.innerHTML = '<span class="mks-mh-note">Meldinghelper: hulppagina niet geladen.</span>'; });
+        }
+        ctx.onSettings(() => { render(data); placeMissing(); });
 
         return {
             stop() {
                 box.remove();
                 style.remove();
+                if (missing && missing.parentNode !== home.parent) home.parent.insertBefore(missing, home.next);
             },
         };
     },
@@ -2262,39 +2283,50 @@ MKS.module({
          * CANDIDATES
          * Hospitals: tables #own-hospitals and #alliance-hospitals, one row per
          * hospital, button a[href*="/patient/"]. Own hospitals have no cost column.
-         * Cells: buttons a[href*="/gefangener/"] with distance, free cells and
-         * cost in the button text; red = full, orange = not enough room.
+         * Cells: either table rows like hospitals (button a[href*="/gefangener/"])
+         * or loose buttons with distance, free cells and cost in the text.
+         * Red (btn-danger / row .danger / 0 free) = full, orange = not enough room.
          * ==================================================================== */
+        const DEST = 'a[href*="/patient/"], a[href*="/gefangener/"]';
+        const isRed = (el) => !!el && (el.classList.contains('btn-danger') || el.classList.contains('danger')
+            || el.classList.contains('label-danger'));
         function candidates() {
             const out = [];
+            const seen = new Set();
             for (const table of document.querySelectorAll('table')) {
                 const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
                 const iDist = heads.findIndex((h) => h.startsWith('afstand'));
                 if (iDist < 0) continue;
-                const iBeds = heads.findIndex((h) => h.startsWith('vrije'));
-                const iCost = heads.findIndex((h) => h.startsWith('kosten'));
+                const iFree = heads.findIndex((h) => h.startsWith('vrij'));
+                const iCost = heads.findIndex((h) => h.startsWith('kosten') || h.startsWith('belasting'));
                 const iDep = heads.findIndex((h) => h.startsWith('afdeling'));
                 for (const tr of table.querySelectorAll('tbody > tr')) {
-                    const a = tr.querySelector('a.btn[href*="/patient/"]');
+                    const a = tr.querySelector(DEST);
                     if (!a) continue;
-                    const beds = cell(tr, iBeds);
+                    seen.add(a);
+                    const kind = /\/gefangener\//.test(a.getAttribute('href')) ? 'cell' : 'hospital';
+                    const free = iFree >= 0 ? num(cell(tr, iFree).split('/')[0]) : Infinity;
+                    const red = isRed(a) || isRed(tr) || (iFree >= 0 && isRed(tr.cells[iFree] && tr.cells[iFree].querySelector('.label')));
                     out.push({
-                        el: tr, a, kind: 'hospital', own: table.id === 'own-hospitals',
+                        el: tr, a, kind, own: table.id === 'own-hospitals',
                         dist: num(cell(tr, iDist)),
-                        free: iBeds >= 0 ? num(beds.split('/')[0]) : Infinity,
+                        free: red ? 0 : (isNaN(free) ? Infinity : free),
+                        short: a.classList.contains('btn-warning') || tr.classList.contains('warning'),
                         cost: iCost >= 0 ? num(cell(tr, iCost)) || 0 : 0,
-                        dep: iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
+                        dep: kind === 'cell' || iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
                     });
                 }
             }
-            for (const a of document.querySelectorAll('a.btn[href*="/gefangener/"]')) {
+            for (const a of document.querySelectorAll('a[href*="/gefangener/"]')) {
+                if (seen.has(a)) continue;
                 const t = a.textContent.replace(/\s+/g, ' ');
                 const km = t.match(/(\d+(?:[.,]\d+)?)\s*km/);
                 const pct = t.match(/(\d+)\s*%/);
+                const freeTxt = t.match(/vrij\w*\s*(?:cel\w*)?\s*:?\s*(\d+)/i);
                 out.push({
                     el: a, a, kind: 'cell',
                     dist: km ? parseFloat(km[1].replace(',', '.')) : NaN,
-                    free: a.classList.contains('btn-danger') ? 0 : Infinity,
+                    free: isRed(a) ? 0 : (freeTxt ? Number(freeTxt[1]) : Infinity),
                     short: a.classList.contains('btn-warning'),
                     cost: pct ? Number(pct[1]) : 0,
                     dep: true,
@@ -2309,7 +2341,7 @@ MKS.module({
             if (c.a.classList.contains('disabled')) return 'niet beschikbaar';
             if (cfg.full && c.free <= 0) return 'vol';
             if (c.kind === 'hospital' && c.free < Number(cfg.minBeds)) return 'te weinig bedden';
-            if (c.kind === 'cell' && cfg.cellsShort && c.short) return 'te weinig cellen';
+            if (c.kind === 'cell' && cfg.cellsShort && c.short && c.free !== 0) return 'te weinig cellen';
             if (c.kind === 'hospital' && cfg.department && !c.dep) return 'geen afdeling';
             if (c.cost > Number(cfg.maxCost)) return 'te duur';
             if (Number(cfg.maxKm) > 0 && c.dist > Number(cfg.maxKm)) return 'te ver';
@@ -2343,7 +2375,7 @@ MKS.module({
                 const tag = document.createElement('span');
                 tag.className = 'mks-dest-tag';
                 tag.textContent = ctx.cfg.enter ? 'Beste keuze · Enter' : 'Beste keuze';
-                (best.kind === 'hospital' ? best.el.cells[0] : best.a).appendChild(tag);
+                (best.el.tagName === 'TR' ? best.el.cells[0] : best.a).appendChild(tag);
             }
             const hidden = list.length - shown.length;
             const parts = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ');
