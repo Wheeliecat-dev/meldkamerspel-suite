@@ -6,7 +6,6 @@ MKS.module({
     category: 'names',
     description: 'Geeft je kazernes, posten en bureaus hun echte Nederlandse naam (en waar bekend de echte post-/regionummering). '
         + 'Nooit dubbele namen: bij een botsing blijft het gebouw ongemoeid. Ziekenhuizen en meldkamers worden niet hernoemd.',
-    defaultOn: false,
     warning: '<b>Werk in uitvoering. Hernoemen kan niet ongedaan worden gemaakt.</b> Zodra je dit aanzet, verandert het de namen van je gebouwen '
         + 'in het spel zelf. De oude namen worden nergens bewaard. De namenlijst is nog niet af en kan in een volgende versie weer veranderen.',
     confirmOn: 'Let op: dit hernoemt direct je gebouwen in het spel.\n\nDat kan NIET ongedaan worden gemaakt: de oude namen worden niet bewaard. '

@@ -26,11 +26,9 @@ Install only one channel. If both are installed, the second one to load does not
 | Ontbrekende voertuigen laden | Loads the full vehicle list in the alarm window |
 | Creditfilter | Hide missions by credit range |
 | Inzetvoorstellen maken | Creates **a lot** (570+) of dispatch presets. Only runs when you click it |
-| Spraakaanvragen beantwoorden | Answers transport requests to the nearest free hospital/cell |
-| Voertuignamen | Renames vehicles to real Dutch call signs. **Cannot be undone.** Off by default |
-| Gebouwnamen | Renames buildings to real names. **Cannot be undone.** Off by default |
+| Voertuignamen | Renames vehicles to real Dutch call signs. **Cannot be undone.** |
+| Gebouwnamen | Renames buildings to real names. **Cannot be undone.** |
 | Personeel | All personnel in one table, with stats |
-| Bemanningstekort | Which vehicles can't leave for lack of trained crew |
 | Inkomsten | Tracks your credits over time |
 | Dekkingskaart | Map layer showing response-time coverage |
 | Plaatsingsadvies | Shows real OpenStreetMap features while placing a building |

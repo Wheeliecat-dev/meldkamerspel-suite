@@ -14,7 +14,6 @@
  *   pages:    optional RegExp on location.pathname
  *   pageNote: shown in the dashboard when the module does not run here
  *   live:     true = run() may return { stop() }; on/off works without reload
- *   defaultOn: false = off until you turn it on
  *   warning:  big red callout in the dashboard (HTML)
  *   confirmOn: text of a confirm() shown before the module is turned on
  *   settings: [{ key, label, type, default, help, min, max, step, unit, options }]
@@ -54,7 +53,7 @@ const MKS = (() => {
 
     // Old standalone scripts each had their own GM storage. These key
     // prefixes are what the suite modules read, so they can be imported.
-    const IMPORT_PREFIXES = ['vn_', 'bn_', 'incomeTracker.', 'personnelOverview.', 'crewShortage.'];
+    const IMPORT_PREFIXES = ['vn_', 'bn_', 'incomeTracker.', 'personnelOverview.'];
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const nl = (n) => Math.round(Number(n) || 0).toLocaleString('nl-NL');
@@ -74,7 +73,8 @@ const MKS = (() => {
     const byId = {};
     const rt = {}; // id -> runtime info
 
-    const isEnabled = (def) => (def.id in state.enabled ? !!state.enabled[def.id] : def.defaultOn !== false);
+    // Everything starts off: each player picks what they want.
+    const isEnabled = (def) => !!state.enabled[def.id];
     const applies = (def) => (def.frames === 'all' || IS_TOP) && (!def.pages || def.pages.test(location.pathname));
 
     function settingsOf(def) {
@@ -729,6 +729,8 @@ const MKS = (() => {
             el.innerHTML = `
                 <div class="mks-dh"><span class="mks-ico">🧩</span><div><h2>Overzicht</h2>
                   <div class="mks-pills"><span class="mks-pill t-ok">${on} aan</span><span class="mks-pill">${defs.length - on} uit</span></div></div></div>
+                ${on ? '' : `<div class="mks-callout"><b>Alles staat nog uit.</b> Kies links welke scripts je wilt gebruiken:
+                  klik op een script om te lezen wat het doet, en zet het aan met het schuifje.</div>`}
                 <p class="mks-desc">Alle scripts in één. Zet ze links aan of uit en klik op een script voor de instellingen.
                   De meeste wijzigingen werken direct; anders verschijnt bovenin een knop om te herladen.</p>
                 <h4 class="mks-h">Nu actief op deze pagina</h4>
