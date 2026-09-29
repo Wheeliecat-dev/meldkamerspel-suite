@@ -19,11 +19,11 @@ MKS.module({
     ],
 
     run(ctx) {
-        const CACHE_KEY = 'mks-mission-helper-v3';
+        const CACHE_KEY = 'mks-mission-helper-v4';
         const CACHE_MS = 3 * 24 * 3600 * 1000;
         const esc = ctx.esc;
         // Left over from the first beta version.
-        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2', 'mks-mission-helper-v3'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
         /* ========================================================================
          * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
@@ -34,8 +34,19 @@ MKS.module({
          * and "Benodigde Personeel" from "Overige informatie".
          * Parsed result is cached per type + overlays in localStorage.
          * ==================================================================== */
-        const keyOf = (type, overlays) => `${type}|${overlays || ''}`;
-        const urlOf = (type, overlays) => `/einsaetze/${type}${overlays ? `?additive_overlays=${encodeURIComponent(overlays)}` : ''}`;
+        // A mission is its type plus optional variants: overlay_index picks a
+        // numbered variant (e.g. 878 with index 1 needs 3 instead of 1 police
+        // car), additive_overlays adds letters like "a". Both come from the
+        // data-overlay-index / data-additive-overlays attributes.
+        const attr = (el, name) => (el.getAttribute(name) || '').replace(/^null$/, '');
+        const keyOf = (type, overlays, index) => `${type}|${overlays || ''}|${index || ''}`;
+        function urlOf(type, overlays, index) {
+            const q = new URLSearchParams();
+            if (overlays) q.set('additive_overlays', overlays);
+            if (index) q.set('overlay_index', index);
+            const qs = q.toString();
+            return `/einsaetze/${type}${qs ? `?${qs}` : ''}`;
+        }
 
         function readCache() {
             try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) { return {}; }
@@ -77,11 +88,11 @@ MKS.module({
             return { need, chance, patients };
         }
 
-        async function fetchType(type, overlays) {
-            const res = await fetch(urlOf(type, overlays), { credentials: 'same-origin' });
+        async function fetchType(type, overlays, index) {
+            const res = await fetch(urlOf(type, overlays, index), { credentials: 'same-origin' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = parse(await res.text());
-            store(keyOf(type, overlays), data);
+            store(keyOf(type, overlays, index), data);
             return data;
         }
 
@@ -100,14 +111,15 @@ MKS.module({
                     const todo = new Map();
                     document.querySelectorAll('.missionSideBarEntry[mission_type_id]').forEach((el) => {
                         const type = el.getAttribute('mission_type_id');
-                        const ov = el.getAttribute('data-additive-overlays') || '';
+                        const ov = attr(el, 'data-additive-overlays');
+                        const idx = attr(el, 'data-overlay-index');
                         if (!/^\d+$/.test(type)) return;
-                        const k = keyOf(type, ov);
-                        if (!todo.has(k) && !cached(k)) todo.set(k, [type, ov]);
+                        const k = keyOf(type, ov, idx);
+                        if (!todo.has(k) && !cached(k)) todo.set(k, [type, ov, idx]);
                     });
-                    for (const [type, ov] of todo.values()) {
+                    for (const [type, ov, idx] of todo.values()) {
                         if (stopped) break;
-                        try { await fetchType(type, ov); } catch (e) { ctx.warn('prefetch failed', type, e); }
+                        try { await fetchType(type, ov, idx); } catch (e) { ctx.warn('prefetch failed', type, e); }
                         await new Promise((r) => setTimeout(r, 1500));
                     }
                 } finally { busy = false; }
@@ -126,8 +138,9 @@ MKS.module({
         if (!info || !right) return;
         const type = info.getAttribute('data-mission-type');
         if (!/^\d+$/.test(type || '')) return; // own/alliance large-scale events have no type
-        const overlays = (info.getAttribute('data-additive-overlays') || '').replace(/^null$/, '');
-        const key = keyOf(type, overlays);
+        const overlays = attr(info, 'data-additive-overlays');
+        const index = attr(info, 'data-overlay-index');
+        const key = keyOf(type, overlays, index);
 
         const style = document.createElement('style');
         style.textContent = `
@@ -193,7 +206,7 @@ MKS.module({
         let data = cached(key);
         render(data);
         if (!data) {
-            fetchType(type, overlays)
+            fetchType(type, overlays, index)
                 .then((d) => { data = d; render(d); })
                 .catch((e) => { ctx.warn('help page failed', e); box.innerHTML = '<span class="mks-mh-note">Meldinghelper: hulppagina niet geladen.</span>'; });
         }
