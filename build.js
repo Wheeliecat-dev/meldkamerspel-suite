@@ -49,7 +49,7 @@ function build(channel) {
     const version = beta ? `${VERSION}.${stamp()}` : VERSION;
     const vars = {
         VERSION: version,
-        NAME: beta ? 'Meldkamerspel Suite (beta)' : 'Meldkamerspel Suite',
+        NAME: beta ? "Wheeliecat's Meldkamerspel Scripts (beta)" : "Wheeliecat's Meldkamerspel Scripts",
         NAMESPACE: beta ? 'https://meldkamerspel.com/suite-beta' : 'https://meldkamerspel.com/suite',
         UPDATE_URL: url,
         CHANNEL: channel,

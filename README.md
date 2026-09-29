@@ -1,14 +1,14 @@
-# Meldkamerspel Suite
+# Wheeliecat's Meldkamerspel Scripts
 
 > **Work in progress.** These scripts are still changing a lot and may contain bugs. Use them at your own risk and check what they do.
 
-All my [meldkamerspel.com](https://meldkamerspel.com) userscripts in one Tampermonkey script, with a dashboard to turn each one on or off and change its settings. Open it via **⚙️ Scripts → Dashboard** in the game's navbar.
+By **Wheeliecat**. All my [meldkamerspel.com](https://meldkamerspel.com) userscripts in one Tampermonkey script, with a dashboard to turn each one on or off and change its settings. Open it via **⚙️ Scripts → Dashboard** in the game's navbar.
 
 ## Install
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/).
 2. Click the install link:
-   - **[Install Meldkamerspel Suite](https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/meldkamerspel-suite.user.js)**
+   - **[Install Wheeliecat's Meldkamerspel Scripts](https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/meldkamerspel-suite.user.js)**
 3. Tampermonkey checks for updates by itself, so you always get the latest version.
 
 Install only one channel. If both are installed, the second one to load does nothing.

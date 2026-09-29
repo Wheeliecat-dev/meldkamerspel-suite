@@ -410,7 +410,7 @@ const MKS = (() => {
             li = document.createElement('li');
             li.className = 'dropdown';
             li.id = 'mks-nav';
-            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Scripts: aan/uit en instellingen">⚙️ Scripts <span class="caret"></span></a><ul class="dropdown-menu"></ul>';
+            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Wheeliecat&#39;s scripts: aan/uit en instellingen">⚙️ Scripts <span class="caret"></span></a><ul class="dropdown-menu"></ul>';
             menu = li.querySelector('ul');
             bar.appendChild(li);
             li.firstChild.addEventListener('click', (e) => {
@@ -534,9 +534,9 @@ const MKS = (() => {
             root = document.createElement('div');
             root.id = 'mks-dash';
             root.innerHTML = `
-            <div class="mks-win" role="dialog" aria-label="Scripts">
+            <div class="mks-win" role="dialog" aria-label="Wheeliecat's scripts">
               <div class="mks-top">
-                <div class="mks-brand"><span class="mks-logo">M</span><b>Scripts</b><span class="mks-ver">v${VERSION}</span>${CHANNEL === 'beta' ? '<span class="mks-pill t-warn">beta</span>' : ''}</div>
+                <div class="mks-brand"><span class="mks-logo">W</span><b>Wheeliecat's scripts</b><span class="mks-ver">v${VERSION}</span>${CHANNEL === 'beta' ? '<span class="mks-pill t-warn">beta</span>' : ''}</div>
                 <span class="mks-count"></span>
                 <input class="mks-search" type="search" placeholder="Zoek script…" aria-label="Zoek script">
                 <button class="mks-btn mks-x" title="Sluiten (Esc)">✕</button>
@@ -731,7 +731,7 @@ const MKS = (() => {
                   <div class="mks-pills"><span class="mks-pill t-ok">${on} aan</span><span class="mks-pill">${defs.length - on} uit</span></div></div></div>
                 ${on ? '' : `<div class="mks-callout"><b>Alles staat nog uit.</b> Kies links welke scripts je wilt gebruiken:
                   klik op een script om te lezen wat het doet, en zet het aan met het schuifje.</div>`}
-                <p class="mks-desc">Alle scripts in één. Zet ze links aan of uit en klik op een script voor de instellingen.
+                <p class="mks-desc">Wheeliecat's scripts voor Meldkamerspel, allemaal in één. Zet ze links aan of uit en klik op een script voor de instellingen.
                   De meeste wijzigingen werken direct; anders verschijnt bovenin een knop om te herladen.</p>
                 <h4 class="mks-h">Nu actief op deze pagina</h4>
                 <div class="mks-now">${running.length ? running.map((d) => {
@@ -865,10 +865,10 @@ const MKS = (() => {
     function boot() {
         // Stable and beta installed together would run everything twice.
         if (W.__mksSuiteLoaded) {
-            console.warn(`[Scripts] ${W.__mksSuiteLoaded} is al geladen; deze kopie (${CHANNEL}) doet niets. Zet een van beide uit in Tampermonkey.`);
+            console.warn(`[Wheeliecat's scripts] ${W.__mksSuiteLoaded} is al geladen; deze kopie (${CHANNEL}) doet niets. Zet een van beide uit in Tampermonkey.`);
             return;
         }
-        W.__mksSuiteLoaded = `Meldkamerspel Suite ${CHANNEL}`;
+        W.__mksSuiteLoaded = `Wheeliecat's scripts (${CHANNEL})`;
         for (const def of defs) {
             runtime(def);
             if (isEnabled(def) && applies(def)) schedule(def);
