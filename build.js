@@ -16,7 +16,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-let VERSION = '1.0.2';
+let VERSION = '1.0.3';
 const REPO = 'Wheeliecat-dev/meldkamerspel-suite'; // GitHub user/repo
 const BRANCH = 'main';
 
@@ -51,10 +51,14 @@ function stamp() {
 function build(channel) {
     const beta = channel === 'beta';
     const file = beta ? 'meldkamerspel-suite-beta.user.js' : 'meldkamerspel-suite.user.js';
-    const lib = beta ? 'suite-beta.js' : 'suite.js';
+    const version = beta ? `${VERSION}.${stamp()}` : VERSION;
+    // Version in the file name: GitHub's raw cache ignores ?query, so a
+    // reused name could serve the old file (and fail the sha256 check) for
+    // ~5 minutes after a push. A new name is never cached.
+    const prefix = beta ? 'suite-beta-' : 'suite-';
+    const lib = `${prefix}${version}.js`;
     const raw = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/dist`;
     const url = `${raw}/${file}`;
-    const version = beta ? `${VERSION}.${stamp()}` : VERSION;
     const vars = {
         VERSION: version,
         NAME: beta ? "Wheeliecat's Meldkamerspel Scripts (beta)" : "Wheeliecat's Meldkamerspel Scripts",
@@ -70,11 +74,20 @@ function build(channel) {
         'MKS.boot();',
     ].join('\n\n')) + '\n';
     const hash = crypto.createHash('sha256').update(code, 'utf8').digest('hex');
-    vars.REQUIRE_URL = `${raw}/lib/${lib}?v=${version}#sha256=${hash}`;
+    vars.REQUIRE_URL = `${raw}/lib/${lib}#sha256=${hash}`;
     const loader = fill(read('src/core/header.js')) + '\n';
 
     fs.mkdirSync(path.join(__dirname, 'dist/lib'), { recursive: true });
     fs.writeFileSync(path.join(__dirname, 'dist/lib', lib), code);
+    // Keep the newest 3 per channel: a loader still in someone's cache can
+    // point at a slightly older file. Older ones are gone for good.
+    const libDir = path.join(__dirname, 'dist/lib');
+    const isChannel = (f) => f.startsWith(prefix) && (beta || !f.startsWith('suite-beta-'));
+    const old = fs.readdirSync(libDir).filter(isChannel)
+        .sort((a, b) => fs.statSync(path.join(libDir, b)).mtimeMs - fs.statSync(path.join(libDir, a)).mtimeMs);
+    old.slice(3).forEach((f) => fs.unlinkSync(path.join(libDir, f)));
+    // The old unversioned names from before this scheme.
+    for (const f of ['suite.js', 'suite-beta.js']) if (fs.existsSync(path.join(libDir, f)) && (f === 'suite-beta.js') === beta) fs.unlinkSync(path.join(libDir, f));
     fs.writeFileSync(path.join(__dirname, 'dist', file), loader);
     console.log(`built dist/${file} v${version} (${loader.split('\n').length} lines) + dist/lib/${lib} (${(code.length / 1024).toFixed(0)} KB)`);
 }
