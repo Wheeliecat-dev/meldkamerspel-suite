@@ -151,14 +151,16 @@ MKS.module({
 
         const style = document.createElement('style');
         style.textContent = `
-            .mks-mh.alert { margin: 8px 0 0; padding: 8px 12px; font-size: 14px; line-height: 1.35; min-height: 44px; }
-            .mks-mh-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; }
-            .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+            .mks-mh.alert { margin: 8px 0 0; padding: 8px 12px; font-size: 14px; line-height: 1.4; min-height: 44px; }
+            .mks-mh-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, max-content); gap: 1px 28px; }
+            .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; min-width: 0; }
+            .mks-mh-n { min-width: 2.4em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
             .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
-            .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
-            .mks-mh-chance { opacity: .75; font-size: 13px; margin-top: 3px; }
-            .mks-mh-credits { margin-top: 4px; font-weight: 700; }
+            .mks-mh-row.maybe { opacity: .7; font-style: italic; }
+            .mks-mh-pct { flex: none; font-size: 11px; font-weight: 600; padding: 0 5px; border-radius: 8px; background: rgba(0,0,0,.08); }
+            .mks-mh-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; margin-top: 6px; padding-top: 5px;
+                border-top: 1px solid rgba(0,0,0,.1); }
+            .mks-mh-foot .mks-mh-credits { margin-left: auto; font-weight: 700; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
             #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
@@ -170,36 +172,45 @@ MKS.module({
         right.appendChild(box);
 
         const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+        // "HOVD's" and "HOVD", "Hoogwerkers" and "Hoogwerker": same vehicle.
+        const norm = (n) => n.toLowerCase().replace(/['’]s\b/g, '').replace(/(en|s)$/, '').trim();
+
         function render(data) {
             if (!data) { box.innerHTML = '<span class="mks-mh-note">Meldinghelper laden…</span>'; return; }
-            // Plain counts go in the grid; water, foam and personnel rules
-            // ("1 per 100 reddingswerkers") go on one line underneath.
+            // Plain counts go in the grid. A chance on a vehicle that is also
+            // in the list ("HOVD 50%") becomes a badge on that row: it is only
+            // needed that often. Other chances get their own faded row, except
+            // MMT, which goes with the patient info in the footer. Water, foam
+            // and personnel rules also go in the footer.
             const litres = (x) => /water|schuim/i.test(x.name) && /^\d+$/.test(x.v.replace(/\./g, ''));
             const counts = data.need.filter((x) => /^\d+$/.test(x.v) && !litres(x));
             const rest = data.need.filter((x) => !counts.includes(x));
-            if (!data.need.length) {
-                box.innerHTML = '<span class="mks-mh-note">Geen voertuigeisen: alleen patiënten of ambulance.</span>';
-            } else {
-                box.innerHTML = `<div class="mks-mh-list">${counts.map((x) =>
-                    `<div class="mks-mh-row" title="${esc(`${x.v}× ${x.name}`)}"><span class="mks-mh-n">${esc(x.v)}×</span>`
-                    + `<span class="mks-mh-name">${esc(cap(x.name))}</span></div>`).join('')}</div>`;
-                if (rest.length) {
-                    box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest">${rest.map((x) => `<span><b>${esc(cap(x.name))}</b> `
-                        + `${esc(litres(x) ? `${ctx.nl(Number(x.v.replace(/\./g, '')))} l` : x.v)}</span>`).join('')}</div>`);
-                }
+            const chances = ctx.cfg.chances ? data.chance.slice() : [];
+            const mmt = data.chance.find((x) => /mmt|arts/i.test(x.name));
+            const badge = {};
+            for (const c of chances.slice()) {
+                if (c === mmt) { chances.splice(chances.indexOf(c), 1); continue; }
+                const hit = counts.find((x) => norm(x.name) === norm(c.name));
+                if (hit) { badge[hit.name] = c.v; chances.splice(chances.indexOf(c), 1); }
             }
+
+            const rows = counts.map((x) => `<div class="mks-mh-row" title="${esc(`${x.v}× ${x.name}${badge[x.name] ? ` (${badge[x.name]}% kans dat dit nodig is)` : ''}`)}">`
+                + `<span class="mks-mh-n">${esc(x.v)}×</span><span class="mks-mh-name">${esc(cap(x.name))}</span>`
+                + `${badge[x.name] ? `<span class="mks-mh-pct">${esc(badge[x.name])}%</span>` : ''}</div>`)
+                .concat(chances.map((x) => `<div class="mks-mh-row maybe" title="${esc(`${x.v}% kans dat ${x.name} nodig is`)}">`
+                    + `<span class="mks-mh-n">${esc(x.v)}%</span><span class="mks-mh-name">${esc(cap(x.name))}</span></div>`));
+            box.innerHTML = rows.length
+                // Top to bottom, 5 per column, then the next column.
+                ? `<div class="mks-mh-list" style="grid-template-rows:repeat(${Math.min(rows.length, 5)},auto)">${rows.join('')}</div>`
+                : '<span class="mks-mh-note">Geen voertuigeisen: alleen patiënten of ambulance.</span>';
+
+            const foot = rest.map((x) => `<span><b>${esc(cap(x.name))}</b> ${esc(litres(x) ? `${ctx.nl(Number(x.v.replace(/\./g, '')))} l` : x.v)}</span>`);
             const p = data.patients || {};
-            if (p.max) {
-                const n = p.min && p.min !== p.max ? `${p.min}-${p.max}` : p.max;
-                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest"><span><b>Patiënten</b> ${esc(n)}</span>`
-                    + `${p.transport ? `<span><b>Transport</b> ${esc(p.transport)}%</span>` : ''}</div>`);
-            }
-            if (ctx.cfg.chances && data.chance.length) {
-                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
-            }
-            if (data.credits) {
-                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-credits">± ${ctx.nl(data.credits)} credits</div>`);
-            }
+            if (p.max) foot.push(`<span><b>Patiënten</b> ${esc(p.min && p.min !== p.max ? `${p.min}-${p.max}` : p.max)}</span>`);
+            if (p.transport) foot.push(`<span><b>Transport</b> ${esc(p.transport)}%</span>`);
+            if (mmt && ctx.cfg.chances) foot.push(`<span><b>MMT</b> ${esc(mmt.v)}%</span>`);
+            if (data.credits) foot.push(`<span class="mks-mh-credits">± ${ctx.nl(data.credits)} credits</span>`);
+            if (foot.length) box.insertAdjacentHTML('beforeend', `<div class="mks-mh-foot">${foot.join('')}</div>`);
         }
 
         // The game's "missing vehicles" alert, moved into the left half of the
