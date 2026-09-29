@@ -798,12 +798,14 @@ MKS.module({
         // in order, via a per-building counter — so multiple heli's at the same
         // police-aviation building each get a distinct real tail number instead of
         // all sharing the single "PH-PXD - ZULU" placeholder used before.
+        // Picked by vehicle type (28 = Politiehelikopter), never by the base's name,
+        // and shared across the whole fleet so no two heli's get the same one.
+        const POLICE_HELI_TYPE_ID = 28;
         const POLICE_HELI_LIST = [
-            'Zulu 80.11 - PH-PXA', 'Zulu 80.12 - PH-PXB', 'Zulu 80.13 - PH-PXC',
-            'Zulu 80.14 - PH-PXD', 'Zulu 80.15 - PH-PXE', 'Zulu 80.16 - PH-PXF',
-            'Zulu 80.24 - PH-PXX', 'Zulu 80.25 - PH-PXY', 'Zulu 80.26 - PH-PXZ',
+            'ZULU 80.11 - PH-PXA', 'ZULU 80.12 - PH-PXB', 'ZULU 80.13 - PH-PXC',
+            'ZULU 80.14 - PH-PXD', 'ZULU 80.15 - PH-PXE', 'ZULU 80.16 - PH-PXF',
+            'ZULU 80.24 - PH-PXX', 'ZULU 80.25 - PH-PXY', 'ZULU 80.26 - PH-PXZ',
         ];
-        const POLICE_HELI_BUILDING_MATCH = /luchtvaartpolitie|politiehelikopter/i;
 
         /* ========================================================================
          * REFERENCE DATA — building_type -> discipline
@@ -1042,13 +1044,6 @@ MKS.module({
             for (const ac of KNOWN_AIRCRAFT) {
                 if (ac.match.test(building.caption)) return { name: ac.name, seqKey: null, exact: true, aviation: true };
             }
-            if (POLICE_HELI_BUILDING_MATCH.test(building.caption)) {
-                const seqKey = `heli:${building.id}`;
-                const idx = nextSeq(seqKey) - 1;
-                if (idx < POLICE_HELI_LIST.length) {
-                    return { name: POLICE_HELI_LIST[idx], seqKey: null, exact: true, aviation: true };
-                }
-            }
             // Checked before LIFELINER_MAIN since a Wadden base's caption can also
             // contain "traumacentrum" (e.g. "Vliegbasis Traumacentrum Zuidwest").
             if (LIFELINER_WADDEN_BUILDING_MATCH.test(building.caption)) {
@@ -1089,10 +1084,23 @@ MKS.module({
             return { name: `${code}-${seq}${label ? ' ' + label : ''}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
+        // A heli already wearing a list name keeps it; otherwise it gets the first
+        // list name no other vehicle has or is assigned. Past the end of the list
+        // it is left untouched (null) rather than invent a callsign.
+        function policeHeliTarget(vehicle) {
+            const fits = (caption) => (POLICE_HELI_LIST.includes(caption) ? { seq: 0, exact: true } : null);
+            const taken = new Set(Object.entries(assignments).filter(([id]) => Number(id) !== vehicle.id).map(([, a]) => a.name));
+            for (const [id, caption] of captionById) if (id !== vehicle.id) taken.add(caption);
+            const name = POLICE_HELI_LIST.find((n) => !taken.has(n));
+            if (!name) return fits(vehicle.caption) ? { name: vehicle.caption, seqKey: null, exact: true } : null;
+            return { name, seqKey: null, exact: true, fits };
+        }
+
         function computeTarget(building, vehicle, vehiclesAtBuilding) {
             if (MANUAL_VEHICLE_OVERRIDES[vehicle.id]) {
                 return { name: MANUAL_VEHICLE_OVERRIDES[vehicle.id], seqKey: null, exact: true, manual: true };
             }
+            if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID) return policeHeliTarget(vehicle);
             const discipline = classifyDiscipline(building.building_type);
             if (discipline === 'fire') {
                 const exactData = findFireStationData(building);
@@ -1413,6 +1421,13 @@ MKS.module({
             // that's genuinely unrecoverable (no manual override, no usable type
             // text) will show up in the unclassified log so you know it needs
             // attention rather than silently staying wrong forever.
+            // Police heli's named by an older version (base name, lowercase "Zulu")
+            // get their stored name dropped so they pick up a ZULU list name.
+            for (const vehicle of vehicles) {
+                const a = assignments[vehicle.id];
+                if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID && a && !POLICE_HELI_LIST.includes(a.name)) delete assignments[vehicle.id];
+            }
+
             let ovrNamedFound = 0;
             for (const vehicle of vehicles) {
                 if (/\bOVR(-\d+)?$/i.test(vehicle.caption || '')) {
