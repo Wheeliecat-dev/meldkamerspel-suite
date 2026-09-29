@@ -26,7 +26,10 @@ const MODULES = [
     'small-vehicle-icons',
     'vehicle-search',
     'preset-search',
+    'mission-helper',
     'auto-load-vehicles',
+    'transport-requests',
+    'destination-filter',
     'credit-filter',
     'map-filter',
     'team-filter',
@@ -35,6 +38,7 @@ const MODULES = [
     'building-namer',
     'personnel-overview',
     'income-tracker',
+    'daily-summary',
     'coverage-map',
     'placement-advisor',
 ];
