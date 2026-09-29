@@ -57,7 +57,9 @@ if (unlisted.length && process.argv[2] !== 'osm') throw new Error(`src/modules n
 function stamp() {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`;
+    // Seconds too: two builds in one minute got the same lib file name, and
+    // GitHub's raw cache then served the old file, failing the sha256 check.
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 function build(channel) {
