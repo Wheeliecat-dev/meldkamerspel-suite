@@ -1,7 +1,8 @@
 // Builds the userscripts in dist/ from src/core + src/modules.
 //
-//   node build.js          beta only   -> dist/meldkamerspel-suite-beta.user.js
-//   node build.js release  stable+beta -> also dist/meldkamerspel-suite.user.js
+//   node build.js                beta only   -> dist/meldkamerspel-suite-beta.user.js
+//   node build.js release        stable+beta, bumps the patch version (1.0.1 -> 1.0.2)
+//   node build.js release minor  same, bumps minor (1.0.1 -> 1.1.0); also: major
 //
 // The .user.js files are tiny loaders (just the header). The code itself
 // is dist/lib/*.js, pulled in with @require. Tampermonkey downloads it once
@@ -10,12 +11,12 @@
 // Push dist/ to GitHub and Tampermonkey updates everyone by itself
 // (@updateURL). Stable is what you share; beta is for live testing.
 // The beta version gets a timestamp suffix, so every beta build counts as
-// an update. Bump VERSION for each stable release.
+// an update. Stable only updates when VERSION goes up; release bumps it.
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-const VERSION = '1.0.1';
+let VERSION = '1.0.1';
 const REPO = 'Wheeliecat-dev/meldkamerspel-suite'; // GitHub user/repo
 const BRANCH = 'main';
 
@@ -78,5 +79,15 @@ function build(channel) {
     console.log(`built dist/${file} v${version} (${loader.split('\n').length} lines) + dist/lib/${lib} (${(code.length / 1024).toFixed(0)} KB)`);
 }
 
+const release = process.argv[2] === 'release';
+if (release) {
+    const part = process.argv[3] || 'patch';
+    const v = VERSION.split('.').map(Number);
+    if (part === 'major') { v[0]++; v[1] = 0; v[2] = 0; } else if (part === 'minor') { v[1]++; v[2] = 0; } else v[2]++;
+    const next = v.join('.');
+    const self = path.join(__dirname, 'build.js');
+    fs.writeFileSync(self, fs.readFileSync(self, 'utf8').replace(`let VERSION = '${VERSION}';`, `let VERSION = '${next}';`));
+    VERSION = next;
+}
 build('beta');
-if (process.argv[2] === 'release') build('stable');
+if (release) build('stable');
