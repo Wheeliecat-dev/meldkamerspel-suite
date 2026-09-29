@@ -403,16 +403,35 @@ const MKS = (() => {
      * ---------------------------------------------------------------------- */
     const nav = (() => {
         let li, menu;
+        // Far right of the navbar: the last item of Bootstrap's right-hand
+        // list, or a right-hand list of our own when the page has none.
+        function rightBar() {
+            const collapse = document.querySelector('#navbar-main-collapse') || document.querySelector('.navbar .navbar-collapse');
+            const scope = collapse || document.querySelector('.navbar');
+            if (!scope) return null;
+            const lists = scope.querySelectorAll('ul.nav.navbar-nav.navbar-right');
+            if (lists.length) return lists[lists.length - 1];
+            if (!scope.querySelector('ul.nav.navbar-nav')) return null;
+            const ul = document.createElement('ul');
+            ul.className = 'nav navbar-nav navbar-right';
+            ul.id = 'mks-nav-right';
+            scope.appendChild(ul);
+            return ul;
+        }
         function mount() {
             if (li && li.isConnected) return true;
-            const bar = document.querySelector('#navbar-main-collapse ul.nav.navbar-nav, .navbar ul.nav.navbar-nav');
+            const bar = rightBar();
             if (!bar) return false;
             li = document.createElement('li');
             li.className = 'dropdown';
             li.id = 'mks-nav';
-            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Aan/uit en instellingen">⚙️ Wheeliecat&#39;s scripts <span class="caret"></span></a><ul class="dropdown-menu"></ul>';
+            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Aan/uit en instellingen">⚙️ Wheeliecat&#39;s scripts <span class="caret"></span></a><ul class="dropdown-menu dropdown-menu-right"></ul>';
             menu = li.querySelector('ul');
             bar.appendChild(li);
+            // Stay the last item when the game or another script adds one later.
+            new MutationObserver(() => {
+                if (li.parentNode === bar && bar.lastElementChild !== li) bar.appendChild(li);
+            }).observe(bar, { childList: true });
             li.firstChild.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
