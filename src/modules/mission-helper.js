@@ -19,11 +19,11 @@ MKS.module({
     ],
 
     run(ctx) {
-        const CACHE_KEY = 'mks-mission-helper-v4';
+        const CACHE_KEY = 'mks-mission-helper-v5';
         const CACHE_MS = 3 * 24 * 3600 * 1000;
         const esc = ctx.esc;
         // Left over from the first beta version.
-        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2', 'mks-mission-helper-v3'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2', 'mks-mission-helper-v3', 'mks-mission-helper-v4'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
         /* ========================================================================
          * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
@@ -66,10 +66,17 @@ MKS.module({
         function parse(html) {
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const need = [], chance = [], patients = {};
+            let credits = null;
             for (const table of doc.querySelectorAll('table')) {
                 const title = ((table.querySelector('thead th') || {}).textContent || '').trim();
                 const vehicles = /voertuig|personeel/i.test(title);
                 const other = /overige/i.test(title);
+                if (/beloning/i.test(title)) {
+                    for (const tr of table.querySelectorAll('tbody tr')) {
+                        if (tr.cells.length >= 2 && /credits/i.test(tr.cells[0].textContent)) credits = Number(tr.cells[1].textContent.replace(/\D/g, '')) || null;
+                    }
+                    continue;
+                }
                 if (!vehicles && !other) continue;
                 for (const tr of table.querySelectorAll('tbody tr')) {
                     if (tr.cells.length < 2) continue;
@@ -85,7 +92,7 @@ MKS.module({
                     else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
                 }
             }
-            return { need, chance, patients };
+            return { need, chance, patients, credits };
         }
 
         async function fetchType(type, overlays, index) {
@@ -151,6 +158,7 @@ MKS.module({
             .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
             .mks-mh-chance { opacity: .75; font-size: 13px; margin-top: 3px; }
+            .mks-mh-credits { margin-top: 4px; font-weight: 700; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
             #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
@@ -188,6 +196,9 @@ MKS.module({
             }
             if (ctx.cfg.chances && data.chance.length) {
                 box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
+            }
+            if (data.credits) {
+                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-credits">± ${ctx.nl(data.credits)} credits</div>`);
             }
         }
 
