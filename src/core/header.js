@@ -2,7 +2,7 @@
 // @name         {{NAME}}
 // @namespace    {{NAMESPACE}}
 // @version      {{VERSION}}
-// @description  Wheeliecat's Meldkamerspel scripts, all in one. Open "Scripts" in the navbar to turn each one on or off and change its settings. Work in progress.
+// @description  Wheeliecat's Meldkamerspel scripts, all in one. Open "Wheeliecat's scripts" in the navbar to turn each one on or off and change its settings. Work in progress.
 // @author       Wheeliecat-dev
 // @match        https://meldkamerspel.com/*
 // @match        https://www.meldkamerspel.com/*

@@ -2,7 +2,7 @@
 
 > **Work in progress.** These scripts are still changing a lot and may contain bugs. Use them at your own risk and check what they do.
 
-By **Wheeliecat**. All my [meldkamerspel.com](https://meldkamerspel.com) userscripts in one Tampermonkey script, with a dashboard to turn each one on or off and change its settings. Open it via **⚙️ Scripts → Dashboard** in the game's navbar.
+By **Wheeliecat**. All my [meldkamerspel.com](https://meldkamerspel.com) userscripts in one Tampermonkey script, with a dashboard to turn each one on or off and change its settings. Open it via **⚙️ Wheeliecat's scripts → Dashboard** in the game's navbar.
 
 ## Install
 

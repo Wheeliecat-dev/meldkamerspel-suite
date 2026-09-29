@@ -5,7 +5,7 @@ MKS.module({
     category: 'tools',
     description: 'Al je personeel uit alle gebouwen in één tabel. Sorteer op elke kolom, filter op opleiding, gebouw, status of naam. '
         + 'Met een statistiekentab en een gebouwentab die per gebouw laat zien welke uitbreidingen er zijn, in aanbouw (met aftelling) of uitgeschakeld.',
-    tagline: 'Openen via Scripts-menu',
+    tagline: "Openen via menu Wheeliecat's scripts",
     at: 'ready',
     frames: 'top',
     settings: [

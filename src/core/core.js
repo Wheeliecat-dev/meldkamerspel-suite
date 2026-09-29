@@ -5,7 +5,7 @@
  * Every script is a module: MKS.module({ id, name, ..., run(ctx) }).
  * The core decides which modules run on this page, stores their on/off
  * state and settings (GM storage, key mks.suite.v1), and draws the
- * dashboard, the "Scripts" navbar menu and the status dock.
+ * dashboard, the "Wheeliecat's scripts" navbar menu and the status dock.
  *
  * Module definition:
  *   id, name, icon, category, description
@@ -27,7 +27,7 @@
  *   ctx.actions([...])      buttons in the dashboard: { label, run, kind: primary|danger, title, confirm }
  *   ctx.panel(render)       render(el) draws extra content in the dashboard detail view
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
- *   ctx.menu(item)          entry in the Scripts navbar menu: { icon, label, title, run }
+ *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
  *   ctx.set(key, value)     change one of the module's own settings
  *   ctx.open()              open the dashboard on this module
@@ -410,7 +410,7 @@ const MKS = (() => {
             li = document.createElement('li');
             li.className = 'dropdown';
             li.id = 'mks-nav';
-            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Wheeliecat&#39;s scripts: aan/uit en instellingen">⚙️ Scripts <span class="caret"></span></a><ul class="dropdown-menu"></ul>';
+            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Aan/uit en instellingen">⚙️ Wheeliecat&#39;s scripts <span class="caret"></span></a><ul class="dropdown-menu"></ul>';
             menu = li.querySelector('ul');
             bar.appendChild(li);
             li.firstChild.addEventListener('click', (e) => {

@@ -10,7 +10,7 @@ MKS.module({
     frames: 'top',
     settings: [
         { key: 'navBadge', label: 'Tempo in navigatiebalk', type: 'bool', default: true,
-            help: 'Toont credits per uur als los item in de navigatiebalk. Uit = alleen in het Scripts-menu.' },
+            help: 'Toont credits per uur als los item in de navigatiebalk. Uit = alleen in het menu Wheeliecat\'s scripts.' },
         { key: 'sampleMin', label: 'Meten elke', type: 'number', default: 5, min: 1, max: 60, step: 1, unit: 'min' },
         { key: 'rateHours', label: 'Tempo over de laatste', type: 'number', default: 3, min: 1, max: 24, step: 1, unit: 'uur' },
     ],
