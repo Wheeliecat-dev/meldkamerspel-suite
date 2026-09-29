@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.0.202609291712 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.1.202609291725 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.3.0.202609291712';
+    const VERSION = '1.3.1.202609291725';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1963,7 +1963,7 @@ MKS.module({
 
         const style = document.createElement('style');
         style.textContent = `
-            .mks-mh { margin-top: 6px; font-size: 14px; line-height: 1.35; min-height: 44px; }
+            .mks-mh.alert { margin: 8px 0 0; padding: 8px 12px; font-size: 14px; line-height: 1.35; min-height: 44px; }
             .mks-mh-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; }
             .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -1976,7 +1976,8 @@ MKS.module({
         document.head.appendChild(style);
 
         const box = document.createElement('div');
-        box.className = 'mks-mh';
+        // Same Bootstrap alert as the game's red missing-vehicles box, in green.
+        box.className = 'mks-mh alert alert-success';
         right.appendChild(box);
 
         const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -6796,6 +6797,9 @@ MKS.module({
             help: 'Toont credits per uur als los item in de navigatiebalk. Uit = alleen in het menu Wheeliecat\'s scripts.' },
         { key: 'sampleMin', label: 'Meten elke', type: 'number', default: 5, min: 1, max: 60, step: 1, unit: 'min' },
         { key: 'rateHours', label: 'Tempo over de laatste', type: 'number', default: 3, min: 1, max: 24, step: 1, unit: 'uur' },
+        { key: 'autoLog', label: 'Credit-logboek automatisch bijhouden', type: 'bool', default: true,
+            help: 'Leest op de achtergrond de nieuwe regels van het credit-logboek en bewaart ze in je browser. Zo bouw je een geschiedenis op die langer is dan het spel zelf toont.' },
+        { key: 'logMin', label: 'Logboek bijwerken elke', type: 'number', default: 15, min: 5, max: 120, step: 5, unit: 'min' },
     ],
 
     run(ctx) {
@@ -6812,15 +6816,22 @@ MKS.module({
             KEEP_DAYS: 400,            // after RAW_DAYS keep one sample per hour, until this
             RATE_WINDOW_H: ctx.cfg.rateHours,     // navbar rate: earned per online hour over this window
             BADGE_MS: 60000,
-            LOG_MAX_PAGES: 30,         // credit log pages fetched per import
-            LOG_DAYS: 14,              // stop importing when rows get older than this
+            LOG_MAX_PAGES: 30,         // credit log pages fetched on the first import
+            LOG_SYNC_PAGES: 10,        // max pages per later sync (normally 1 is enough)
+            LOG_DAYS: 14,              // first import: stop when rows get older than this
+            LOG_RAW_DAYS: 14,          // keep single log rows this long, then fold them per day
+            LOG_ANCHOR: 5,             // consecutive rows that must match to find the overlap
+            LOG_SYNC_MS: ctx.cfg.logMin * 60000,
             LOG_DELAY_MS: 400,
             REQUEST_TIMEOUT_MS: 20000,
             SAMPLES_KEY: 'incomeTracker.samples.v1',
             LAST_KEY: 'incomeTracker.lastSample',
             GOAL_KEY: 'incomeTracker.goal',
             TAB_KEY: 'incomeTracker.tab',
-            LOG_KEY: 'incomeTracker.log.v1',
+            LOG_RANGE_KEY: 'incomeTracker.logRange',
+            LOG_KEY: 'incomeTracker.log.v2',
+            LOG_KEY_V1: 'incomeTracker.log.v1',
+            LOG_LAST_KEY: 'incomeTracker.logLastSync',
         };
 
         const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -7131,37 +7142,112 @@ MKS.module({
             return r.amount >= 0 ? 'Inzet' : 'Overig';
         }
 
-        let importing = false;
-        async function importLog(onProgress) {
-            if (importing) return;
-            importing = true;
-            const all = [];
-            let headers = [];
-            const stopAt = Date.now() - CONFIG.LOG_DAYS * 86400e3;
+        /* ------------------------------------------------------------------------
+         * Stored log: { at, headers, rows, days }
+         *   rows: [{ amount, desc, date }] newest first, the last LOG_RAW_DAYS
+         *   days: { dayStart: [[desc, sign, n, total, max, min], ...] } older rows,
+         *         folded into one line per description per day
+         * Sync reads /credits from page 1 until it finds the newest stored rows
+         * again, so normally one request. Rows have no id: the match is on a
+         * run of consecutive rows with the same amount, description and date.
+         * Dates may be relative ("2 uur geleden"), so older rows get more slack.
+         * Rows without a readable date get u: 1 and match on any date.
+         * ---------------------------------------------------------------------- */
+        const sameRow = (a, b) => a.amount === b.amount && a.desc === b.desc
+            && (a.u || b.u || Math.abs(a.date - b.date) <= Math.max(120e3, (Date.now() - b.date) / 10));
+        function findAnchor(fetched, stored) {
+            const k = Math.min(CONFIG.LOG_ANCHOR, stored.length);
+            if (!k) return -1;
+            for (let i = 0; i + k <= fetched.length; i++) {
+                let ok = true;
+                for (let j = 0; j < k && ok; j++) ok = sameRow(fetched[i + j], stored[j]);
+                if (ok) return i;
+            }
+            return -1;
+        }
+
+        function compactLog(data) {
+            const cut = floorDay(Date.now() - CONFIG.LOG_RAW_DAYS * 86400e3);
+            const drop = Date.now() - CONFIG.KEEP_DAYS * 86400e3;
+            const keep = [];
+            for (const r of data.rows) {
+                if (r.date >= cut) { keep.push(r); continue; }
+                const day = floorDay(r.date);
+                const list = data.days[day] || (data.days[day] = []);
+                const sign = r.amount < 0 ? -1 : 1;
+                let e = list.find(x => x[0] === r.desc && x[1] === sign);
+                if (!e) list.push(e = [r.desc, sign, 0, 0, 0, Infinity]);
+                const abs = Math.abs(r.amount);
+                e[2]++; e[3] += r.amount; e[4] = Math.max(e[4], abs); e[5] = Math.min(e[5], abs);
+            }
+            data.rows = keep;
+            for (const d of Object.keys(data.days)) if (+d < drop) delete data.days[d];
+        }
+
+        const loadLog = () => {
             try {
+                const d = JSON.parse(GM_getValue(CONFIG.LOG_KEY, 'null'));
+                if (d) return d;
+                // v1 (manual import, overwritten each time): carry it over once.
+                const old = JSON.parse(GM_getValue(CONFIG.LOG_KEY_V1, 'null'));
+                if (old) return { at: old.at, headers: old.headers || [], days: {},
+                    rows: old.rows.map(r => ({ amount: r.amount, desc: r.desc, date: r.date || old.at })) };
+            } catch (e) { warn('log load failed', e); }
+            return null;
+        };
+        const saveLog = (d) => GM_setValue(CONFIG.LOG_KEY, JSON.stringify(d));
+        const logBytes = () => (GM_getValue(CONFIG.LOG_KEY, '') || '').length;
+
+        let importing = false;
+        async function syncLog(onProgress, force) {
+            if (importing) return;
+            const last = Number(GM_getValue(CONFIG.LOG_LAST_KEY, 0));
+            if (!force && Date.now() - last < CONFIG.LOG_SYNC_MS - 30e3) return;
+            importing = true;
+            GM_setValue(CONFIG.LOG_LAST_KEY, Date.now());  // claim the slot before the requests (other tabs)
+            const say = onProgress || (() => {});
+            try {
+                const stored = loadLog();
+                const now = Date.now();
+                const newest = stored && stored.rows.length ? stored.rows[0].date : 0;
+                const stopAt = Math.max(now - CONFIG.LOG_DAYS * 86400e3, newest - 3600e3);
+                const maxPages = stored ? CONFIG.LOG_SYNC_PAGES : CONFIG.LOG_MAX_PAGES;
+                const fetched = [];
+                let headers = stored ? stored.headers : [];
+                let anchor = -1;
                 let maxPage = 1;
-                for (let p = 1; p <= Math.min(maxPage, CONFIG.LOG_MAX_PAGES); p++) {
-                    onProgress(`Pagina ${p}${maxPage > 1 ? ' / ' + Math.min(maxPage, CONFIG.LOG_MAX_PAGES) : ''}…`);
+                for (let p = 1; p <= Math.min(maxPage, maxPages); p++) {
+                    say(`Pagina ${p}${maxPage > 1 ? ' / ' + Math.min(maxPage, maxPages) : ''}…`);
                     const res = await fetchWithTimeout(`/credits?page=${p}`);
                     if (!res.ok) throw new Error(`GET /credits?page=${p} failed: ${res.status}`);
                     const parsed = parseCreditLog(await res.text());
-                    if (p === 1) { headers = parsed.headers; }
+                    if (p === 1 && parsed.headers.length) headers = parsed.headers;
                     maxPage = Math.max(maxPage, parsed.maxPage);
                     if (!parsed.rows.length) break;
-                    all.push(...parsed.rows);
+                    fetched.push(...parsed.rows.map(r => r.date ? { amount: r.amount, desc: r.desc, date: r.date } : { amount: r.amount, desc: r.desc, date: now, u: 1 }));
+                    if (stored && (anchor = findAnchor(fetched, stored.rows)) >= 0) break;
                     const dated = parsed.rows.filter(r => r.date);
                     if (dated.length && dated.every(r => r.date < stopAt)) break;
                     await sleep(CONFIG.LOG_DELAY_MS);
                 }
-                const data = { at: Date.now(), headers, rows: all.filter(r => !r.date || r.date >= stopAt) };
-                GM_setValue(CONFIG.LOG_KEY, JSON.stringify(data));
-                log(`credit log: ${all.length} rows, headers:`, headers);
+                let fresh;
+                if (!stored) fresh = fetched.filter(r => r.date >= now - CONFIG.LOG_DAYS * 86400e3);
+                else if (anchor >= 0) fresh = fetched.slice(0, anchor);
+                // No overlap found (long offline or changed text): only take rows
+                // dated after the newest stored one, so nothing is counted twice.
+                else fresh = fetched.filter(r => !r.u && r.date > newest);
+                const data = stored || { days: {}, rows: [] };
+                data.at = now;
+                data.headers = headers;
+                data.rows = fresh.concat(data.rows);
+                compactLog(data);
+                saveLog(data);
+                if (fresh.length) log(`credit log: +${fresh.length} rows${stored && anchor < 0 ? ' (no overlap)' : ''}`);
                 return data;
             } finally {
                 importing = false;
             }
         }
-        const loadLog = () => { try { return JSON.parse(GM_getValue(CONFIG.LOG_KEY, 'null')); } catch (e) { return null; } };
 
         /* ========================================================================
          * FORMATTING
@@ -7247,7 +7333,7 @@ MKS.module({
         const ui = {
             tab: GM_getValue(CONFIG.TAB_KEY, 'overview'),
             logSort: 'total', logDir: -1, logSearch: '', logSign: 'in',
-            logStatus: '',
+            logStatus: '', logRange: Number(GM_getValue(CONFIG.LOG_RANGE_KEY, 14)),
         };
 
         function open() {
@@ -7547,21 +7633,31 @@ MKS.module({
         function renderLog(body) {
             const data = loadLog();
             const age = data ? Math.round((Date.now() - data.at) / 60e3) : null;
+            // Single rows plus folded day lines, as { desc, amount, n, max, min, date }.
+            const from = ui.logRange ? floorDay(addDays(Date.now(), -(ui.logRange - 1))) : 0;
+            const rows = !data ? [] : data.rows.filter(r => r.date >= from)
+                .map(r => ({ desc: r.desc, amount: r.amount, n: 1, max: Math.abs(r.amount), min: Math.abs(r.amount), date: r.date }))
+                .concat(Object.entries(data.days).filter(([d]) => +d >= from)
+                    .flatMap(([d, list]) => list.map(e => ({ desc: e[0], amount: e[3], n: e[2], max: e[4], min: e[5], date: +d }))));
+            const oldest = data ? Math.min(Date.now(), ...data.rows.map(r => r.date), ...Object.keys(data.days).map(Number)) : null;
+            const status = data
+                ? `${ctx.cfg.autoLog ? 'Automatisch bijgewerkt' : 'Bijgewerkt'} ${age < 1 ? 'net' : age + ' min geleden'} · bewaard sinds ${dayLabel(oldest)} · ${(logBytes() / 1024).toFixed(0)} KB in je browser`
+                : `Leest max. ${CONFIG.LOG_MAX_PAGES} pagina's van /credits (laatste ${CONFIG.LOG_DAYS} dagen).`;
             let html = `<div class="it-ctl">
-                <button id="it-log-import" ${importing ? 'disabled' : ''}>${data ? '↻ Logboek opnieuw inlezen' : '📥 Credit-logboek inlezen'}</button>
-                <span class="it-note" id="it-log-status">${esc(ui.logStatus || (data ? `Ingelezen ${age < 1 ? 'net' : age + ' min geleden'} · ${nl(data.rows.length)} regels` : `Leest max. ${CONFIG.LOG_MAX_PAGES} pagina's van /credits (laatste ${CONFIG.LOG_DAYS} dagen).`))}</span>
+                <button id="it-log-import" ${importing ? 'disabled' : ''}>${data ? '↻ Nu bijwerken' : '📥 Credit-logboek inlezen'}</button>
+                ${data ? `<select id="it-log-range">${[[1, 'Vandaag'], [7, 'Laatste 7 dagen'], [14, 'Laatste 14 dagen'], [30, 'Laatste 30 dagen'], [90, 'Laatste 90 dagen'], [0, 'Alles']]
+                    .map(([v, l]) => `<option value="${v}" ${ui.logRange === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
+                <span class="it-note" id="it-log-status">${esc(ui.logStatus || status)}</span>
               </div>`;
-            if (data && data.rows.length) {
-                const rows = data.rows;
-                const dated = rows.filter(r => r.date);
-                const spanTxt = dated.length ? `${timeLabel(Math.min(...dated.map(r => r.date)))} – ${timeLabel(Math.max(...dated.map(r => r.date)))}` : 'datum onbekend';
+            if (data && (data.rows.length || Object.keys(data.days).length)) {
+                const spanTxt = rows.length ? `${timeLabel(Math.min(...rows.map(r => r.date)))} – ${timeLabel(Math.max(...rows.map(r => r.date)))}` : 'geen regels in deze periode';
 
                 // Category summary.
                 const cat = new Map();
                 for (const r of rows) {
                     const k = category(r) + (r.amount < 0 ? ' (uit)' : '');
                     const c = cat.get(k) || { n: 0, sum: 0 };
-                    c.n++; c.sum += r.amount;
+                    c.n += r.n; c.sum += r.amount;
                     cat.set(k, c);
                 }
                 const catRows = [...cat.entries()].sort((x, y) => Math.abs(y[1].sum) - Math.abs(x[1].sum));
@@ -7573,8 +7669,8 @@ MKS.module({
                     if (ui.logSign === 'in' && r.amount < 0) continue;
                     if (ui.logSign === 'out' && r.amount >= 0) continue;
                     const g = groups.get(r.desc) || { desc: r.desc, n: 0, total: 0, max: 0, min: Infinity, last: 0, cat: category(r) };
-                    g.n++; g.total += r.amount;
-                    g.max = Math.max(g.max, Math.abs(r.amount)); g.min = Math.min(g.min, Math.abs(r.amount));
+                    g.n += r.n; g.total += r.amount;
+                    g.max = Math.max(g.max, r.max); g.min = Math.min(g.min, r.min);
                     g.last = Math.max(g.last, r.date || 0);
                     groups.set(r.desc, g);
                 }
@@ -7630,14 +7726,16 @@ MKS.module({
                 const btn = body.querySelector('#it-log-import');
                 btn.disabled = true;
                 try {
-                    await importLog((m) => { ui.logStatus = m; const s = overlay && overlay.querySelector('#it-log-status'); if (s) s.textContent = m; });
+                    await syncLog((m) => { ui.logStatus = m; const s = overlay && overlay.querySelector('#it-log-status'); if (s) s.textContent = m; }, true);
                     ui.logStatus = '';
                 } catch (e) {
-                    warn('log import failed', e);
+                    warn('log sync failed', e);
                     ui.logStatus = 'Inlezen mislukt: ' + e.message;
                 }
                 render();
             };
+            const range = body.querySelector('#it-log-range');
+            if (range) range.onchange = () => { ui.logRange = Number(range.value); GM_setValue(CONFIG.LOG_RANGE_KEY, ui.logRange); render(); };
             const q = body.querySelector('#it-log-q');
             if (q) q.oninput = () => {
                 ui.logSearch = q.value;
@@ -7742,6 +7840,13 @@ MKS.module({
         }
         sample(false);
         setInterval(() => sample(false), CONFIG.SAMPLE_MS);
+        if (ctx.cfg.autoLog) {
+            const autoSync = () => syncLog(null, false)
+                .then(d => { if (d && overlay && ui.tab === 'log' && document.activeElement?.id !== 'it-log-q') render(); })
+                .catch(e => warn('auto log sync failed', e));
+            setTimeout(autoSync, 15e3);  // let the page settle first
+            setInterval(autoSync, CONFIG.LOG_SYNC_MS);
+        }
         setInterval(updateBadge, CONFIG.BADGE_MS);
         updateBadge();
         log('started');
