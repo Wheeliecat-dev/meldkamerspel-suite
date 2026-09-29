@@ -25,6 +25,7 @@ const MODULES = [
     'dark-theme',
     'small-vehicle-icons',
     'vehicle-search',
+    'preset-search',
     'auto-load-vehicles',
     'credit-filter',
     'map-filter',
