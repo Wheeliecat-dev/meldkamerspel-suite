@@ -5,7 +5,7 @@ MKS.module({
     category: 'missions',
     description: 'Zoekbalk boven de AAO\'s in het alarmeervenster. Zoekt door alle categorieën tegelijk. '
         + 'Meerdere woorden = allemaal. <kbd>Enter</kbd> klikt de eerste AAO (vinkt voertuigen aan, alarmeert niet), '
-        + '<kbd>Esc</kbd> wist.',
+        + '<kbd>Esc</kbd> wist. De rode knop links vinkt alle geselecteerde voertuigen uit.',
     at: 'ready',
     frames: 'all',
     pages: /^\/missions\//,
@@ -79,6 +79,9 @@ MKS.module({
             bar.id = BAR_ID;
             bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:6px 0;';
             bar.innerHTML = `
+                <button type="button" class="btn btn-danger btn-sm mks-ps-reset" title="Alle aangevinkte voertuigen uitvinken">
+                    <span class="glyphicon glyphicon-remove"></span>
+                </button>
                 <div class="input-group input-group-sm" style="flex:1;max-width:360px">
                     <span class="input-group-addon"><span class="glyphicon glyphicon-search"></span></span>
                     <input type="search" class="form-control" placeholder="Zoek AAO…" autocomplete="off">
@@ -88,6 +91,11 @@ MKS.module({
 
             input = bar.querySelector('input');
             counter = bar.querySelector('.mks-ps-count');
+            // click() instead of setting .checked, so the game updates its
+            // own counters and the selected-vehicle summary.
+            bar.querySelector('.mks-ps-reset').addEventListener('click', () => {
+                document.querySelectorAll('input.vehicle_checkbox:checked').forEach((cb) => cb.click());
+            });
             input.addEventListener('input', applyFilter);
             input.addEventListener('keydown', (e) => {
                 // Keep the game's preset hotkeys from firing while typing.
