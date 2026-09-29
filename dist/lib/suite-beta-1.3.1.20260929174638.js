@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.1.202609291736 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.1.20260929174638 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.3.1.202609291736';
+    const VERSION = '1.3.1.20260929174638';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1854,11 +1854,11 @@ MKS.module({
     ],
 
     run(ctx) {
-        const CACHE_KEY = 'mks-mission-helper-v3';
+        const CACHE_KEY = 'mks-mission-helper-v4';
         const CACHE_MS = 3 * 24 * 3600 * 1000;
         const esc = ctx.esc;
         // Left over from the first beta version.
-        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2', 'mks-mission-helper-v3'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
         /* ========================================================================
          * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
@@ -1869,8 +1869,19 @@ MKS.module({
          * and "Benodigde Personeel" from "Overige informatie".
          * Parsed result is cached per type + overlays in localStorage.
          * ==================================================================== */
-        const keyOf = (type, overlays) => `${type}|${overlays || ''}`;
-        const urlOf = (type, overlays) => `/einsaetze/${type}${overlays ? `?additive_overlays=${encodeURIComponent(overlays)}` : ''}`;
+        // A mission is its type plus optional variants: overlay_index picks a
+        // numbered variant (e.g. 878 with index 1 needs 3 instead of 1 police
+        // car), additive_overlays adds letters like "a". Both come from the
+        // data-overlay-index / data-additive-overlays attributes.
+        const attr = (el, name) => (el.getAttribute(name) || '').replace(/^null$/, '');
+        const keyOf = (type, overlays, index) => `${type}|${overlays || ''}|${index || ''}`;
+        function urlOf(type, overlays, index) {
+            const q = new URLSearchParams();
+            if (overlays) q.set('additive_overlays', overlays);
+            if (index) q.set('overlay_index', index);
+            const qs = q.toString();
+            return `/einsaetze/${type}${qs ? `?${qs}` : ''}`;
+        }
 
         function readCache() {
             try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) { return {}; }
@@ -1912,11 +1923,11 @@ MKS.module({
             return { need, chance, patients };
         }
 
-        async function fetchType(type, overlays) {
-            const res = await fetch(urlOf(type, overlays), { credentials: 'same-origin' });
+        async function fetchType(type, overlays, index) {
+            const res = await fetch(urlOf(type, overlays, index), { credentials: 'same-origin' });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = parse(await res.text());
-            store(keyOf(type, overlays), data);
+            store(keyOf(type, overlays, index), data);
             return data;
         }
 
@@ -1935,14 +1946,15 @@ MKS.module({
                     const todo = new Map();
                     document.querySelectorAll('.missionSideBarEntry[mission_type_id]').forEach((el) => {
                         const type = el.getAttribute('mission_type_id');
-                        const ov = el.getAttribute('data-additive-overlays') || '';
+                        const ov = attr(el, 'data-additive-overlays');
+                        const idx = attr(el, 'data-overlay-index');
                         if (!/^\d+$/.test(type)) return;
-                        const k = keyOf(type, ov);
-                        if (!todo.has(k) && !cached(k)) todo.set(k, [type, ov]);
+                        const k = keyOf(type, ov, idx);
+                        if (!todo.has(k) && !cached(k)) todo.set(k, [type, ov, idx]);
                     });
-                    for (const [type, ov] of todo.values()) {
+                    for (const [type, ov, idx] of todo.values()) {
                         if (stopped) break;
-                        try { await fetchType(type, ov); } catch (e) { ctx.warn('prefetch failed', type, e); }
+                        try { await fetchType(type, ov, idx); } catch (e) { ctx.warn('prefetch failed', type, e); }
                         await new Promise((r) => setTimeout(r, 1500));
                     }
                 } finally { busy = false; }
@@ -1961,8 +1973,9 @@ MKS.module({
         if (!info || !right) return;
         const type = info.getAttribute('data-mission-type');
         if (!/^\d+$/.test(type || '')) return; // own/alliance large-scale events have no type
-        const overlays = (info.getAttribute('data-additive-overlays') || '').replace(/^null$/, '');
-        const key = keyOf(type, overlays);
+        const overlays = attr(info, 'data-additive-overlays');
+        const index = attr(info, 'data-overlay-index');
+        const key = keyOf(type, overlays, index);
 
         const style = document.createElement('style');
         style.textContent = `
@@ -2028,7 +2041,7 @@ MKS.module({
         let data = cached(key);
         render(data);
         if (!data) {
-            fetchType(type, overlays)
+            fetchType(type, overlays, index)
                 .then((d) => { data = d; render(d); })
                 .catch((e) => { ctx.warn('help page failed', e); box.innerHTML = '<span class="mks-mh-note">Meldinghelper: hulppagina niet geladen.</span>'; });
         }
@@ -4675,7 +4688,14 @@ MKS.module({
             'ambulance standplaats', 'ambulancepost', 'standplaats', 'ambulance',
             'politiebureau', 'politiepost', 'politie hoofdbureau', 'politie',
             'ravu', 'rav', 'kazerne',
+            // Labels this script writes itself, so a rescan of its own output
+            // doesn't stack another label on top ("Vliegbasis Vliegbasis ...").
+            'vliegbasis', 'rws steunpunt', 'rws',
         ];
+        // Place keys are written with hyphens ("utrecht-leidsche rijn") but the
+        // display name can use spaces ("Utrecht Leidsche Rijn"); compare both
+        // forms the same so a renamed building still finds its own entry.
+        const foldHyphens = (s) => s.replace(/-/g, ' ');
         function stripPrefix(normCaption) {
             let out = normCaption;
             // Strip a leading regio/post code the script itself writes ("09 ",
@@ -4783,6 +4803,9 @@ MKS.module({
         function displayPlaceName(stripped) {
             if (PLACE_DISPLAY_NAME[stripped]) return PLACE_DISPLAY_NAME[stripped];
             for (const [norm, disp] of Object.entries(PLACE_DISPLAY_NAME)) {
+                if (foldHyphens(norm) === foldHyphens(stripped)) return disp;
+            }
+            for (const [norm, disp] of Object.entries(PLACE_DISPLAY_NAME)) {
                 if (wordBoundaryIncludes(stripped, norm) || wordBoundaryIncludes(norm, stripped)) return disp;
             }
             return titleCase(stripped);
@@ -4841,7 +4864,7 @@ MKS.module({
             const tryDict = (dict, regio) => {
                 for (const key of Object.keys(dict)) {
                     const nkey = normalize(key);
-                    if (nkey === stripped || (alias && nkey === alias)) return { post: dict[key][0].split('-')[1].slice(0, 2), regio };
+                    if (foldHyphens(nkey) === foldHyphens(stripped) || (alias && nkey === alias)) return { post: dict[key][0].split('-')[1].slice(0, 2), regio };
                 }
                 let best = null;
                 for (const key of Object.keys(dict)) {
@@ -5468,6 +5491,20 @@ MKS.module({
         // logs it. usedNames holds every building's CURRENT caption, so a
         // building whose computed name equals its own caption must not count as
         // colliding with itself (that self-collision was what produced "(2)").
+        // "Is this what I would have named it?" Feed the computed name back in as
+        // if it were the building's caption: a correct name must come out the
+        // same. If it drifts (label stacking, place lookup changing), renaming
+        // would repeat on every scan or update, so the building is left alone.
+        function stableTarget(building) {
+            const target = computeTarget(building);
+            if (!target) return { target: null };
+            target.name = enforceNameLength(target.name);
+            if (target.name === building.caption) return { target };
+            const again = computeTarget({ ...building, caption: target.name });
+            if (again && enforceNameLength(again.name) !== target.name) return { target: null, unstable: target.name };
+            return { target };
+        }
+
         function claimName(name, building, usedNames) {
             if (name === building.caption) return name;
             if (usedNames.has(name)) return null;
@@ -5876,12 +5913,16 @@ MKS.module({
                     target = existing;
                     usedNames.add(target.name);
                 } else {
-                    target = computeTarget(building);
+                    const res = stableTarget(building);
+                    target = res.target;
+                    if (res.unstable) {
+                        recordUnclassified(building, `computed name "${res.unstable}" would change again on the next scan — left untouched`);
+                        continue;
+                    }
                     if (!target) {
                         if (!isDeliberatelySkipped(building)) recordUnclassified(building, 'unknown building_type or no place name could be derived');
                         continue;
                     }
-                    target.name = enforceNameLength(target.name);
                     const claimed = claimName(target.name, building, usedNames);
                     if (!claimed) {
                         recordUnclassified(building, `name collision: "${target.name}" already used by another building — left untouched`);
@@ -5923,12 +5964,15 @@ MKS.module({
             stats.buildings = buildings.length;
 
             for (const building of fresh) {
-                const target = computeTarget(building);
+                const { target, unstable } = stableTarget(building);
+                if (unstable) {
+                    recordUnclassified(building, `computed name "${unstable}" would change again on the next scan — left untouched`);
+                    continue;
+                }
                 if (!target) {
                     if (!isDeliberatelySkipped(building)) recordUnclassified(building, 'unknown building_type or no place name could be derived');
                     continue;
                 }
-                target.name = enforceNameLength(target.name);
                 const claimed = claimName(target.name, building, usedNames);
                 if (!claimed) {
                     recordUnclassified(building, `name collision: "${target.name}" already used by another building — left untouched`);

@@ -154,7 +154,14 @@ MKS.module({
             'ambulance standplaats', 'ambulancepost', 'standplaats', 'ambulance',
             'politiebureau', 'politiepost', 'politie hoofdbureau', 'politie',
             'ravu', 'rav', 'kazerne',
+            // Labels this script writes itself, so a rescan of its own output
+            // doesn't stack another label on top ("Vliegbasis Vliegbasis ...").
+            'vliegbasis', 'rws steunpunt', 'rws',
         ];
+        // Place keys are written with hyphens ("utrecht-leidsche rijn") but the
+        // display name can use spaces ("Utrecht Leidsche Rijn"); compare both
+        // forms the same so a renamed building still finds its own entry.
+        const foldHyphens = (s) => s.replace(/-/g, ' ');
         function stripPrefix(normCaption) {
             let out = normCaption;
             // Strip a leading regio/post code the script itself writes ("09 ",
@@ -262,6 +269,9 @@ MKS.module({
         function displayPlaceName(stripped) {
             if (PLACE_DISPLAY_NAME[stripped]) return PLACE_DISPLAY_NAME[stripped];
             for (const [norm, disp] of Object.entries(PLACE_DISPLAY_NAME)) {
+                if (foldHyphens(norm) === foldHyphens(stripped)) return disp;
+            }
+            for (const [norm, disp] of Object.entries(PLACE_DISPLAY_NAME)) {
                 if (wordBoundaryIncludes(stripped, norm) || wordBoundaryIncludes(norm, stripped)) return disp;
             }
             return titleCase(stripped);
@@ -320,7 +330,7 @@ MKS.module({
             const tryDict = (dict, regio) => {
                 for (const key of Object.keys(dict)) {
                     const nkey = normalize(key);
-                    if (nkey === stripped || (alias && nkey === alias)) return { post: dict[key][0].split('-')[1].slice(0, 2), regio };
+                    if (foldHyphens(nkey) === foldHyphens(stripped) || (alias && nkey === alias)) return { post: dict[key][0].split('-')[1].slice(0, 2), regio };
                 }
                 let best = null;
                 for (const key of Object.keys(dict)) {
@@ -947,6 +957,20 @@ MKS.module({
         // logs it. usedNames holds every building's CURRENT caption, so a
         // building whose computed name equals its own caption must not count as
         // colliding with itself (that self-collision was what produced "(2)").
+        // "Is this what I would have named it?" Feed the computed name back in as
+        // if it were the building's caption: a correct name must come out the
+        // same. If it drifts (label stacking, place lookup changing), renaming
+        // would repeat on every scan or update, so the building is left alone.
+        function stableTarget(building) {
+            const target = computeTarget(building);
+            if (!target) return { target: null };
+            target.name = enforceNameLength(target.name);
+            if (target.name === building.caption) return { target };
+            const again = computeTarget({ ...building, caption: target.name });
+            if (again && enforceNameLength(again.name) !== target.name) return { target: null, unstable: target.name };
+            return { target };
+        }
+
         function claimName(name, building, usedNames) {
             if (name === building.caption) return name;
             if (usedNames.has(name)) return null;
@@ -1355,12 +1379,16 @@ MKS.module({
                     target = existing;
                     usedNames.add(target.name);
                 } else {
-                    target = computeTarget(building);
+                    const res = stableTarget(building);
+                    target = res.target;
+                    if (res.unstable) {
+                        recordUnclassified(building, `computed name "${res.unstable}" would change again on the next scan — left untouched`);
+                        continue;
+                    }
                     if (!target) {
                         if (!isDeliberatelySkipped(building)) recordUnclassified(building, 'unknown building_type or no place name could be derived');
                         continue;
                     }
-                    target.name = enforceNameLength(target.name);
                     const claimed = claimName(target.name, building, usedNames);
                     if (!claimed) {
                         recordUnclassified(building, `name collision: "${target.name}" already used by another building — left untouched`);
@@ -1402,12 +1430,15 @@ MKS.module({
             stats.buildings = buildings.length;
 
             for (const building of fresh) {
-                const target = computeTarget(building);
+                const { target, unstable } = stableTarget(building);
+                if (unstable) {
+                    recordUnclassified(building, `computed name "${unstable}" would change again on the next scan — left untouched`);
+                    continue;
+                }
                 if (!target) {
                     if (!isDeliberatelySkipped(building)) recordUnclassified(building, 'unknown building_type or no place name could be derived');
                     continue;
                 }
-                target.name = enforceNameLength(target.name);
                 const claimed = claimName(target.name, building, usedNames);
                 if (!claimed) {
                     recordUnclassified(building, `name collision: "${target.name}" already used by another building — left untouched`);
