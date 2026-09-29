@@ -915,7 +915,25 @@ MKS.module({
         function generateFireTarget(building, vehicle, regio, post, exactData, claimed) {
             const rule = classifyFireVehicle(resolveTypeCaption(vehicle), vehicle.caption || '', vehicle.vehicle_type);
             if (!rule) return null;
+            const t = generateFireTargetInner(building, rule, regio, post, exactData, claimed);
+            // A current name fits when it is the same regio, role digit and label,
+            // at this station's post or on one of its real roepnummers.
+            const realNums = new Set((exactData ? exactData.list : []).map((raw) => {
+                const p = parseFireCallsign(raw);
+                return p ? `${p.regio}-${p.post}${p.typeDigit}${p.seq}` : '';
+            }));
+            const post2 = String(post).padStart(2, '0');
+            t.fits = (caption) => {
+                const p = parseFireCallsign(caption || '');
+                if (!p || p.regio !== regio || p.typeDigit !== rule.digit || p.label !== (rule.label || '')) return null;
+                const real = realNums.has(`${p.regio}-${p.post}${p.typeDigit}${p.seq}`);
+                if (!real && p.post !== post2) return null;
+                return { seq: Number(p.seq), exact: real };
+            };
+            return t;
+        }
 
+        function generateFireTargetInner(building, rule, regio, post, exactData, claimed) {
             if (exactData) {
                 const targets = exactData.list.map((raw) => ({ raw, parsed: parseFireCallsign(raw) }));
                 // Only ever take a real roepnummer whose role actually matches this
@@ -955,11 +973,21 @@ MKS.module({
             return { name: `${regio}-${String(post).padStart(2, '0')}${rule.digit}${seq}${label}`, seqKey, exact: false };
         }
 
+        function escRe(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+        // Builds a fits() check from a regex whose one capture group is the sequence number.
+        function fitsBy(re) {
+            return (caption) => {
+                const m = (caption || '').match(re);
+                return m ? { seq: Number(m[1]), exact: false } : null;
+            };
+        }
+
         function generateAmbulanceTarget(building, vehicle, regio) {
             const rule = classifyAmbulance(resolveTypeCaption(vehicle), vehicle.vehicle_type);
             const seqKey = `amb:${building.id}:${rule.block}`;
             const seq = nextSeq(seqKey);
-            return { name: `${regio}-${rule.block}${String(seq).padStart(2, '0')} ${rule.label}`, seqKey, exact: false };
+            const re = new RegExp(`^${escRe(`${regio}-${rule.block}`)}(\\d{2}) ${escRe(rule.label)}$`);
+            return { name: `${regio}-${rule.block}${String(seq).padStart(2, '0')} ${rule.label}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
         // Direct numeric vehicle_type -> role, same rationale as the fire/ambulance
@@ -1006,7 +1034,8 @@ MKS.module({
             const seqScope = teamNum ? `team:${unitAbbr}${teamNum}` : `building:${building.id}`;
             const seqKey = `pol:${seqScope}:${role}`;
             const seq = nextSeq(seqKey);
-            return { name: `${prefix}.${String(seq).padStart(2, '0')} ${role}`, seqKey, exact: false };
+            const re = new RegExp(`^${escRe(prefix)}\\.(\\d{2}) ${escRe(role)}$`);
+            return { name: `${prefix}.${String(seq).padStart(2, '0')} ${role}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
         function generateAviationTarget(building) {
@@ -1056,7 +1085,8 @@ MKS.module({
             // the same org never both produce e.g. "RWS-1 DA-RWS".
             const seqKey = `gen:${discipline}:${label || building.id}`;
             const seq = nextSeq(seqKey);
-            return { name: `${code}-${seq}${label ? ' ' + label : ''}`, seqKey, exact: false };
+            const re = new RegExp(`^${escRe(code)}-(\\d+)${label ? ' ' + escRe(label) : ''}$`);
+            return { name: `${code}-${seq}${label ? ' ' + label : ''}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
         function computeTarget(building, vehicle, vehiclesAtBuilding) {
@@ -1106,6 +1136,22 @@ MKS.module({
         function keepOrUnique(name, vehicle, usedNames, captionCount) {
             if (name === vehicle.caption && captionCount.get(name) === 1) return name;
             return ensureUnique(name, usedNames);
+        }
+
+        // "What would I have named this?" If the vehicle's current name already
+        // follows the same scheme (same station, role and label, only a different
+        // sequence number), keep it instead of renumbering the whole fleet. The
+        // counter is moved past the kept number so new vehicles never reuse it.
+        function adoptOrUnique(target, vehicle, usedNames, captionCount, adopted) {
+            const fit = target.fits ? target.fits(vehicle.caption) : null;
+            delete target.fits;
+            if (fit && !adopted.has(vehicle.caption)) {
+                adopted.add(vehicle.caption);
+                if (target.seqKey) seqCounters[target.seqKey] = Math.max(seqCounters[target.seqKey] || 0, fit.seq);
+                return { ...target, name: vehicle.caption, exact: fit.exact };
+            }
+            target.name = keepOrUnique(target.name, vehicle, usedNames, captionCount);
+            return target;
         }
 
         function ensureUnique(name, usedNames) {
@@ -1378,6 +1424,7 @@ MKS.module({
 
             const usedNames = new Set(vehicles.map((v) => v.caption));
             const captionCount = countCaptions(vehicles);
+            const adopted = new Set();
             captionById.clear();
             vehicles.forEach((v) => captionById.set(v.id, v.caption));
             stats.vehicles = vehicles.length;
@@ -1407,7 +1454,7 @@ MKS.module({
                             recordUnclassified(building, vehicle);
                             continue; // can't work out its role -> leave it exactly as-is
                         }
-                        target.name = keepOrUnique(target.name, vehicle, usedNames, captionCount);
+                        target = adoptOrUnique(target, vehicle, usedNames, captionCount, adopted);
                         target.building = building.id;
                         assignments[vehicle.id] = target;
                     }
@@ -1477,6 +1524,7 @@ MKS.module({
             }
             const usedNames = new Set(vehicles.map((v) => v.caption));
             const captionCount = countCaptions(vehicles);
+            const adopted = new Set();
             vehicles.forEach((v) => captionById.set(v.id, v.caption));
             stats.vehicles = vehicles.length;
 
@@ -1484,9 +1532,9 @@ MKS.module({
                 const building = buildingsById[vehicle.building_id];
                 if (!building) continue;
                 const vehiclesHere = (vehiclesByBuilding[building.id] || []).sort((a, b) => a.id - b.id);
-                const target = computeTarget(building, vehicle, vehiclesHere);
+                let target = computeTarget(building, vehicle, vehiclesHere);
                 if (!target) { recordUnclassified(building, vehicle); continue; }
-                target.name = keepOrUnique(target.name, vehicle, usedNames, captionCount);
+                target = adoptOrUnique(target, vehicle, usedNames, captionCount, adopted);
                 target.building = building.id;
                 assignments[vehicle.id] = target;
                 if (target.name !== vehicle.caption) enqueueRename(vehicle.id, target.name);
