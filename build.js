@@ -27,6 +27,7 @@ const MODULES = [
     'vehicle-search',
     'auto-load-vehicles',
     'credit-filter',
+    'map-filter',
     'dispatch-presets',
     'vehicle-namer',
     'building-namer',

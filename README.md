@@ -25,6 +25,7 @@ Install only one channel. If both are installed, the second one to load does not
 | Voertuig zoeken | Search bar in the alarm window |
 | Ontbrekende voertuigen laden | Loads the full vehicle list in the alarm window |
 | Creditfilter | Hide missions by credit range |
+| Kaartfilter | Missions hidden by the mission filters also disappear from the map |
 | Inzetvoorstellen maken | Creates **a lot** (570+) of dispatch presets. Only runs when you click it |
 | Voertuignamen | Renames vehicles to real Dutch call signs. **Cannot be undone.** |
 | Gebouwnamen | Renames buildings to real names. **Cannot be undone.** |
