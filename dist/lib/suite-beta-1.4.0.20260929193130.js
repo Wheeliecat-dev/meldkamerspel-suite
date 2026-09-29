@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.1.20260929175900 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.4.0.20260929193130 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.3.1.20260929175900';
+    const VERSION = '1.4.0.20260929193130';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1854,11 +1854,11 @@ MKS.module({
     ],
 
     run(ctx) {
-        const CACHE_KEY = 'mks-mission-helper-v4';
+        const CACHE_KEY = 'mks-mission-helper-v5';
         const CACHE_MS = 3 * 24 * 3600 * 1000;
         const esc = ctx.esc;
         // Left over from the first beta version.
-        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2', 'mks-mission-helper-v3'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2', 'mks-mission-helper-v3', 'mks-mission-helper-v4'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
         /* ========================================================================
          * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
@@ -1901,10 +1901,17 @@ MKS.module({
         function parse(html) {
             const doc = new DOMParser().parseFromString(html, 'text/html');
             const need = [], chance = [], patients = {};
+            let credits = null;
             for (const table of doc.querySelectorAll('table')) {
                 const title = ((table.querySelector('thead th') || {}).textContent || '').trim();
                 const vehicles = /voertuig|personeel/i.test(title);
                 const other = /overige/i.test(title);
+                if (/beloning/i.test(title)) {
+                    for (const tr of table.querySelectorAll('tbody tr')) {
+                        if (tr.cells.length >= 2 && /credits/i.test(tr.cells[0].textContent)) credits = Number(tr.cells[1].textContent.replace(/\D/g, '')) || null;
+                    }
+                    continue;
+                }
                 if (!vehicles && !other) continue;
                 for (const tr of table.querySelectorAll('tbody tr')) {
                     if (tr.cells.length < 2) continue;
@@ -1920,7 +1927,7 @@ MKS.module({
                     else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
                 }
             }
-            return { need, chance, patients };
+            return { need, chance, patients, credits };
         }
 
         async function fetchType(type, overlays, index) {
@@ -1986,6 +1993,7 @@ MKS.module({
             .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
             .mks-mh-chance { opacity: .75; font-size: 13px; margin-top: 3px; }
+            .mks-mh-credits { margin-top: 4px; font-weight: 700; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
             #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
@@ -2023,6 +2031,9 @@ MKS.module({
             }
             if (ctx.cfg.chances && data.chance.length) {
                 box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
+            }
+            if (data.credits) {
+                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-credits">± ${ctx.nl(data.credits)} credits</div>`);
             }
         }
 
@@ -2880,12 +2891,16 @@ MKS.module({
                 log('Bestaande voorstellen controleren op verouderde waarden (alleen lezen)…');
                 status();
                 const changed = [];
+                let i = 0;
                 for (const p of toCheck) {
                     if (!running) break;
+                    i++;
+                    ctx.status(`Controleren ${i}/${toCheck.length}: ${p.c}`, { tone: 'busy', progress: [i, toCheck.length], dock: true });
                     const editDoc = await get(st.existing.get(capOf(p.c)));
                     const form = [...editDoc.forms].find(f => /\/aaos\/\d+$/.test(f.action) || f.querySelector('[name=_method]'));
                     const diff = form && diffPreset(form, p);
-                    if (diff) changed.push({ p, diff });
+                    if (diff) { changed.push({ p, diff }); log(`(${i}/${toCheck.length}) wijkt af:`, p.c, diff); }
+                    else if (i % 25 === 0) log(`(${i}/${toCheck.length}) gecontroleerd…`);
                     await sleep(CONFIG.THROTTLE_MS);
                 }
                 toUpdate = changed;

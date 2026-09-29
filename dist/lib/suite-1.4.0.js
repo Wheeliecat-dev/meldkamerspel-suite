@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts v1.2.0 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts v1.4.0 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.2.0';
+    const VERSION = '1.4.0';
     const CHANNEL = 'stable';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1870,6 +1870,363 @@ MKS.module({
     },
 });
 
+/* ==== module: transport-requests ========================================== */
+MKS.module({
+    id: 'transport-requests',
+    name: 'Verbeterde spraakaanvragen',
+    icon: '📻',
+    category: 'missions',
+    description: 'Werk spraakaanvragen snel achter elkaar af. Een knop in de missiefilterbalk telt je open spraakaanvragen en opent de oudste. '
+        + 'Een inzet met een spraakaanvraag opent die meteen. Na het kiezen van een bestemming ga je vanzelf door naar het volgende voertuig, '
+        + 'daarna terug naar de inzet of dicht. Kiest nooit zelf een ziekenhuis of cel.',
+    at: 'ready',
+    frames: 'all',
+    settings: [
+        { key: 'counter', label: 'Teller in de missiefilterbalk', type: 'bool', default: true,
+            help: 'Groen met het aantal open spraakaanvragen. Klik = oudste openen.' },
+        { key: 'autoOpen', label: 'Spraakaanvraag openen vanuit de inzet', type: 'bool', default: true,
+            help: 'Open je een inzet waar een voertuig spraak aanvraagt, dan ga je direct naar dat voertuig.' },
+        { key: 'after', label: 'Na het kiezen van een bestemming', type: 'select', default: 'next',
+            options: [
+                ['next', 'Volgende voertuig, dan terug naar de inzet'],
+                ['nextClose', 'Volgende voertuig, dan venster dicht'],
+                ['mission', 'Terug naar de inzet'],
+                ['close', 'Venster dicht'],
+                ['none', 'Niets doen'],
+            ] },
+    ],
+
+    run(ctx) {
+        const W = ctx.W;
+        const path = location.pathname;
+        const IN_FRAME = window.top !== window.self;
+
+        /* ========================================================================
+         * MISSION WINDOW — jump to the vehicle that asks for a transport.
+         * The game lists status-5 vehicles in a red alert with a green button
+         * to /vehicles/{id}. The missing-vehicles alert is also red, skip it.
+         * A vehicle we already jumped to recently is not opened again, so going
+         * back to the mission never loops (e.g. when no hospital fits).
+         * ==================================================================== */
+        if (/^\/missions\/\d+\/?$/.test(path)) {
+            if (!ctx.cfg.autoOpen) return;
+            const btn = document.querySelector('.alert.alert-danger:not(.alert-missing-vehicles) a.btn.btn-success[href^="/vehicles/"]');
+            if (!btn) return;
+            const KEY = 'mks-transport-opened';
+            let seen = {};
+            try { seen = JSON.parse(sessionStorage.getItem(KEY)) || {}; } catch (e) { /* ignore */ }
+            const now = Date.now();
+            for (const k in seen) if (now - seen[k] > 120000) delete seen[k];
+            const href = btn.getAttribute('href');
+            if (seen[href]) return;
+            seen[href] = now;
+            try { sessionStorage.setItem(KEY, JSON.stringify(seen)); } catch (e) { /* ignore */ }
+            btn.click();
+            return;
+        }
+
+        /* ========================================================================
+         * AFTER ANSWERING — the game shows the result on
+         * /vehicles/{id}/patient/{building} or /vehicles/{id}/gefangener/{building}
+         * with "next vehicle in status 5" (#next-vehicle-fms-5) and a green
+         * button back to the mission.
+         * ==================================================================== */
+        const answered = /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+\/?$/.test(path);
+        const next = document.getElementById('next-vehicle-fms-5');
+        if (answered || (next && /^\/vehicles\/\d+\/?$/.test(path) && !document.getElementById('h2_sprechwunsch'))) {
+            const mode = ctx.cfg.after;
+            if (mode === 'none') return;
+            const close = () => {
+                if (!IN_FRAME) return;
+                if (typeof W.tellParent === 'function') W.tellParent('lightboxClose();');
+                else if (W.parent && typeof W.parent.lightboxClose === 'function') W.parent.lightboxClose();
+            };
+            if ((mode === 'next' || mode === 'nextClose') && next) return next.click();
+            if (mode === 'next' || mode === 'mission') {
+                const back = document.querySelector('#iframe-inside-container a.btn.btn-success[href^="/missions/"]');
+                if (back) return back.click();
+            }
+            close();
+            return;
+        }
+
+        /* ========================================================================
+         * MAP PAGE — counter button in the mission filter bar.
+         * Starts from /api/vehicles once, then follows the game's live status
+         * messages (radioMessage). Oldest request first.
+         * ==================================================================== */
+        if (path !== '/' || IN_FRAME || !ctx.cfg.counter) return;
+        const row = document.querySelector('.mission-filters-row');
+        if (!row) return;
+
+        const open = new Map(); // vehicleId -> { caption, since }
+
+        const btn = document.createElement('a');
+        btn.href = '#';
+        btn.className = 'btn btn-xs btn-default';
+        btn.style.marginLeft = '4px';
+        btn.onclick = (ev) => {
+            ev.preventDefault();
+            const first = [...open.entries()].sort((a, b) => a[1].since - b[1].since)[0];
+            if (first && typeof W.lightboxOpen === 'function') W.lightboxOpen(`/vehicles/${first[0]}`);
+        };
+        row.appendChild(btn);
+
+        function render() {
+            const n = open.size;
+            btn.classList.toggle('btn-success', n > 0);
+            btn.classList.toggle('btn-default', n === 0);
+            btn.innerHTML = `<span class="glyphicon glyphicon-earphone"></span> ${n}`;
+            btn.title = n
+                ? `${n} open spraakaanvra${n === 1 ? 'ag' : 'gen'}. Klik om de oudste te openen:\n`
+                    + [...open.values()].sort((a, b) => a.since - b.since).slice(0, 15).map((v) => v.caption).join('\n')
+                : 'Geen open spraakaanvragen';
+        }
+
+        function onStatus(id, fms, caption) {
+            if (Number(fms) === 5) {
+                if (!open.has(id)) open.set(id, { caption: caption || String(id), since: Date.now() });
+            } else {
+                open.delete(id);
+            }
+            render();
+        }
+
+        // The game defines radioMessage in its own scripts; wait for it.
+        let tries = 0;
+        (function hook() {
+            const orig = W.radioMessage;
+            if (typeof orig !== 'function') {
+                if (++tries <= 30) setTimeout(hook, 1000);
+                else ctx.warn('radioMessage not found; counter only updates on page load');
+                return;
+            }
+            W.radioMessage = function (msg) {
+                try {
+                    if (msg && msg.type === 'vehicle_fms' && (msg.user_id == null || msg.user_id === W.user_id)) {
+                        onStatus(Number(msg.id), msg.fms_real, msg.caption);
+                    }
+                } catch (e) { ctx.warn('radio hook failed', e); }
+                return orig.apply(this, arguments);
+            };
+        })();
+
+        render();
+        fetch('/api/vehicles', { credentials: 'same-origin' })
+            .then((r) => (r.ok ? r.json() : []))
+            .then((list) => {
+                for (const v of list) if (v.fms_real === 5 && !open.has(v.id)) open.set(v.id, { caption: v.caption, since: 0 });
+                render();
+            })
+            .catch((e) => ctx.warn('could not load vehicles', e));
+    },
+});
+
+/* ==== module: destination-filter ========================================== */
+MKS.module({
+    id: 'destination-filter',
+    name: 'Bestemmingfilter',
+    icon: '🏥',
+    category: 'missions',
+    description: 'Verbergt bij een spraakaanvraag de ziekenhuizen en cellen die niet passen: vol, verkeerde afdeling, te duur of te ver. '
+        + 'De beste keuze (dichtstbij, passend, laagste kosten) krijgt een markering; <kbd>Enter</kbd> kiest die. '
+        + 'Een balk boven de lijst toont hoeveel er verborgen zijn, met een knop om alles te tonen.',
+    at: 'ready',
+    frames: 'all',
+    pages: /^\/vehicles\/\d+\/?$/,
+    pageNote: 'Alleen in het voertuigvenster bij een spraakaanvraag',
+    live: true,
+    settings: [
+        { key: 'full', label: 'Volle bestemmingen verbergen', type: 'bool', default: true },
+        { key: 'department', label: 'Ziekenhuizen zonder de juiste afdeling verbergen', type: 'bool', default: true },
+        { key: 'minBeds', label: 'Minimaal aantal vrije bedden', type: 'number', default: 1, min: 0, max: 50, step: 1 },
+        { key: 'cellsShort', label: 'Cellen met te weinig plek verbergen', type: 'bool', default: false,
+            help: 'Oranje knoppen: het cellencomplex heeft minder vrije cellen dan er gevangenen in het voertuig zitten.' },
+        { key: 'maxCost', label: 'Maximale kosten (team)', type: 'select', default: '50',
+            options: [['0', '0 %'], ['10', '10 %'], ['20', '20 %'], ['30', '30 %'], ['40', '40 %'], ['50', '50 % (alles)']] },
+        { key: 'maxKm', label: 'Maximale afstand', type: 'number', default: 0, min: 0, max: 500, step: 5, unit: 'km', help: '0 = geen grens.' },
+        { key: 'ownKm', label: 'Voorrang eigen ziekenhuis', type: 'number', default: 5, min: 0, max: 100, step: 1, unit: 'km',
+            help: 'Bij gelijke kosten wint je eigen ziekenhuis, zolang het niet meer dan zoveel km verder is dan een teamziekenhuis.' },
+        { key: 'enter', label: 'Enter kiest de beste bestemming', type: 'bool', default: true },
+    ],
+
+    run(ctx) {
+        const h2 = document.getElementById('h2_sprechwunsch');
+        if (!h2) return;
+
+        const HIDDEN = 'mks-dest-hidden';
+        const BEST = 'mks-dest-best';
+        const style = document.createElement('style');
+        style.textContent = `
+            .${HIDDEN} { display: none !important; }
+            body.mks-dest-all .${HIDDEN} { display: table-row !important; opacity: .45; }
+            body.mks-dest-all a.btn.${HIDDEN} { display: inline-block !important; }
+            tr.${BEST} > td { box-shadow: inset 0 2px 0 #3ecf8e, inset 0 -2px 0 #3ecf8e; }
+            tr.${BEST} > td:first-child { box-shadow: inset 2px 2px 0 #3ecf8e, inset 0 -2px 0 #3ecf8e; }
+            a.btn.${BEST} { outline: 3px solid #3ecf8e; outline-offset: 1px; }
+            .mks-dest-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 3px; background: #3ecf8e; color: #03241a;
+                font-size: 11px; font-weight: 600; vertical-align: middle; }
+            .mks-dest-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 12px; }
+            .mks-dest-bar .mks-dest-why { opacity: .75; }
+        `;
+        document.head.appendChild(style);
+
+        const num = (s) => {
+            const m = String(s).replace(/\./g, '').match(/-?\d+(?:,\d+)?/);
+            return m ? parseFloat(m[0].replace(',', '.')) : NaN;
+        };
+        const cell = (tr, i) => (i >= 0 && tr.cells[i] ? tr.cells[i].textContent.trim() : '');
+
+        /* ========================================================================
+         * CANDIDATES
+         * Hospitals: tables #own-hospitals and #alliance-hospitals, one row per
+         * hospital, button a[href*="/patient/"]. Own hospitals have no cost column.
+         * Cells: either table rows like hospitals (button a[href*="/gefangener/"])
+         * or loose buttons with distance, free cells and cost in the text.
+         * Red (btn-danger / row .danger / 0 free) = full, orange = not enough room.
+         * ==================================================================== */
+        const DEST = 'a[href*="/patient/"], a[href*="/gefangener/"]';
+        const isRed = (el) => !!el && (el.classList.contains('btn-danger') || el.classList.contains('danger')
+            || el.classList.contains('label-danger'));
+        function candidates() {
+            const out = [];
+            const seen = new Set();
+            for (const table of document.querySelectorAll('table')) {
+                const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
+                const iDist = heads.findIndex((h) => h.startsWith('afstand'));
+                if (iDist < 0) continue;
+                const iFree = heads.findIndex((h) => h.startsWith('vrij'));
+                const iCost = heads.findIndex((h) => h.startsWith('kosten') || h.startsWith('belasting'));
+                const iDep = heads.findIndex((h) => h.startsWith('afdeling'));
+                for (const tr of table.querySelectorAll('tbody > tr')) {
+                    const a = tr.querySelector(DEST);
+                    if (!a) continue;
+                    seen.add(a);
+                    const kind = /\/gefangener\//.test(a.getAttribute('href')) ? 'cell' : 'hospital';
+                    const free = iFree >= 0 ? num(cell(tr, iFree).split('/')[0]) : Infinity;
+                    const red = isRed(a) || isRed(tr) || (iFree >= 0 && isRed(tr.cells[iFree] && tr.cells[iFree].querySelector('.label')));
+                    out.push({
+                        el: tr, a, kind, own: table.id === 'own-hospitals',
+                        dist: num(cell(tr, iDist)),
+                        free: red ? 0 : (isNaN(free) ? Infinity : free),
+                        short: a.classList.contains('btn-warning') || tr.classList.contains('warning'),
+                        cost: iCost >= 0 ? num(cell(tr, iCost)) || 0 : 0,
+                        dep: kind === 'cell' || iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
+                    });
+                }
+            }
+            for (const a of document.querySelectorAll('a[href*="/gefangener/"]')) {
+                if (seen.has(a)) continue;
+                const t = a.textContent.replace(/\s+/g, ' ');
+                const km = t.match(/(\d+(?:[.,]\d+)?)\s*km/);
+                const pct = t.match(/(\d+)\s*%/);
+                const freeTxt = t.match(/vrij\w*\s*(?:cel\w*)?\s*:?\s*(\d+)/i);
+                out.push({
+                    el: a, a, kind: 'cell',
+                    dist: km ? parseFloat(km[1].replace(',', '.')) : NaN,
+                    free: isRed(a) ? 0 : (freeTxt ? Number(freeTxt[1]) : Infinity),
+                    short: a.classList.contains('btn-warning'),
+                    cost: pct ? Number(pct[1]) : 0,
+                    dep: true,
+                });
+            }
+            return out;
+        }
+
+        // Reason a candidate is hidden, or '' when it stays.
+        function reason(c) {
+            const cfg = ctx.cfg;
+            if (c.a.classList.contains('disabled')) return 'niet beschikbaar';
+            if (cfg.full && c.free <= 0) return 'vol';
+            if (c.kind === 'hospital' && c.free < Number(cfg.minBeds)) return 'te weinig bedden';
+            if (c.kind === 'cell' && cfg.cellsShort && c.short && c.free !== 0) return 'te weinig cellen';
+            if (c.kind === 'hospital' && cfg.department && !c.dep) return 'geen afdeling';
+            if (c.cost > Number(cfg.maxCost)) return 'te duur';
+            if (Number(cfg.maxKm) > 0 && c.dist > Number(cfg.maxKm)) return 'te ver';
+            return '';
+        }
+
+        const bar = document.createElement('div');
+        bar.className = 'mks-dest-bar';
+        h2.insertAdjacentElement('afterend', bar);
+
+        let best = null;
+        function apply() {
+            obs.disconnect();
+            document.querySelectorAll(`.${BEST}`).forEach((el) => el.classList.remove(BEST));
+            document.querySelectorAll('.mks-dest-tag').forEach((el) => el.remove());
+            const list = candidates();
+            const why = {};
+            const shown = [];
+            for (const c of list) {
+                const r = reason(c);
+                c.el.classList.toggle(HIDDEN, !!r);
+                if (r) why[r] = (why[r] || 0) + 1;
+                else shown.push(c);
+            }
+            // Best: cheapest first, then nearest, own hospitals get a head start
+            // of ownKm. Unknown distance goes last.
+            const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? Number(ctx.cfg.ownKm) || 0 : 0);
+            best = shown.slice().sort((x, y) => x.cost - y.cost || rank(x) - rank(y))[0] || null;
+            if (best) {
+                best.el.classList.add(BEST);
+                const tag = document.createElement('span');
+                tag.className = 'mks-dest-tag';
+                tag.textContent = ctx.cfg.enter ? 'Beste keuze · Enter' : 'Beste keuze';
+                (best.el.tagName === 'TR' ? best.el.cells[0] : best.a).appendChild(tag);
+            }
+            const hidden = list.length - shown.length;
+            const parts = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ');
+            const all = document.body.classList.contains('mks-dest-all');
+            bar.innerHTML = hidden
+                ? `<span><b>${shown.length}</b> van ${list.length} bestemmingen</span><span class="mks-dest-why">verborgen: ${ctx.esc(parts)}</span>`
+                  + `<a href="#" class="btn btn-xs btn-default">${all ? 'Verborgen weer verbergen' : 'Alles tonen'}</a>`
+                : `<span class="mks-dest-why">${list.length} bestemmingen, niets verborgen</span>`;
+            const toggle = bar.querySelector('a');
+            if (toggle) toggle.onclick = (ev) => { ev.preventDefault(); document.body.classList.toggle('mks-dest-all'); apply(); };
+            if (!shown.length && list.length) bar.insertAdjacentHTML('beforeend', '<span class="label label-danger">Geen passende bestemming</span>');
+            obs.takeRecords();
+            watch();
+        }
+
+        function onKey(ev) {
+            if (!ctx.cfg.enter || ev.key !== 'Enter' || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
+            const t = ev.target;
+            if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(t.tagName))) return;
+            if (!best || !document.contains(best.a)) return;
+            ev.preventDefault();
+            best.a.click();
+        }
+        document.addEventListener('keydown', onKey);
+
+        // "Load all" swaps in more alliance hospitals without a page load.
+        // apply() changes the DOM itself, so it stops observing while it runs.
+        const root = document.getElementById('iframe-inside-container') || document.body;
+        let timer = null;
+        const obs = new MutationObserver(() => {
+            clearTimeout(timer);
+            timer = setTimeout(apply, 100);
+        });
+        const watch = () => obs.observe(root, { childList: true, subtree: true });
+
+        apply();
+        ctx.onSettings(apply);
+
+        return {
+            stop() {
+                obs.disconnect();
+                clearTimeout(timer);
+                document.removeEventListener('keydown', onKey);
+                document.body.classList.remove('mks-dest-all');
+                document.querySelectorAll(`.${HIDDEN}, .${BEST}`).forEach((el) => el.classList.remove(HIDDEN, BEST));
+                document.querySelectorAll('.mks-dest-tag').forEach((el) => el.remove());
+                bar.remove();
+                style.remove();
+            },
+        };
+    },
+});
+
 /* ==== module: credit-filter =============================================== */
 MKS.module({
     id: 'credit-filter',
@@ -2161,12 +2518,15 @@ MKS.module({
     short: 'Inzetvoorstellen',
     icon: '📋',
     category: 'missions',
-    description: 'Maakt inzetvoorstellen (AAO\'s) voor grote inzetten, verdeeld over de categorieën Klein, Middel en Groot. Ambulances zitten er nooit in. '
-        + 'Doet alleen iets als je op <b>Aanmaken</b> klikt. Bestaande voorstellen (zelfde naam) blijven staan.',
+    description: 'Maakt inzetvoorstellen (AAO\'s) voor grote inzetten, verdeeld over de categorieën Klein, Middel en Groot. Ambulances tellen niet mee '
+        + 'voor de grootte, maar GGB en NHT worden wel meegenomen waar een inzet die vraagt. '
+        + 'Doet alleen iets als je op <b>Controleren</b> of <b>Aanmaken</b> klikt. Bestaande voorstellen (zelfde naam) worden bijgewerkt als hun '
+        + 'voertuigen niet meer kloppen, in plaats van overgeslagen.',
     tagline: 'Handmatig starten',
     warning: '<b>Dit maakt HEEL VEEL inzetvoorstellen aan: 573 stuks.</b> Ze komen allemaal in je lijst met inzetvoorstellen '
         + 'en in het alarmeervenster te staan. Weghalen gaat alleen met de hand, één voor één. Het script is nog in ontwikkeling. '
-        + 'Maak eerst de categorieën <b>Klein</b>, <b>Middel</b> en <b>Groot</b> aan.',
+        + '<b>Aanmaken</b> kan bestaande voorstellen ook wijzigen (zelfde naam, andere voertuigen) — pas ze dus niet handmatig aan tenzij je '
+        + 'de naam ook aanpast. Maak eerst de categorieën <b>Klein</b>, <b>Middel</b> en <b>Groot</b> aan.',
     at: 'ready',
     frames: 'top',
     live: true,
@@ -2185,7 +2545,7 @@ MKS.module({
         };
 
         // c = mission name (preset caption), s = size group, v = slots (aao[slot] -> count), n = variants merged
-        const PRESETS = [{"c": "Aanhanger losgeschoten", "s": "Klein", "v": {"fire": 1, "elw": 1, "any_traffic_unit": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Aanrijding door ijzel", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanrijding door trein", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanrijding meerdere vrachtwagens", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 2, "traffic_patrol": 2, "fire": 2, "fustw": 4}, "n": 1, "e": []}, {"c": "Aanrijding met zwaar letsel", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 1, "traffic_patrol": 1, "fire": 2, "fustw": 6}, "n": 8, "e": []}, {"c": "Aanrijding snelweg, veroorzaker gevlucht", "s": "Klein", "v": {"rw": 1, "any_traffic_unit": 2, "traffic_patrol": 1, "fire": 1, "polizeihubschrauber": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Aanrijding voetganger (> 30km/h)", "s": "Klein", "v": {"ovd_p": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Aanvaring met luxe jachtschip (Grip 4)", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring veerpont", "s": "Klein", "v": {"coastal_boat": 5, "boot": 2, "gw_wasserrettung": 5}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met kajuitboot (Grip 3)", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met vlet (Grip 3)", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met waterbus (Grip 3)", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met watertaxi (Grip 3)", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "care_service": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Achtervolging personenauto", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "traffic_patrol": 3, "fustw": 4}, "n": 2, "e": []}, {"c": "Ambulance betrokken bij ongeluk", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "ovd_p": 1, "polizeihubschrauber": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Auto tegen pijlwagen gereden", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 1, "traffic_patrol": 1, "fire": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Ballonnen opblazen voor verjaardagsfeest", "s": "Klein", "v": {"rw": 2, "dlk": 2, "gwa": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Begeleiding demonstratie (klein)", "s": "Klein", "v": {"grukw": 3, "police_horse": 2, "fustw": 3, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Bestuurder op telefoon botst op vrachtwagen", "s": "Klein", "v": {"rw": 2, "elw": 1, "fire": 4, "fustw": 6}, "n": 1, "e": []}, {"c": "Bliksem treft konijnenhol", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Bloemenveld in brand", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "rw": 1, "fire": 7}, "n": 1, "e": []}, {"c": "Bom uit WOII gevonden", "s": "Klein", "v": {"rw": 1, "elw": 2, "ovd_p": 1, "fire": 3, "spokesman": 1, "bomb_disposal": 1, "fustw": 3, "military_police": 2}, "n": 1, "e": []}, {"c": "Bootje op drift", "s": "Klein", "v": {"gw_taucher": 1, "dlk": 1, "fire": 2, "boot": 1, "fustw": 2, "gw_wasserrettung": 2}, "n": 1, "e": []}, {"c": "Bosbrand (Grip 1)", "s": "Klein", "v": {"elw": 1, "elw3": 1, "elw2": 1, "care_service": 1, "fustw": 2, "brush_truck": 4}, "n": 4, "e": []}, {"c": "Brand bij afvalverwerker (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 3, "gwgefahrgut": 1, "gwmesstechnik": 1}, "n": 1, "e": []}, {"c": "Brand in appartementencomplex", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in bouwmarkt (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in bovenleiding", "s": "Klein", "v": {"dlk": 1, "elw": 1, "fire": 2, "railway_fire_engine": 2, "railway_electric_response": 1}, "n": 1, "e": []}, {"c": "Brand in cafetaria (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in flatwoning", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in garagebedrijf", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 1}, "n": 3, "e": []}, {"c": "Brand in gevangenis", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "polizeihubschrauber": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand in hotel", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 3, "fustw": 2}, "n": 3, "e": []}, {"c": "Brand in kantoorgebouw", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 1, "elw2": 1, "gwa": 1, "fire": 4}, "n": 3, "e": []}, {"c": "Brand in kelder", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in landbouwschuur", "s": "Klein", "v": {"rw": 1, "foam": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand in manege", "s": "Klein", "v": {"gwl2wasser": 1, "foam": 1, "dlk": 1, "elw": 1, "elw2": 1, "fire": 3}, "n": 2, "e": []}, {"c": "Brand in museum", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in parkeergarage", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 3, "e": []}, {"c": "Brand in passagierstrein (Middel)", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 2, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in schoolgebouw", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in snackbar", "s": "Klein", "v": {"fire": 3, "elw": 1, "dlk": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in sporthal", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4}, "n": 3, "e": []}, {"c": "Brand in stacaravan", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in supermarkt", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in tram (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "gwa": 1, "fire": 4, "railway_fire_engine": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Brand in transformatorhuisje", "s": "Klein", "v": {"rw": 2, "elw": 1, "elw3": 1, "elw2": 1, "fire": 3, "fustw": 2}, "n": 2, "e": []}, {"c": "Brand in verzorgingshuis", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 3, "e": []}, {"c": "Brand in werkplaats (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in ziekenhuis (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand op binnenvaartschip", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "foam": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "gwgefahrgut": 1, "spokesman": 1, "boot": 2}, "n": 2, "e": []}, {"c": "Brand op zomerkamp", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "gwa": 1, "fire": 6, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandend dak", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw2": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brandend klein vliegtuig", "s": "Klein", "v": {"elw": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "fustw": 2, "arff": 1}, "n": 1, "e": []}, {"c": "Brandende caravan", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "any_traffic_unit": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandende goederenwagon (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Brandende laadpaal", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 2, "bike_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandende vrachtwagen (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "foam": 1, "car_carrier_large": 1, "elw": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Carnaval beveiliging", "s": "Klein", "v": {"fire": 4, "elw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Diepzeemijn aangetroffen", "s": "Klein", "v": {"ovd_p": 1, "bomb_disposal": 1, "bomb_disposal_robot": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Doorzoeking risicopand", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Dronken persoon gooit met terrasmeubilair", "s": "Klein", "v": {"police_horse": 8, "fustw": 3}, "n": 1, "e": []}, {"c": "Drugsafval aangetroffen", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Drugslab aangetroffen", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "gwgefahrgut": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Duiker vermist", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Duinbrand (Middel)", "s": "Klein", "v": {"gw_wasserrettung": 2, "elw": 1, "brush_truck": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Fietser onder tram", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Gaslekkage", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Geplande aanhouding vuurwapengevaarlijke verdachte", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "at_c": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Geweld tegen hulpverleners", "s": "Klein", "v": {"ovd_p": 1, "fustw": 6, "hondengeleider": 2}, "n": 1, "e": []}, {"c": "Graffitispuiters betrapt", "s": "Klein", "v": {"ovd_p": 1, "fustw": 6, "hondengeleider": 2}, "n": 1, "e": []}, {"c": "Grenscontrole", "s": "Klein", "v": {"military_police": 6, "police_motorcycle": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Groep kitesurfers in problemen", "s": "Klein", "v": {"gw_wasserrettung": 3, "boot": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Groep zwemmers in problemen", "s": "Klein", "v": {"gw_wasserrettung": 2, "boot": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Grote vechtpartij", "s": "Klein", "v": {"ovd_p": 1, "fustw": 6, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Hazenbijeenkomst in Paaseistad", "s": "Klein", "v": {"fire": 2, "fustw": 8}, "n": 1, "e": []}, {"c": "Heidebrand (Groot)", "s": "Klein", "v": {"gwl2wasser": 2, "elw": 1, "spokesman": 1, "fustw": 2, "brush_truck": 4}, "n": 1, "e": []}, {"c": "Helikopter crash", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw_airport": 1, "ovd_p": 1, "fire": 2, "fustw": 4, "arff": 2}, "n": 1, "e": []}, {"c": "Illegale raceauto op snelweg", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 10, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Ingestort konijnenhol", "s": "Klein", "v": {"rw": 1, "elw": 2, "fire": 4, "fustw": 2}, "n": 1, "e": []}, {"c": "Instap na bedreiging (Hoog risico)", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Kettingbotsing", "s": "Klein", "v": {"rw": 2, "elw": 1, "any_traffic_unit": 2, "traffic_patrol": 1, "fire": 4, "fustw": 4}, "n": 3, "e": []}, {"c": "Klein vliegtuig neergestort", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "fustw": 2, "arff": 1}, "n": 3, "e": []}, {"c": "Koolmonoxidevergiftiging in een school", "s": "Klein", "v": {"elw": 2, "elw2": 1, "gwa": 2, "fire": 6, "fustw": 3}, "n": 1, "e": []}, {"c": "Koperdiefstal", "s": "Klein", "v": {"ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Lek/zinken plezierjacht", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Lekkage gevaarlijke stoffen (Middel)", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw2": 1, "ovd_p": 1, "hazard_response_material": 1, "fire": 2, "gwgefahrgut": 1, "spokesman": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Lekkende LPG installatie", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Lekkende chocoladevrachtwagen", "s": "Klein", "v": {"rw": 2, "elw": 2, "fire": 4, "gwgefahrgut": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Lekkende tankwagen", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 3, "e": []}, {"c": "Massa-beroerte tijdens het eten van fondue (groot)", "s": "Klein", "v": {"rw": 1, "elw": 1, "gwa": 1, "fire": 3, "gwmesstechnik": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Massa-beroerte tijdens het eten van fondue (klein)", "s": "Klein", "v": {"elw": 1, "gwa": 1, "fire": 2, "gwmesstechnik": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Mensen vermist op de dansvloer", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "ovd_p": 1, "hondengeleider": 2, "fire": 4, "fustw": 4}, "n": 1, "e": []}, {"c": "Nablussen natuur", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "fire": 5}, "n": 1, "e": []}, {"c": "Natuurbrand (Zeer Groot)", "s": "Klein", "v": {"gwl2wasser": 2, "elw": 2, "elw2": 1, "spokesman": 1, "fustw": 2, "brush_truck": 4}, "n": 1, "e": []}, {"c": "Oefening Handcrew", "s": "Klein", "v": {"brush_truck": 4}, "n": 1, "e": []}, {"c": "Oefening brandweer", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Omgeslagen Zeilboot", "s": "Klein", "v": {"gw_taucher": 2, "dlk": 1, "elw": 1, "fire": 1, "boot": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Ongeregeldheden in de wijk", "s": "Klein", "v": {"grukw": 6, "bike_police": 1, "fustw": 6, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Ongeregeldheden voetbalsupporters horeca", "s": "Klein", "v": {"grukw": 6, "police_horse": 1, "gefkw": 1, "ovd_p": 1, "fustw": 4, "lebefkw": 1}, "n": 12, "e": []}, {"c": "Ongeval in septic tank", "s": "Klein", "v": {"rw": 1, "elw": 1, "gwgefahrgut": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Ongeval met hete luchtballon", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "fire": 2, "spokesman": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Ongeval met trein en personenauto", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 4, "car_carrier": 1, "fustw": 3}, "n": 3, "e": []}, {"c": "Ongeval met trein en persoon", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Ongeval met trein en vrachtwagen (THV Klein)", "s": "Klein", "v": {"rw": 1, "car_carrier_large": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2, "railway_electric_response": 1}, "n": 2, "e": []}, {"c": "Ongeval met trein en vrachtwagen (THV Middel)", "s": "Klein", "v": {"rw": 1, "car_carrier_large": 1, "elw": 1, "fire": 2, "railway_fire_engine": 2, "fustw": 3, "railway_electric_response": 1}, "n": 4, "e": []}, {"c": "Onrust in de wijk", "s": "Klein", "v": {"grukw": 3, "bike_police": 1, "fustw": 4, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Ontruimen kraakpand", "s": "Klein", "v": {"grukw": 3, "gefkw": 1, "ovd_p": 1, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Ontruimingsoefening", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "ovd_p": 1, "fire": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Opvang slachtoffers", "s": "Klein", "v": {"fire": 1, "ovd_p": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Overval bankkantoor", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Overval frietkraam", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Overval winkel", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5}, "n": 2, "e": []}, {"c": "Paniek op de tribune", "s": "Klein", "v": {"gefkw": 1, "police_horse": 4, "fustw": 5}, "n": 1, "e": []}, {"c": "Peperkoekhuis in brand", "s": "Klein", "v": {"fire": 5, "elw": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Personen aangetroffen in vrachtwagen", "s": "Klein", "v": {"gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "polizeihubschrauber": 1, "fustw": 8}, "n": 2, "e": []}, {"c": "Personen onwel door hitte", "s": "Klein", "v": {"elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Personenauto te water", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 3}, "n": 7, "e": []}, {"c": "Persoon bekneld in bouwkraan", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Persoon bekneld in gierput", "s": "Klein", "v": {"rw": 1, "hazard_response_suits": 1, "ovd_p": 1, "gwa": 1, "hazard_response_material": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 4, "hazard_response_disinfection": 1}, "n": 8, "e": []}, {"c": "Persoon bekneld onder garagedeur", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Persoon onwel in hijskraan", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw2": 1, "fire": 1, "spokesman": 1, "bike_police": 2, "fustw": 1, "police_motorcycle": 1}, "n": 1, "e": []}, {"c": "Persoon te water", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 2, "fustw": 1}, "n": 5, "e": []}, {"c": "Persoon vermist", "s": "Klein", "v": {"grukw": 6, "ovd_p": 1, "polizeihubschrauber": 1, "fustw": 3, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Plofkraak", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "polizeihubschrauber": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Politie aangevallen met illegaal vuurwerk", "s": "Klein", "v": {"grukw": 3, "ovd_p": 1, "hondengeleider": 2, "fustw": 5, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Protesterende elven", "s": "Klein", "v": {"grukw": 6, "ovd_p": 1, "hondengeleider": 1, "fustw": 3, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Rieten kap woning in brand door vuurwerk", "s": "Klein", "v": {"dlk": 1, "elw": 1, "gwa": 1, "fire": 5, "fustw": 2}, "n": 1, "e": []}, {"c": "Schipbreukeling vermist", "s": "Klein", "v": {"coastal_boat": 3, "gw_wasserrettung": 2}, "n": 1, "e": []}, {"c": "Scootmobiel te water", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "elw2": 1, "fire": 1, "boot": 1, "bike_police": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Steekincident (groot)", "s": "Klein", "v": {"elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fustw": 10}, "n": 2, "e": []}, {"c": "Straatroof", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Supporters met vuurwerk op tribune", "s": "Klein", "v": {"grukw": 2, "gefkw": 1, "ovd_p": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Toezicht Horeca", "s": "Klein", "v": {"police_horse": 4, "hondengeleider": 1, "bike_police": 1, "fustw": 3}, "n": 3, "e": []}, {"c": "Toezicht bij manifestatie", "s": "Klein", "v": {"grukw": 6, "ovd_p": 1, "bike_police": 1, "fustw": 3, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Toezicht/Begeleiding Surfwedstrijd", "s": "Klein", "v": {"gw_wasserrettung": 4, "boot": 4, "fustw": 2}, "n": 1, "e": []}, {"c": "Vader vermist", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Valentijnsdecoraties in restaurant in brand gevlogen", "s": "Klein", "v": {"fire": 5, "elw": 1, "dlk": 1}, "n": 1, "e": []}, {"c": "Vat met gevaarlijke stoffen omgevallen", "s": "Klein", "v": {"rw": 1, "foam": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 4, "e": []}, {"c": "Vechtpartij horecagebied", "s": "Klein", "v": {"police_horse": 4, "bike_police": 2, "fustw": 7, "hondengeleider": 1}, "n": 2, "e": []}, {"c": "Vechtpartij in café", "s": "Klein", "v": {"ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Verdacht pakket bij voordeur", "s": "Klein", "v": {"ovd_p": 2, "fire": 1, "bomb_disposal_robot": 1, "bomb_disposal": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Verdacht pakket luchthaven", "s": "Klein", "v": {"bomb_disposal": 1, "fustw": 1, "military_police": 3}, "n": 1, "e": []}, {"c": "Verdachte vaten aangetroffen", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Vergeten jubileum", "s": "Klein", "v": {"grukw": 3, "gefkw": 1, "ovd_p": 1, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Verhoog bewustzijn van het bestaan van 112 onder kinderen", "s": "Klein", "v": {"rw": 1, "police_horse": 1, "dlk": 1, "elw": 1, "gefkw": 1, "hondengeleider": 1, "fire": 1, "spokesman": 1, "bike_police": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Verjaardagsgasten hebben taart gestolen", "s": "Klein", "v": {"gefkw": 1, "ovd_p": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Verkeerscontrole", "s": "Klein", "v": {"police_motorcycle": 6}, "n": 1, "e": []}, {"c": "Verkeersongeval met beknelling", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "elw": 1, "fire": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Verkeersongeval met gevaarlijke stoffen (middel)", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Verkeersongeval met touringcar", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "any_traffic_unit": 2, "ovd_p": 1, "fire": 3, "fustw": 4}, "n": 11, "e": []}, {"c": "Verkeersruzie loopt uit de hand", "s": "Klein", "v": {"gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Verward persoon (Hoge dreiging)", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Verward persoon op dak", "s": "Klein", "v": {"dlk": 1, "at_m": 1, "ovd_p": 1, "at_o": 4, "at_c": 1, "fire": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Vliegtuig buiten start-/landingsbaan beland", "s": "Klein", "v": {"elw": 1, "elw_airport": 1, "fire": 1, "fustw": 2, "arff": 2}, "n": 1, "e": []}, {"c": "Voertuigbrand in tunnel", "s": "Klein", "v": {"gwl2wasser": 1, "foam": 1, "elw": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Voetbalwedstrijd", "s": "Klein", "v": {"grukw": 3, "police_horse": 4, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Vrachtwagen te water", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 6, "e": []}, {"c": "Vrachtwagen vast in tunnel", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 1, "fire": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Vrachtwagenongeval met zwaar letsel", "s": "Klein", "v": {"rw": 1, "elw": 1, "any_traffic_unit": 1, "traffic_patrol": 1, "fire": 2, "fustw": 2}, "n": 2, "e": []}, {"c": "Vreemde lucht in kantoorgebouw", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Vreemde lucht in winkelcentrum", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Vuilniswagen aangestoken", "s": "Klein", "v": {"fire": 3, "elw": 1, "foam": 1, "fustw": 6}, "n": 2, "e": []}, {"c": "Wateroverlast", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Watersporter vermist", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Windsurfer vermist", "s": "Klein", "v": {"gw_wasserrettung": 4, "polizeihubschrauber": 1, "boot": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Woningoverval", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 2, "e": []}, {"c": "Zoekactie vermist persoon", "s": "Klein", "v": {"police_horse": 2, "coastal_boat": 1, "gw_wasserrettung": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Zwemmer vermist (Grip 1)", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 2}, "n": 2, "e": []}, {"c": "Zwemmer vermist (Middel)", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 2, "boot": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanhouding georganiseerde misdaad", "s": "Middel", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "Aankondiging voor nieuwe 112 functionaliteiten", "s": "Middel", "v": {"grukw": 3, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "fustw": 10, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Aanrijding bus en tram", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 2, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 8, "spokesman": 1, "railway_fire_engine": 3, "fustw": 10}, "n": 4, "e": []}, {"c": "Aanrijding trein & betonmixer", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 8, "elw": 2, "fire": 8, "gwmesstechnik": 2, "car_carrier_large": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 2, "polizeihubschrauber": 1}, "n": 32, "e": []}, {"c": "Aanvaring 2 vrachtschepen (Grip 4)", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "coastal_boat": 3, "elw": 1, "elw2": 1, "elw3": 1, "ovd_p": 1, "care_service": 1, "fire": 2, "polizeihubschrauber": 1, "spokesman": 1, "boot": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Aanvaring met rondvaartboot (Grip 3)", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met passagiersschip (Grip 4)", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "coastal_boat": 3, "elw": 1, "elw2": 1, "elw3": 1, "ovd_p": 1, "care_service": 1, "fire": 3, "gwgefahrgut": 1, "polizeihubschrauber": 1, "spokesman": 1, "boot": 2, "gwmesstechnik": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met veerboot (Grip 4)", "s": "Middel", "v": {"gw_taucher": 4, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Achtervolging eindigt met botstende verdachte in supermarkt, waterleiding breekt", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw": 1, "ovd_p": 1, "fire": 4, "polizeihubschrauber": 1, "fustw": 8}, "n": 1, "e": []}, {"c": "Achtervolging gevaarlijke verdachte", "s": "Middel", "v": {"gefkw": 1, "ovd_p": 1, "traffic_patrol": 2, "hondengeleider": 2, "polizeihubschrauber": 1, "fustw": 15}, "n": 2, "e": []}, {"c": "Akkerbrand", "s": "Middel", "v": {"elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 2, "gwa": 2, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 2, "e": []}, {"c": "Ammoniakalarm in opslagloods", "s": "Middel", "v": {"rw": 1, "hazard_response_suits": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "hazard_response_material": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4, "hazard_response_disinfection": 1}, "n": 8, "e": []}, {"c": "Begeleiding demonstratie (groot)", "s": "Middel", "v": {"grukw": 6, "police_horse": 5, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "fustw": 4, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Begeleiding supporters", "s": "Middel", "v": {"grukw": 6, "police_horse": 4, "gefkw": 1, "ovd_p": 2, "hondengeleider": 2, "bike_police": 1, "fustw": 10, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Binnenstap drugspand met vuurwapengevaarlijke verdachte", "s": "Middel", "v": {"at_m": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "polizeihubschrauber": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Bouwsteiger ingestort", "s": "Middel", "v": {"rw": 1, "dlk": 2, "elw": 2, "fire": 4, "search_and_rescue": 1, "fustw": 5}, "n": 2, "e": []}, {"c": "Brand bij afvalverwerker (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "care_service": 1, "gwa": 1, "fire": 8, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand bij afvalverwerker (Grip 3)", "s": "Middel", "v": {"gwl2wasser": 4, "rw": 1, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "care_service": 1, "gwa": 1, "fire": 12, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand bij afvalverwerker (Zeer Groot)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1}, "n": 1, "e": []}, {"c": "Brand in Bibliotheek", "s": "Middel", "v": {"rw": 2, "foam": 2, "elw": 2, "elw2": 1, "fire": 6, "spokesman": 1, "bike_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in Silo", "s": "Middel", "v": {"rw": 1, "foam": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand in bioscoop", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 2, "elw": 2, "elw3": 1, "ovd_p": 2, "elw2": 1, "gwa": 1, "fire": 5, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 2, "fustw": 9}, "n": 2, "e": []}, {"c": "Brand in boerderij", "s": "Middel", "v": {"dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 2, "e": []}, {"c": "Brand in bouwmarkt (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "foam": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "care_service": 1, "gwa": 1, "fire": 4, "gwmesstechnik": 1, "fustw": 2}, "n": 8, "e": []}, {"c": "Brand in bouwmarkt (Grip 2)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "foam": 2, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 8, "e": []}, {"c": "Brand in chocolade-eierenfabriek", "s": "Middel", "v": {"gwl2wasser": 4, "dlk": 4, "elw": 4, "elw2": 1, "gwa": 2, "fire": 16, "fustw": 8}, "n": 1, "e": []}, {"c": "Brand in fabriekshal", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 6, "e": []}, {"c": "Brand in gasverdeelstation", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "foam": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 2, "gwa": 1, "care_service": 1, "hazard_response_material": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 8, "industrial_response_engine": 1}, "n": 32, "e": []}, {"c": "Brand in graandroger", "s": "Middel", "v": {"gwl2wasser": 1, "foam": 1, "rw": 1, "dlk": 2, "elw": 2, "elw2": 1, "gwa": 2, "fire": 4, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in hangaar", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "gwa": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand in hoogspanningsruimte", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 3}, "n": 1, "e": []}, {"c": "Brand in hooischuur", "s": "Middel", "v": {"foam": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 4, "e": []}, {"c": "Brand in houtzagerij", "s": "Middel", "v": {"gwl2wasser": 1, "foam": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 3, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 3}, "n": 4, "e": []}, {"c": "Brand in kerkgebouw", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 6, "e": []}, {"c": "Brand in magazijn", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 6, "gwgefahrgut": 1, "gwmesstechnik": 2, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand in meubelzaak", "s": "Middel", "v": {"gwl2wasser": 4, "foam": 1, "dlk": 3, "elw": 3, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 1, "e": []}, {"c": "Brand in nachtclub", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 1, "elw3": 1, "ovd_p": 1, "elw2": 1, "gwa": 1, "hondengeleider": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 3, "e": []}, {"c": "Brand in opslagloods", "s": "Middel", "v": {"gwl2wasser": 4, "foam": 3, "rw": 2, "dlk": 4, "elw": 4, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 16}, "n": 1, "e": []}, {"c": "Brand in passagierstrein (Grip 1)", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 10, "elw": 2, "gwa": 1, "fire": 6, "gwmesstechnik": 3, "gwl2wasser": 2, "foam": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "elw2": 1, "ovd_p": 2}, "n": 16, "e": []}, {"c": "Brand in passagierstrein (Groot)", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "elw": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "spokesman": 1, "railway_fire_engine": 2, "fustw": 4, "railway_electric_response": 1}, "n": 2, "e": []}, {"c": "Brand in restaurant", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 3}, "n": 1, "e": []}, {"c": "Brand in sauna", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 2, "e": []}, {"c": "Brand in serverruimte (Groot)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 3, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 3, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Brand in serverruimte (Middel)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 2, "elw": 2, "elw3": 1, "gwa": 1, "fire": 5, "gwmesstechnik": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in snackbar (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 2, "foam": 1, "rw": 1, "dlk": 3, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 10, "spokesman": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand in snackbar (Zeer Groot)", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 2, "elw2": 1, "fire": 6, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand in station (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 3, "foam": 1, "dlk": 2, "elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 8, "e": []}, {"c": "Brand in station (Groot)", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand in tankstation", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "foam": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 5, "e": []}, {"c": "Brand in terminal", "s": "Middel", "v": {"foam": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "gwa": 1, "ovd_p": 1, "fire": 3, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand in theater", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 6, "e": []}, {"c": "Brand in tram (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "railway_fire_engine": 3, "fustw": 6}, "n": 8, "e": []}, {"c": "Brand in ziekenhuis (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 4, "foam": 1, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 6, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 8, "e": []}, {"c": "Brand in ziekenhuis (Groot)", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "spokesman": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand op bedrijventerrein", "s": "Middel", "v": {"foam": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand op passagiersschip", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 3, "boot": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand op veerpont", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "foam": 1, "dlk": 2, "elw": 1, "elw2": 1, "ovd_p": 1, "fire": 3, "boot": 3, "fustw": 4, "gw_wasserrettung": 1}, "n": 3, "e": []}, {"c": "Brand op windmolenpark", "s": "Middel", "v": {"rw": 1, "dlk": 2, "elw": 2, "elw2": 1, "ovd_p": 2, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 1, "e": []}, {"c": "Brand partycentrum", "s": "Middel", "v": {"gwl2wasser": 2, "foam": 1, "dlk": 2, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "gwmesstechnik": 2, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand zonnepanelen", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 2, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 2, "gwa": 2, "fire": 2, "gwgefahrgut": 2, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 4, "fustw": 13}, "n": 4, "e": []}, {"c": "Brandende goederenwagon (Groot)", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "foam": 1, "elw": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4, "industrial_response_engine": 1}, "n": 4, "e": []}, {"c": "Brandende tankwagen", "s": "Middel", "v": {"gwl2wasser": 1, "foam": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 3, "e": []}, {"c": "Chloorgas ontsnapt", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 3, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "gwgefahrgut": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 1, "e": []}, {"c": "Controle bij de openingsceremonie van sport evenement", "s": "Middel", "v": {"grukw": 3, "elw": 2, "gefkw": 1, "ovd_p": 1, "fire": 4, "fustw": 3, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Demonstranten vastgelijmd aan snelweg", "s": "Middel", "v": {"rw": 1, "grukw": 3, "gefkw": 2, "ovd_p": 2, "any_traffic_unit": 2, "hondengeleider": 2, "fire": 2, "fustw": 20, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Duinbrand (Grip 1)", "s": "Middel", "v": {"elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 3, "fustw": 4, "gw_wasserrettung": 2, "brush_truck": 6}, "n": 4, "e": []}, {"c": "Duinbrand (Grip 2)", "s": "Middel", "v": {"elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 2, "gwa": 2, "care_service": 1, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 5, "fustw": 6, "gw_wasserrettung": 2, "brush_truck": 10}, "n": 4, "e": []}, {"c": "Europese 112 dag viering", "s": "Middel", "v": {"rw": 1, "grukw": 2, "police_horse": 2, "dlk": 1, "elw": 1, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "fustw": 4, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Explosie in woonhuis", "s": "Middel", "v": {"rw": 2, "dlk": 2, "elw": 2, "elw2": 1, "elw3": 1, "gwa": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 4, "e": []}, {"c": "Explosief gevonden in winkelcentrum", "s": "Middel", "v": {"rw": 1, "elw3": 1, "fustw": 6, "elw": 1, "fire": 1, "bike_police": 1, "gwgefahrgut": 1, "spokesman": 1, "ovd_p": 1, "elw2": 1, "hondengeleider": 1}, "n": 3, "e": []}, {"c": "Festival", "s": "Middel", "v": {"police_horse": 8, "ovd_p": 1, "hondengeleider": 1, "bike_police": 2, "fustw": 5}, "n": 1, "e": []}, {"c": "Gaslek bedrijventerrein", "s": "Middel", "v": {"rw": 1, "foam": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwgefahrgut": 1, "fire": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 4, "e": []}, {"c": "Gestolen vrachtwagen botst in een casino", "s": "Middel", "v": {"elw": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 3, "fustw": 10}, "n": 1, "e": []}, {"c": "Gevel dreigt in te storten", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 3, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Gijzeling", "s": "Middel", "v": {"grukw": 2, "at_m": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 3, "at_c": 1, "polizeihubschrauber": 1, "fustw": 10}, "n": 2, "e": []}, {"c": "Grote alcoholcontrole bij race-evenement", "s": "Middel", "v": {"gefkw": 2, "ovd_p": 1, "hondengeleider": 4, "bike_police": 2, "fustw": 14}, "n": 1, "e": []}, {"c": "Grote zoekactie vermist persoon", "s": "Middel", "v": {"police_horse": 2, "polizeihubschrauber": 1, "boot": 2, "gw_wasserrettung": 4, "fustw": 6}, "n": 3, "e": []}, {"c": "Heidebrand (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 4, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 4, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Heidebrand (Grip 2)", "s": "Middel", "v": {"gwl2wasser": 5, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Lekkende goederenwagon (Groot)", "s": "Middel", "v": {"rw": 2, "hazard_response_suits": 1, "elw": 1, "elw2": 1, "gwa": 1, "hazard_response_material": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 3, "hazard_response_disinfection": 1}, "n": 8, "e": []}, {"c": "Massale paniek bij halloween parade", "s": "Middel", "v": {"elw": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "fustw": 10}, "n": 1, "e": []}, {"c": "Nationale 112 award ceremonie", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 2, "elw": 3, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Natuurbrand (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "fustw": 4, "brush_truck": 6}, "n": 4, "e": []}, {"c": "Natuurbrand (Grip 2)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "fustw": 4, "brush_truck": 6}, "n": 4, "e": []}, {"c": "Natuurbrand (Grip 3)", "s": "Middel", "v": {"gwl2wasser": 5, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 6, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Natuurbrand (Grip 4)", "s": "Middel", "v": {"gwl2wasser": 6, "rw": 1, "elw": 3, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 2, "care_service": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 6, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Noodlanding groot vliegtuig", "s": "Middel", "v": {"rw": 1, "elw": 1, "elw_airport": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 2, "fustw": 4, "arff": 3}, "n": 1, "e": []}, {"c": "Oefening Arrestatieteam", "s": "Middel", "v": {"at_c": 1, "at_o": 4, "at_m": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "Omgevallen hijskraan", "s": "Middel", "v": {"rw": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 3, "fustw": 6}, "n": 1, "e": []}, {"c": "Onaangekondigde demonstratie", "s": "Middel", "v": {"grukw": 6, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "bike_police": 1, "fustw": 5, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Onaangekondigde paashaasstaking", "s": "Middel", "v": {"grukw": 3, "gefkw": 1, "ovd_p": 1, "polizeihubschrauber": 1, "fustw": 10, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Ontsnapping gevaarlijke gedetineerde", "s": "Middel", "v": {"at_m": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "polizeihubschrauber": 1, "bike_police": 2, "fustw": 12}, "n": 1, "e": []}, {"c": "Ontspoorde tram botst tegen gebouw", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 10, "elw": 2, "gwa": 1, "fire": 8, "gwmesstechnik": 3, "gwl2wasser": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 1}, "n": 16, "e": []}, {"c": "Opbreken manifestatie", "s": "Middel", "v": {"grukw": 9, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 1, "fustw": 8, "lebefkw": 2}, "n": 2, "e": []}, {"c": "Overval tankstation met gijzeling", "s": "Middel", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "polizeihubschrauber": 1, "fustw": 6}, "n": 2, "e": []}, {"c": "Overval waardetransport", "s": "Middel", "v": {"at_m": 1, "gefkw": 1, "ovd_p": 3, "at_o": 4, "hondengeleider": 3, "at_c": 1, "polizeihubschrauber": 2, "fustw": 20}, "n": 1, "e": []}, {"c": "Passagierstrein botst op brandweerwagen in een spoorwegovergang", "s": "Middel", "v": {"rw": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "any_traffic_unit": 2, "fire": 6, "polizeihubschrauber": 1, "spokesman": 1, "railway_fire_engine": 3, "fustw": 6, "railway_electric_response": 1}, "n": 4, "e": []}, {"c": "Personen onwel in school", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 6}, "n": 1, "e": []}, {"c": "Personen vast in achtbaan", "s": "Middel", "v": {"rw": 1, "dlk": 2, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "fustw": 6}, "n": 1, "e": []}, {"c": "Persoon met gevaarlijke stoffen", "s": "Middel", "v": {"gwl2wasser": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 10}, "n": 2, "e": []}, {"c": "Protest voor racecircuit", "s": "Middel", "v": {"grukw": 3, "police_horse": 2, "hondengeleider": 1, "fustw": 10, "lebefkw": 1}, "n": 1, "e": []}, {"c": "School shooting", "s": "Middel", "v": {"at_m": 1, "elw3": 1, "ovd_p": 2, "at_o": 4, "hondengeleider": 2, "at_c": 1, "polizeihubschrauber": 1, "bike_police": 2, "fustw": 15}, "n": 2, "e": []}, {"c": "Schoolbus te water", "s": "Middel", "v": {"gw_taucher": 3, "rw": 2, "dlk": 1, "elw": 2, "ovd_p": 1, "elw2": 1, "fire": 3, "spokesman": 1, "boot": 2, "fustw": 4}, "n": 12, "e": []}, {"c": "Schrootbrand op schip", "s": "Middel", "v": {"gwl2wasser": 2, "foam": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 6, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 3, "e": []}, {"c": "Spontane opstand", "s": "Middel", "v": {"grukw": 6, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 2, "fustw": 10, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Toezicht manifestatie pietendiscussie", "s": "Middel", "v": {"grukw": 6, "police_horse": 8, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "polizeihubschrauber": 1, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Toezicht nieuwjaarsfeest", "s": "Middel", "v": {"grukw": 6, "police_horse": 4, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 5, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Uit de handgelopen overwinningsfeest", "s": "Middel", "v": {"grukw": 4, "police_horse": 4, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "fustw": 8, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Uitslaande brand in veestal", "s": "Middel", "v": {"foam": 2, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 3}, "n": 2, "e": []}, {"c": "Vermoeden van opslag grote partij illegaal vuurwerk", "s": "Middel", "v": {"rw": 1, "at_m": 1, "elw": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "at_c": 1, "fire": 2, "bomb_disposal": 1, "bike_police": 2, "bomb_disposal_robot": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verward persoon draait gaskraan open", "s": "Middel", "v": {"rw": 1, "at_m": 1, "elw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "fire": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Vliegtuig met brandmelding in vrachtruim", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 5, "arff": 2}, "n": 1, "e": []}, {"c": "Vliegtuig met motorisch probleem", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 5, "arff": 2}, "n": 1, "e": []}, {"c": "Vliegtuig met probleem met landingsgestel", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 5, "arff": 2}, "n": 1, "e": []}, {"c": "Vliegtuig neergestort", "s": "Middel", "v": {"rw": 3, "dlk": 2, "elw": 3, "elw3": 2, "elw2": 2, "ovd_p": 2, "fire": 10, "gwgefahrgut": 1, "spokesman": 1, "fustw": 14}, "n": 8, "e": []}, {"c": "Vloeistof lekkage uit gekantelde aanhanger", "s": "Middel", "v": {"rw": 2, "elw": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "bike_police": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Voetbalwedstrijd, risicowedstrijd", "s": "Middel", "v": {"grukw": 6, "police_horse": 8, "gefkw": 1, "hondengeleider": 2, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Vrachtwagen op file ingereden", "s": "Middel", "v": {"rw": 2, "elw": 1, "elw2": 1, "ovd_p": 1, "any_traffic_unit": 2, "traffic_patrol": 1, "fire": 4, "spokesman": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Vrachtwagen rijdt tegen losgeschoten aanhanger", "s": "Middel", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 2, "fire": 3, "fustw": 8}, "n": 1, "e": []}, {"c": "Woonhuis ingestort", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 1, "fire": 2, "gwgefahrgut": 1, "polizeihubschrauber": 1, "spokesman": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Zwaar vuurwerk aangetroffen", "s": "Middel", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "gwgefahrgut": 1, "polizeihubschrauber": 1, "spokesman": 1, "gwmesstechnik": 1, "bomb_disposal": 1, "bomb_disposal_robot": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "100 Ambulancestandplaats mijlpaal", "s": "Groot", "v": {"rw": 3, "dlk": 5, "elw": 6, "elw3": 3, "elw2": 3, "gwa": 2, "fire": 15, "spokesman": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "1000 Brandweerkazerne mijlpaal", "s": "Groot", "v": {"dlk": 25, "elw": 10, "elw3": 3, "elw2": 6, "gwa": 3, "fire": 100, "gwgefahrgut": 3, "spokesman": 1, "gwmesstechnik": 3}, "n": 1, "e": []}, {"c": "1000 Politiebureau mijlpaal", "s": "Groot", "v": {"rw": 5, "at_m": 1, "dlk": 5, "elw3": 3, "at_c": 1, "fustw": 100, "elw": 6, "traffic_patrol": 1, "gwa": 2, "fire": 15, "bike_police": 3, "gefkw": 2, "at_o": 4, "spokesman": 1, "lebefkw": 1, "grukw": 6, "police_horse": 4, "elw2": 4, "ovd_p": 6, "hondengeleider": 3, "polizeihubschrauber": 2}, "n": 1, "e": []}, {"c": "250 Ambulancestandplaats mijlpaal", "s": "Groot", "v": {"rw": 3, "dlk": 5, "elw": 6, "elw3": 3, "elw2": 3, "gwa": 2, "fire": 15, "spokesman": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "500 Ambulancestandplaats mijlpaal", "s": "Groot", "v": {"rw": 3, "dlk": 5, "elw": 6, "elw3": 3, "elw2": 3, "gwa": 2, "fire": 15, "spokesman": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "500 Brandweerkazerne mijlpaal", "s": "Groot", "v": {"dlk": 25, "elw": 10, "elw3": 3, "elw2": 6, "gwa": 3, "fire": 50, "gwgefahrgut": 3, "spokesman": 1, "gwmesstechnik": 3}, "n": 1, "e": []}, {"c": "500 Politiebureau mijlpaal", "s": "Groot", "v": {"rw": 5, "at_m": 1, "dlk": 5, "elw3": 3, "at_c": 1, "fustw": 50, "elw": 6, "gwa": 2, "fire": 15, "bike_police": 3, "gefkw": 2, "at_o": 4, "spokesman": 1, "lebefkw": 1, "grukw": 6, "elw2": 4, "ovd_p": 6, "hondengeleider": 3, "polizeihubschrauber": 2}, "n": 1, "e": []}, {"c": "750 Brandweerkazerne mijlpaal", "s": "Groot", "v": {"dlk": 25, "elw": 10, "elw3": 3, "elw2": 6, "gwa": 3, "fire": 75, "gwgefahrgut": 3, "spokesman": 1, "gwmesstechnik": 3}, "n": 1, "e": []}, {"c": "750 Politiebureau mijlpaal", "s": "Groot", "v": {"rw": 5, "at_m": 1, "dlk": 5, "elw3": 3, "at_c": 1, "fustw": 75, "elw": 6, "gwa": 2, "fire": 15, "bike_police": 3, "gefkw": 2, "at_o": 4, "spokesman": 1, "lebefkw": 1, "grukw": 6, "elw2": 4, "ovd_p": 6, "hondengeleider": 3, "polizeihubschrauber": 2}, "n": 1, "e": []}, {"c": "Blokkade door boze menigte", "s": "Groot", "v": {"grukw": 6, "police_horse": 10, "gefkw": 2, "ovd_p": 1, "hondengeleider": 4, "polizeihubschrauber": 1, "fustw": 20, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Brand bij afvalverwerker", "s": "Groot", "v": {"gwl2wasser": 6, "rw": 2, "dlk": 2, "elw": 5, "elw3": 1, "elw2": 2, "gwa": 1, "fire": 20, "gwgefahrgut": 1, "gwmesstechnik": 4, "fustw": 5}, "n": 1, "e": []}, {"c": "Brand bij papierrecyclaar", "s": "Groot", "v": {"gwl2wasser": 4, "rw": 2, "foam": 2, "dlk": 3, "elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 2, "care_service": 1, "fire": 12, "gwgefahrgut": 2, "spokesman": 1, "gwmesstechnik": 4, "fustw": 6, "industrial_response_engine": 1}, "n": 16, "e": []}, {"c": "Brand in kantoorpand", "s": "Groot", "v": {"gwl2wasser": 3, "rw": 2, "dlk": 5, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 15, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 10}, "n": 1, "e": []}, {"c": "Brand in nucleaire installatie", "s": "Groot", "v": {"rw": 3, "dlk": 6, "elw3": 2, "care_service": 1, "fustw": 8, "hazard_response_disinfection_large": 1, "elw": 6, "gwa": 2, "hazard_response_material": 1, "fire": 20, "gwmesstechnik": 6, "industrial_response_engine": 1, "gwl2wasser": 8, "foam": 2, "hazard_response_suits": 1, "gwgefahrgut": 3, "spokesman": 2, "elw2": 3, "ovd_p": 2, "industrial_response_fire_engine": 1, "polizeihubschrauber": 1}, "n": 256, "e": []}, {"c": "Brand in opslagloods met gevaarlijke stoffen", "s": "Groot", "v": {"rw": 10, "dlk": 10, "elw3": 5, "fustw": 10, "arff": 1, "elw": 10, "gwa": 10, "fire": 30, "bike_police": 2, "gwmesstechnik": 6, "gwl2wasser": 10, "foam": 10, "gwgefahrgut": 6, "spokesman": 5, "elw2": 5, "ovd_p": 1, "hondengeleider": 2, "polizeihubschrauber": 1}, "n": 1, "e": []}, {"c": "Brand in stadion", "s": "Groot", "v": {"rw": 1, "dlk": 3, "elw3": 1, "fustw": 12, "elw": 3, "gwa": 1, "fire": 1, "bike_police": 2, "gwmesstechnik": 6, "gefkw": 1, "gwgefahrgut": 2, "spokesman": 1, "lebefkw": 1, "grukw": 6, "elw2": 2, "ovd_p": 2, "hondengeleider": 2, "polizeihubschrauber": 1}, "n": 5, "e": []}, {"c": "Brand in station (Grip 2)", "s": "Groot", "v": {"gwl2wasser": 5, "foam": 1, "dlk": 3, "elw": 6, "elw3": 1, "elw2": 3, "ovd_p": 1, "gwa": 2, "fire": 12, "gwgefahrgut": 2, "spokesman": 1, "gwmesstechnik": 4, "fustw": 8}, "n": 8, "e": []}, {"c": "Brand in vuurwerkopslag", "s": "Groot", "v": {"rw": 1, "dlk": 3, "elw3": 1, "care_service": 1, "fustw": 12, "elw": 3, "gwa": 2, "hazard_response_material": 1, "fire": 10, "gwmesstechnik": 6, "industrial_response_engine": 1, "gwl2wasser": 4, "foam": 2, "gwgefahrgut": 2, "spokesman": 1, "elw2": 2, "ovd_p": 3, "industrial_response_fire_engine": 1, "polizeihubschrauber": 1}, "n": 64, "e": []}, {"c": "Brand in ziekenhuis (Grip 2)", "s": "Groot", "v": {"gwl2wasser": 5, "rw": 2, "foam": 1, "dlk": 4, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 12, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 10}, "n": 8, "e": []}, {"c": "Brand overheidsgebouw", "s": "Groot", "v": {"rw": 2, "gwl2wasser": 3, "foam": 1, "dlk": 3, "elw": 3, "elw3": 1, "elw2": 2, "ovd_p": 2, "gwa": 2, "hondengeleider": 2, "fire": 8, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 5, "fustw": 15}, "n": 4, "e": []}, {"c": "Dieseltrein met gevaarlijke stoffen ontspoord", "s": "Groot", "v": {"rw": 3, "dlk": 2, "elw3": 1, "care_service": 1, "railway_fire_engine": 4, "fustw": 14, "hazard_response_disinfection_large": 1, "elw": 4, "gwa": 2, "hazard_response_material": 1, "fire": 12, "gwmesstechnik": 6, "industrial_response_engine": 1, "gwl2wasser": 2, "foam": 3, "hazard_response_suits": 1, "gwgefahrgut": 2, "spokesman": 1, "railway_fire_equipment_container": 1, "elw2": 2, "ovd_p": 2, "industrial_response_fire_engine": 1, "polizeihubschrauber": 1}, "n": 128, "e": []}, {"c": "Duinbrand (Grip 3)", "s": "Groot", "v": {"elw": 3, "elw3": 2, "elw2": 2, "ovd_p": 2, "gwa": 2, "care_service": 1, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 6, "fustw": 6, "gw_wasserrettung": 2, "brush_truck": 10}, "n": 4, "e": []}, {"c": "Duinbrand (Grip 4)", "s": "Groot", "v": {"elw": 3, "elw3": 2, "elw2": 2, "ovd_p": 2, "gwa": 2, "care_service": 1, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 2, "bike_police": 2, "gwmesstechnik": 6, "fustw": 8, "gw_wasserrettung": 2, "brush_truck": 12}, "n": 4, "e": []}, {"c": "Explosie in woonwijk", "s": "Groot", "v": {"rw": 2, "dlk": 3, "elw3": 1, "bomb_disposal_robot": 1, "fustw": 4, "arff": 3, "elw": 5, "gwa": 2, "fire": 10, "bomb_disposal": 2, "gwmesstechnik": 4, "gwl2wasser": 2, "foam": 2, "gwgefahrgut": 2, "spokesman": 1, "elw2": 2, "ovd_p": 1, "military_police": 4}, "n": 1, "e": []}, {"c": "Explosie luchthaven", "s": "Groot", "v": {"rw": 2, "dlk": 3, "elw3": 1, "bomb_disposal_robot": 1, "fustw": 4, "arff": 3, "elw": 5, "gwa": 2, "fire": 10, "bomb_disposal": 2, "gwmesstechnik": 4, "gwl2wasser": 2, "foam": 2, "gwgefahrgut": 2, "spokesman": 1, "elw2": 2, "ovd_p": 1, "military_police": 4}, "n": 1, "e": []}, {"c": "Massa-beroerte tijdens het eten van fondue (enorm)", "s": "Groot", "v": {"rw": 1, "dlk": 2, "elw": 3, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 20, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 14}, "n": 1, "e": []}, {"c": "Natuurbrand", "s": "Groot", "v": {"rw": 4, "elw": 10, "elw3": 2, "elw2": 4, "gwa": 2, "fustw": 8, "brush_truck": 20}, "n": 1, "e": []}, {"c": "Natuurbrand (Grip 5)", "s": "Groot", "v": {"gwl2wasser": 8, "rw": 2, "elw": 3, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 2, "care_service": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 8, "brush_truck": 10}, "n": 4, "e": []}, {"c": "Olietanker in de problemen", "s": "Groot", "v": {"gwl2wasser": 2, "rw": 4, "elw": 3, "coastal_boat": 2, "elw3": 2, "elw2": 1, "gwa": 1, "ovd_p": 1, "fire": 16, "gwgefahrgut": 2, "spokesman": 1, "gwmesstechnik": 4, "fustw": 10}, "n": 1, "e": []}, {"c": "Rellen na stadsderby", "s": "Groot", "v": {"grukw": 9, "police_horse": 4, "gefkw": 2, "ovd_p": 2, "hondengeleider": 4, "polizeihubschrauber": 1, "bike_police": 3, "fustw": 15, "lebefkw": 1}, "n": 8, "e": []}, {"c": "Rellen tijdens voetbal wedstrijd", "s": "Groot", "v": {"grukw": 9, "police_horse": 8, "gefkw": 2, "ovd_p": 3, "hondengeleider": 3, "polizeihubschrauber": 1, "bike_police": 2, "fustw": 25, "lebefkw": 2}, "n": 1, "e": []}, {"c": "Terroristische aanslag", "s": "Groot", "v": {"rw": 5, "dlk": 3, "at_m": 1, "elw": 6, "elw3": 2, "elw2": 3, "ovd_p": 2, "gwa": 3, "at_o": 4, "hondengeleider": 3, "at_c": 1, "polizeihubschrauber": 2, "fire": 15, "spokesman": 2, "fustw": 25}, "n": 2, "e": []}, {"c": "Trein ontspoord", "s": "Groot", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 10, "elw": 2, "gwa": 1, "fire": 8, "search_and_rescue": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "foam": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 2, "polizeihubschrauber": 1}, "n": 128, "e": []}, {"c": "Trein ontspoord na botsing met goederentrein", "s": "Groot", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 12, "elw": 3, "gwa": 2, "hazard_response_material": 1, "fire": 10, "gwmesstechnik": 3, "gwl2wasser": 2, "foam": 1, "hazard_response_suits": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 2, "polizeihubschrauber": 1, "hazard_response_disinfection": 1}, "n": 256, "e": []}, {"c": "Uit de hand gelopen manifestatie", "s": "Groot", "v": {"grukw": 18, "police_horse": 24, "gefkw": 20, "ovd_p": 3, "hondengeleider": 8, "polizeihubschrauber": 1, "fustw": 50, "lebefkw": 3}, "n": 1, "e": []}, {"c": "ANPR hit: Gesignaleerd persoon", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "ANPR hit: Mobiel banditisme", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "ANPR hit: Rijden zonder rijbewijs", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "ANPR hit: Vervreemd voertuig", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Aanhouding verdachte in winkelcentrum", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2, "bike_police": 1}, "n": 1, "e": []}, {"c": "Aanrijding blokarters", "s": "Klein", "v": {"gw_wasserrettung": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanrijding hulpverleningsvoertuig", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Accu ontploft", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Achtervolging gestolen scooter", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Alcoholcontrole", "s": "Klein", "v": {"fustw": 5, "gefkw": 1}, "n": 1, "e": []}, {"c": "Assistentie collega", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Assistentie treinconducteur", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 4, "ovd_p": 1}, "n": 2, "e": []}, {"c": "Auto met pech op vluchtstrook", "s": "Klein", "v": {"car_carrier": 1, "any_traffic_unit": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Auto tankstation ingereden", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Auto tegen woonhuis", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Autobrand op snelweg", "s": "Klein", "v": {"elw": 1, "any_traffic_unit": 1, "fire": 1, "fustw": 1, "gwl2wasser": 1}, "n": 1, "e": []}, {"c": "Bedreiging met vuurwapen", "s": "Klein", "v": {"fustw": 3, "ovd_p": 1}, "n": 2, "e": []}, {"c": "Bergen object uit water voor politie", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "fustw": 2, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Beveiliger aangevallen", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Bladeren op spoor", "s": "Klein", "v": {"fire": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Bloemen gestolen", "s": "Klein", "v": {"fustw": 5}, "n": 1, "e": []}, {"c": "Boom op auto", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Boom op dak", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Bosbrand (Groot)", "s": "Klein", "v": {"brush_truck": 2, "elw2": 1, "elw": 1}, "n": 1, "e": []}, {"c": "Bosbrand (Middel)", "s": "Klein", "v": {"elw": 1, "brush_truck": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Bouwvakker bekneld onder bouwmateriaal", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Bouwvakker van hoogte gevallen (Spoed)", "s": "Klein", "v": {"dlk": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand bij afvalverwerker (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "gwl2wasser": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand bij zendmast", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in asielzoekerscentrum (middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in bouwmarkt (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand in bovenwoning (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in cafetaria (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in garagebox", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in keuken", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 3, "e": []}, {"c": "Brand in passagierstrein (Klein)", "s": "Klein", "v": {"railway_fire_engine": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in schuurtje", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in serverruimte (Klein)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in silo", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand in slaapkamer", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brand in spoorwissel", "s": "Klein", "v": {"railway_fire_engine": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Brand in station (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in tram (Middel)", "s": "Klein", "v": {"elw": 1, "railway_fire_engine": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in tuinhuis", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brand in vakantiewoning", "s": "Klein", "v": {"elw": 1, "dlk": 1, "gwl2wasser": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brand in werkplaats (Middel)", "s": "Klein", "v": {"elw": 1, "fire": 2, "fustw": 1, "gwa": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Brand in woonkamer", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in woonwagen (Middel)", "s": "Klein", "v": {"elw": 1, "fire": 2, "fustw": 1, "dlk": 1, "gwl2wasser": 1}, "n": 1, "e": []}, {"c": "Brand op balkon door vuurwerk", "s": "Klein", "v": {"dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brandend plezierjacht", "s": "Klein", "v": {"gw_taucher": 1, "elw": 1, "fire": 2, "fustw": 1, "boot": 1}, "n": 2, "e": []}, {"c": "Brandend pompoenveld", "s": "Klein", "v": {"elw": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brandend praalwagen", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brandende aanhangwagen", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brandende frietkraam", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandende goederenwagon (Klein)", "s": "Klein", "v": {"elw": 1, "gwgefahrgut": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Brandende personenauto in parkeergarage (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Brandende vliegtuigtrekker", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 2, "e": []}, {"c": "Brandende wegberm", "s": "Klein", "v": {"elw": 1, "any_traffic_unit": 1, "gwl2wasser": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brandstichting", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Crash op Circuit", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Diefstal personenauto", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Dier op de snelweg", "s": "Klein", "v": {"any_traffic_unit": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Droger in brand", "s": "Klein", "v": {"dlk": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Dronken bouwvakker rijdt cementwagen in de greppel", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Duinbrand", "s": "Klein", "v": {"gw_wasserrettung": 1, "brush_truck": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Fietser op de snelweg", "s": "Klein", "v": {"any_traffic_unit": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Frankenstein gespot", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Gasten hebben een vergiftigd drankje gedronken op verjaardagsfeest", "s": "Klein", "v": {"elw": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Gekantelde paaseivrachtwagen", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Gemaskerd bal trofee gestolen", "s": "Klein", "v": {"fustw": 5}, "n": 1, "e": []}, {"c": "Gesabotteerde vuurwerkshow", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Gevallen groep mountainbikers", "s": "Klein", "v": {"gw_wasserrettung": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Gevecht om de lelijkste kersttrui", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Gewonden op strand/ in de duinen", "s": "Klein", "v": {"gw_wasserrettung": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Grap veroorzaakt hartaanval", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Grote boek van Sinterklaas aangespoeld", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Heidebrand (Middel)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "brush_truck": 2}, "n": 1, "e": []}, {"c": "Hennepkwekerij aangetroffen", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Identiteitsfraude", "s": "Klein", "v": {"fustw": 3}, "n": 2, "e": []}, {"c": "Illegaal vuurwerk in huis", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Illegale plantage (klein)", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 3, "gefkw": 1, "grukw": 1}, "n": 1, "e": []}, {"c": "Illegale stoffen gevonden in buffet", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Inbraak in bedrijfspand", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 3, "e": []}, {"c": "Inbraak in woning", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 4, "ovd_p": 1}, "n": 2, "e": []}, {"c": "Inbraakalarm", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Inbraakalarm bedrijfspand", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Inbraakalarm woning", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Insluiping in woning", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Inval in woning", "s": "Klein", "v": {"fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Kelderbrand door vuurwerk", "s": "Klein", "v": {"elw": 1, "fire": 3}, "n": 1, "e": []}, {"c": "Kersenbloesems in brand", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 3}, "n": 1, "e": []}, {"c": "Kerstboom gestolen", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Kerstman vast in schoorsteen", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Kind vast in hek", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Kind vast in klimtoestel", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Kinderreanimatie", "s": "Klein", "v": {"fire": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Kitesurfer in problemen", "s": "Klein", "v": {"gw_wasserrettung": 2, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Klein vliegtuig met motorisch probleem", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "arff": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Koeien dief op de vlucht", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Koolmonoxide vrijgekomen", "s": "Klein", "v": {"elw": 1, "gwgefahrgut": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "LZV met pech op snelweg", "s": "Klein", "v": {"any_traffic_unit": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Lekkage gevaarlijke stoffen (Klein)", "s": "Klein", "v": {"gwgefahrgut": 1, "elw": 1, "fire": 1, "fustw": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Lekkende goederenwagon (Klein)", "s": "Klein", "v": {"elw": 1, "fire": 1, "gwgefahrgut": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Man over boord", "s": "Klein", "v": {"coastal_boat": 3}, "n": 1, "e": []}, {"c": "Militair betrokken bij verkeersongeluk", "s": "Klein", "v": {"military_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Militair onder invloed achter het stuur", "s": "Klein", "v": {"military_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Mogelijk explosief gevonden bij magneetvissen", "s": "Klein", "v": {"fustw": 2, "bike_police": 1}, "n": 1, "e": []}, {"c": "Monster uitgebroken", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Monteur in aanraking met hoogspanning", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Natuurbrand (Groot)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "brush_truck": 3}, "n": 1, "e": []}, {"c": "Natuurbrand (Middel)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "brush_truck": 2}, "n": 1, "e": []}, {"c": "Oefening brandweerduikers", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Onbeheerde bagage gevonden", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2, "ovd_p": 1}, "n": 4, "e": []}, {"c": "Onbevoegde op spoor", "s": "Klein", "v": {"railway_fire_engine": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Onbevoegden op spoor", "s": "Klein", "v": {"railway_fire_engine": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Ongeluk met overstekend hert", "s": "Klein", "v": {"fire": 2, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Ongeluk op mistige weg", "s": "Klein", "v": {"fire": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Ongelukken in de carnavalsoptocht", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Ongeval met sneeuwploeg", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Ongeval waterscooter", "s": "Klein", "v": {"gw_wasserrettung": 2, "boot": 1, "coastal_boat": 1}, "n": 2, "e": []}, {"c": "Ontplofte gasfles", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Open dag, groot", "s": "Klein", "v": {"fire": 2, "dlk": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Open dag, klein", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Overval tankstation", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Overvalalarm bankkantoor", "s": "Klein", "v": {"fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Overvalalarm supermarkt", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Paard in sloot", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Paaseieren vermist", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Paaseieren zoeken onder water", "s": "Klein", "v": {"gw_taucher": 2, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Paashaas in een kraan", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Paniekknop geactiveerd", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Paraglider neergestort", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Parkeergarage onder water", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Personen geraakt door weggevlogen parasol", "s": "Klein", "v": {"gw_wasserrettung": 3, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Personen op dak van school", "s": "Klein", "v": {"dlk": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Personen opgesloten in sauna", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Personen vallen voorbijgangers lastig", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Personenauto in sloot", "s": "Klein", "v": {"gw_taucher": 1, "elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 4, "e": []}, {"c": "Persoon bekneld in machine", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld onder boom", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld onder heftruck", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld onder kerstpakketten", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld tussen containers", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Persoon geraakt door schroef van boot", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "fustw": 2, "boot": 1}, "n": 1, "e": []}, {"c": "Persoon met mes gezien", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Persoon onwel in attractie", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Persoon onwel na mixen mest", "s": "Klein", "v": {"gwgefahrgut": 1, "gwmesstechnik": 1, "elw": 1, "fire": 1, "fustw": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Persoon opgesloten in sauna", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon vast in roltrap", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Persoon vermist rondom mui", "s": "Klein", "v": {"gw_wasserrettung": 1, "polizeihubschrauber": 1, "fustw": 2, "boot": 1}, "n": 2, "e": []}, {"c": "Picknick met kaarslicht veroorzaakt bosbrand", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Prioriteit: paasei-jacht", "s": "Klein", "v": {"fustw": 6}, "n": 1, "e": []}, {"c": "Racefans houden straatrace", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Racistisch gezang van fans op de tribune", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Ramkraak", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Reanimatie", "s": "Klein", "v": {"fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Reanimatie drenkeling", "s": "Klein", "v": {"fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Rookontwikkeling in vrachtruim vliegtuig", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Ruzie op terras", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Ruzie tijdens uitgaansnacht", "s": "Klein", "v": {"ovd_p": 1, "hondengeleider": 1, "fustw": 3, "bike_police": 1}, "n": 1, "e": []}, {"c": "Schietincident", "s": "Klein", "v": {"fustw": 5, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Schoorsteenbrand woning met rietenkap", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Sneeuwploeg gekanteld op provinciale weg", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Speler vermist", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Spookrijder", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Stankoverlast", "s": "Klein", "v": {"elw": 1, "gwgefahrgut": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Steekincident", "s": "Klein", "v": {"fustw": 5, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Stilgevallen trein", "s": "Klein", "v": {"railway_fire_engine": 4}, "n": 1, "e": []}, {"c": "Storing in attractie pretpark", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Straat afzetten voor politie", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Straat onder water", "s": "Klein", "v": {"fire": 1, "gwl2wasser": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Surfer vermist", "s": "Klein", "v": {"coastal_boat": 2, "gw_wasserrettung": 2}, "n": 1, "e": []}, {"c": "Valse kaartjes race in verkoop", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Vechtpartij in bankkantoor", "s": "Klein", "v": {"fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Verdacht pakket gevonden bij de ingang van het sportstadion", "s": "Klein", "v": {"fustw": 5}, "n": 1, "e": []}, {"c": "Verdacht vaartuig in de haven", "s": "Klein", "v": {"military_police": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Verdachte situatie", "s": "Klein", "v": {"fustw": 2, "bike_police": 1}, "n": 3, "e": []}, {"c": "Verdachte situatie luchthaven", "s": "Klein", "v": {"military_police": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Verjaardagsgast vermist", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verjaardagsgasten hebben versiering gestolen", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Verkeersongeval door gevallen bladeren", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Verkeersongeval door gladheid", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 3, "e": []}, {"c": "Verkeersongeval door verliefdheid", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verkeersongeval met gevaarlijke stoffen (Klein)", "s": "Klein", "v": {"gwgefahrgut": 1, "elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Verkeersongeval met lijnbus en fietser", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 3, "e": []}, {"c": "Verkeersongeval met sportersbus", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Verkeersongeval met vrachtwagen en fietser", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 4, "e": []}, {"c": "Verkeersruzie", "s": "Klein", "v": {"fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Verlaten kinderfiets langs waterkant", "s": "Klein", "v": {"elw": 1, "fire": 1, "gw_taucher": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Verlaten kleding langs waterkant", "s": "Klein", "v": {"elw": 1, "fire": 1, "gw_taucher": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Verlaten slee langs waterkant", "s": "Klein", "v": {"elw": 1, "fire": 1, "gw_taucher": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Verlovingsring gestolen tijdens aanzoek", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Vermist persoon", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Vermist persoon op begraafplaats", "s": "Klein", "v": {"fire": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verward persoon bij spoor", "s": "Klein", "v": {"fustw": 3}, "n": 2, "e": []}, {"c": "Vliegtuig met brandgeur in cabine", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Vliegtuig met hydraulisch probleem", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Vliegtuig met rook in cabine", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Vluchtende verdachte in voetgangersgebied", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2, "bike_police": 1}, "n": 1, "e": []}, {"c": "Voedselvergiftiging door vergiftigd snoep", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Voetganger aangereden door rendier", "s": "Klein", "v": {"elw": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Voetganger onder tram", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Voetganger op de snelweg", "s": "Klein", "v": {"any_traffic_unit": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Vogel vast in schoorsteen", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Voorzorgslanding klein vliegtuig", "s": "Klein", "v": {"elw_airport": 1, "arff": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Vrachtwagen gekanteld", "s": "Klein", "v": {"elw": 1, "any_traffic_unit": 1, "fire": 1, "fustw": 1, "rw": 1}, "n": 4, "e": []}, {"c": "Vrachtwagen gekanteld door ijzel", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Vrachtwagen met eierpunch gekanteld", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Vrachtwagen omgevallen in de greppel", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Vrachtwagen omgewaaid", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Vreemde lucht", "s": "Klein", "v": {"elw": 1, "fire": 1, "gwgefahrgut": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Vreemde lucht portiek", "s": "Klein", "v": {"fire": 2, "dlk": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Vuur door elektrische verjaardagsversiering (groot)", "s": "Klein", "v": {"elw": 1, "fire": 4}, "n": 1, "e": []}, {"c": "Vuurwerkoverlast", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Wasmachine in brand", "s": "Klein", "v": {"dlk": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Wielrenner aangereden", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Wielrenner ongeluk tijdens wedstrijd", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Winkeloverval door geesten", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Woningbrand", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Zoektocht naar verdwenen vriendje", "s": "Klein", "v": {"hondengeleider": 1, "polizeihubschrauber": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Zwemmer in nood", "s": "Klein", "v": {"fire": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Zwemmer vermist", "s": "Klein", "v": {"gw_wasserrettung": 1, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Zwemmer vermist (Klein)", "s": "Klein", "v": {"gw_taucher": 1, "elw": 1, "fire": 1, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Blikseminslag rietenkap (Grip 1)", "s": "Middel", "v": {"spokesman": 1, "fustw": 5, "dlk": 1, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "rw": 1, "ovd_p": 1, "gwmesstechnik": 2, "gwl2wasser": 2, "fire": 6}, "n": 8, "e": []}, {"c": "Blikseminslag rietenkap (Grip 2)", "s": "Middel", "v": {"spokesman": 1, "fustw": 7, "dlk": 2, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "rw": 1, "ovd_p": 1, "gwmesstechnik": 4, "gwl2wasser": 2, "fire": 8}, "n": 8, "e": []}, {"c": "Blikseminslag rietenkap (Groot)", "s": "Klein", "v": {"spokesman": 1, "fustw": 2, "dlk": 1, "thatched_firefighting": 1, "gwa": 1, "elw": 1, "rw": 1, "gwmesstechnik": 1, "gwl2wasser": 1, "fire": 4}, "n": 2, "e": []}, {"c": "Blikseminslag rietenkap (Klein)", "s": "Klein", "v": {"fire": 1, "thatched_firefighting": 1}, "n": 1, "e": []}, {"c": "Blikseminslag rietenkap (Middel)", "s": "Klein", "v": {"dlk": 1, "thatched_firefighting": 1, "elw": 1, "rw": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Grip 1)", "s": "Middel", "v": {"spokesman": 1, "fustw": 4, "dlk": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "fire": 7}, "n": 8, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Grip 2)", "s": "Middel", "v": {"spokesman": 1, "fustw": 7, "dlk": 2, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 2, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "fire": 10}, "n": 8, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Groot)", "s": "Klein", "v": {"fustw": 2, "dlk": 1, "thatched_firefighting": 1, "gwa": 1, "elw": 1, "gwmesstechnik": 1, "gwl2wasser": 2, "fire": 4}, "n": 2, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Klein)", "s": "Klein", "v": {"fire": 1, "thatched_firefighting": 1}, "n": 1, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Middel)", "s": "Klein", "v": {"dlk": 1, "thatched_firefighting": 1, "fire": 2, "elw": 1}, "n": 1, "e": []}, {"c": "Ezel in sloot", "s": "Klein", "v": {"rw": 1, "gw_taucher": 1, "livestock_hoist": 1, "fire": 1}, "n": 2, "e": []}, {"c": "Geit in gierput", "s": "Klein", "v": {"livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Koe in gierput", "s": "Klein", "v": {"rw": 1, "livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Koe in sloot", "s": "Klein", "v": {"rw": 1, "livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Rietenkapbrand (Klein)", "s": "Klein", "v": {"fire": 1, "thatched_firefighting": 1}, "n": 1, "e": []}, {"c": "Rietkapbrand (Grip 1)", "s": "Middel", "v": {"spokesman": 1, "fustw": 4, "dlk": 1, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 2, "gwl2wasser": 2, "fire": 6}, "n": 8, "e": []}, {"c": "Rietkapbrand (Grip 2)", "s": "Middel", "v": {"spokesman": 1, "fustw": 6, "dlk": 2, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "fire": 8}, "n": 8, "e": []}, {"c": "Rietkapbrand (Groot)", "s": "Klein", "v": {"spokesman": 1, "fustw": 2, "dlk": 1, "gwgefahrgut": 1, "thatched_firefighting": 1, "gwa": 1, "elw": 1, "gwmesstechnik": 1, "gwl2wasser": 1, "fire": 4}, "n": 2, "e": []}, {"c": "Rietkapbrand (Middel)", "s": "Klein", "v": {"dlk": 1, "thatched_firefighting": 1, "fire": 2, "elw": 1}, "n": 1, "e": []}, {"c": "Schaap in sloot", "s": "Klein", "v": {"livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Varken in gierput", "s": "Klein", "v": {"rw": 1, "livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Brand in diervoerfabriek (Grip 1)", "s": "Middel", "v": {"gwa": 1, "gwl2wasser": 3, "gwgefahrgut": 1, "fustw": 5, "elw": 2, "gwmesstechnik": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "spokesman": 1, "fire": 6, "dlk": 2}, "n": 2, "e": []}, {"c": "Brand in diervoerfabriek (Groot)", "s": "Klein", "v": {"gwa": 1, "gwl2wasser": 2, "gwgefahrgut": 1, "fustw": 2, "elw": 1, "gwmesstechnik": 1, "spokesman": 1, "fire": 4, "dlk": 1}, "n": 1, "e": []}, {"c": "Brand in diervoerfabriek (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "fustw": 1, "elw": 1, "fire": 3, "dlk": 1}, "n": 1, "e": []}];
+        const PRESETS = [{"c": "Aanhanger losgeschoten", "s": "Klein", "v": {"fire": 1, "elw": 1, "any_traffic_unit": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Aanrijding door ijzel", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanrijding door trein", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanrijding meerdere vrachtwagens", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 2, "traffic_patrol": 2, "fire": 2, "fustw": 4}, "n": 1, "e": []}, {"c": "Aanrijding met zwaar letsel", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 1, "traffic_patrol": 1, "fire": 2, "fustw": 6}, "n": 8, "e": []}, {"c": "Aanrijding snelweg, veroorzaker gevlucht", "s": "Klein", "v": {"rw": 1, "any_traffic_unit": 2, "traffic_patrol": 1, "fire": 1, "polizeihubschrauber": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Aanrijding voetganger (> 30km/h)", "s": "Klein", "v": {"ovd_p": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Aanvaring met luxe jachtschip (Grip 4)", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring veerpont", "s": "Klein", "v": {"coastal_boat": 5, "boot": 2, "gw_wasserrettung": 5}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met kajuitboot (Grip 3)", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met vlet (Grip 3)", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met waterbus (Grip 3)", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met watertaxi (Grip 3)", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "care_service": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Achtervolging personenauto", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "traffic_patrol": 3, "fustw": 4}, "n": 2, "e": []}, {"c": "Ambulance betrokken bij ongeluk", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "ovd_p": 1, "polizeihubschrauber": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Auto tegen pijlwagen gereden", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 1, "traffic_patrol": 1, "fire": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Ballonnen opblazen voor verjaardagsfeest", "s": "Klein", "v": {"rw": 2, "dlk": 2, "gwa": 1, "fire": 3, "fustw": 2}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Begeleiding demonstratie (klein)", "s": "Klein", "v": {"grukw": 3, "police_horse": 2, "fustw": 3, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Bestuurder op telefoon botst op vrachtwagen", "s": "Klein", "v": {"rw": 2, "elw": 1, "fire": 4, "fustw": 6}, "n": 1, "e": []}, {"c": "Bliksem treft konijnenhol", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Bloemenveld in brand", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "rw": 1, "fire": 7}, "n": 1, "e": []}, {"c": "Bom uit WOII gevonden", "s": "Klein", "v": {"rw": 1, "elw": 2, "ovd_p": 1, "fire": 3, "spokesman": 1, "bomb_disposal": 1, "fustw": 3, "military_police": 2}, "n": 1, "e": []}, {"c": "Bootje op drift", "s": "Klein", "v": {"gw_taucher": 1, "dlk": 1, "fire": 2, "boot": 1, "fustw": 2, "gw_wasserrettung": 2}, "n": 1, "e": []}, {"c": "Bosbrand (Grip 1)", "s": "Klein", "v": {"elw": 1, "elw3": 1, "elw2": 1, "care_service": 1, "fustw": 2, "brush_truck": 4}, "n": 4, "e": []}, {"c": "Brand bij afvalverwerker (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 3, "gwgefahrgut": 1, "gwmesstechnik": 1}, "n": 1, "e": []}, {"c": "Brand in appartementencomplex", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in bouwmarkt (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in bovenleiding", "s": "Klein", "v": {"dlk": 1, "elw": 1, "fire": 2, "railway_fire_engine": 2, "railway_electric_response": 1}, "n": 1, "e": []}, {"c": "Brand in cafetaria (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in flatwoning", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in garagebedrijf", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 1}, "n": 3, "e": []}, {"c": "Brand in gevangenis", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "polizeihubschrauber": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand in hotel", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 3, "fustw": 2}, "n": 3, "e": []}, {"c": "Brand in kantoorgebouw", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 1, "elw2": 1, "gwa": 1, "fire": 4}, "n": 3, "e": []}, {"c": "Brand in kelder", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in landbouwschuur", "s": "Klein", "v": {"rw": 1, "foam": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand in manege", "s": "Klein", "v": {"gwl2wasser": 1, "foam": 1, "dlk": 1, "elw": 1, "elw2": 1, "fire": 3}, "n": 2, "e": []}, {"c": "Brand in museum", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in parkeergarage", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 3, "e": []}, {"c": "Brand in passagierstrein (Middel)", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 2, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in schoolgebouw", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in snackbar", "s": "Klein", "v": {"fire": 3, "elw": 1, "dlk": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in sporthal", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4}, "n": 3, "e": []}, {"c": "Brand in stacaravan", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in supermarkt", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in tram (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "gwa": 1, "fire": 4, "railway_fire_engine": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Brand in transformatorhuisje", "s": "Klein", "v": {"rw": 2, "elw": 1, "elw3": 1, "elw2": 1, "fire": 3, "fustw": 2}, "n": 2, "e": []}, {"c": "Brand in verzorgingshuis", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 3, "e": []}, {"c": "Brand in werkplaats (Groot)", "s": "Klein", "v": {"gwl2wasser": 1, "rw": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in ziekenhuis (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand op binnenvaartschip", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "foam": 1, "elw": 1, "elw2": 1, "gwa": 1, "fire": 3, "gwgefahrgut": 1, "spokesman": 1, "boot": 2}, "n": 2, "e": []}, {"c": "Brand op zomerkamp", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "gwa": 1, "fire": 6, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandend dak", "s": "Klein", "v": {"dlk": 1, "elw": 1, "elw2": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brandend klein vliegtuig", "s": "Klein", "v": {"elw": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "fustw": 2, "arff": 1}, "n": 1, "e": []}, {"c": "Brandende caravan", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "any_traffic_unit": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandende goederenwagon (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Brandende laadpaal", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 2, "bike_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandende vrachtwagen (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "foam": 1, "car_carrier_large": 1, "elw": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Carnaval beveiliging", "s": "Klein", "v": {"fire": 4, "elw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Diepzeemijn aangetroffen", "s": "Klein", "v": {"ovd_p": 1, "bomb_disposal": 1, "bomb_disposal_robot": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Doorzoeking risicopand", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Dronken persoon gooit met terrasmeubilair", "s": "Klein", "v": {"police_horse": 8, "fustw": 3}, "n": 1, "e": []}, {"c": "Drugsafval aangetroffen", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Drugslab aangetroffen", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "gwgefahrgut": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Duiker vermist", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Duinbrand (Middel)", "s": "Klein", "v": {"gw_wasserrettung": 2, "elw": 1, "brush_truck": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Fietser onder tram", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Gaslekkage", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Geplande aanhouding vuurwapengevaarlijke verdachte", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "at_c": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Geweld tegen hulpverleners", "s": "Klein", "v": {"ovd_p": 1, "fustw": 6, "hondengeleider": 2}, "n": 1, "e": []}, {"c": "Graffitispuiters betrapt", "s": "Klein", "v": {"ovd_p": 1, "fustw": 6, "hondengeleider": 2}, "n": 1, "e": []}, {"c": "Grenscontrole", "s": "Klein", "v": {"military_police": 6, "police_motorcycle": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Groep kitesurfers in problemen", "s": "Klein", "v": {"gw_wasserrettung": 3, "boot": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Groep zwemmers in problemen", "s": "Klein", "v": {"gw_wasserrettung": 2, "boot": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Grote vechtpartij", "s": "Klein", "v": {"ovd_p": 1, "fustw": 6, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Hazenbijeenkomst in Paaseistad", "s": "Klein", "v": {"fire": 2, "fustw": 8}, "n": 1, "e": [], "vt": {"100": 2, "101": 2}}, {"c": "Heidebrand (Groot)", "s": "Klein", "v": {"gwl2wasser": 2, "elw": 1, "spokesman": 1, "fustw": 2, "brush_truck": 4}, "n": 1, "e": []}, {"c": "Helikopter crash", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw_airport": 1, "ovd_p": 1, "fire": 2, "fustw": 4, "arff": 2}, "n": 1, "e": []}, {"c": "Illegale raceauto op snelweg", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 10, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Ingestort konijnenhol", "s": "Klein", "v": {"rw": 1, "elw": 2, "fire": 4, "fustw": 2}, "n": 1, "e": []}, {"c": "Instap na bedreiging (Hoog risico)", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Kettingbotsing", "s": "Klein", "v": {"rw": 2, "elw": 1, "any_traffic_unit": 2, "traffic_patrol": 1, "fire": 4, "fustw": 4}, "n": 3, "e": []}, {"c": "Klein vliegtuig neergestort", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "fustw": 2, "arff": 1}, "n": 3, "e": []}, {"c": "Koolmonoxidevergiftiging in een school", "s": "Klein", "v": {"elw": 2, "elw2": 1, "gwa": 2, "fire": 6, "fustw": 3}, "n": 1, "e": []}, {"c": "Koperdiefstal", "s": "Klein", "v": {"ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Lek/zinken plezierjacht", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Lekkage gevaarlijke stoffen (Middel)", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw2": 1, "ovd_p": 1, "hazard_response_material": 1, "fire": 2, "gwgefahrgut": 1, "spokesman": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Lekkende LPG installatie", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Lekkende chocoladevrachtwagen", "s": "Klein", "v": {"rw": 2, "elw": 2, "fire": 4, "gwgefahrgut": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Lekkende tankwagen", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 3, "e": []}, {"c": "Massa-beroerte tijdens het eten van fondue (groot)", "s": "Klein", "v": {"rw": 1, "elw": 1, "gwa": 1, "fire": 3, "gwmesstechnik": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Massa-beroerte tijdens het eten van fondue (klein)", "s": "Klein", "v": {"elw": 1, "gwa": 1, "fire": 2, "gwmesstechnik": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Mensen vermist op de dansvloer", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "ovd_p": 1, "hondengeleider": 2, "fire": 4, "fustw": 4}, "n": 1, "e": []}, {"c": "Nablussen natuur", "s": "Klein", "v": {"gwl2wasser": 1, "elw": 1, "fire": 5}, "n": 1, "e": []}, {"c": "Natuurbrand (Zeer Groot)", "s": "Klein", "v": {"gwl2wasser": 2, "elw": 2, "elw2": 1, "spokesman": 1, "fustw": 2, "brush_truck": 4}, "n": 1, "e": []}, {"c": "Oefening Handcrew", "s": "Klein", "v": {"brush_truck": 4}, "n": 1, "e": []}, {"c": "Oefening brandweer", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "fire": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Omgeslagen Zeilboot", "s": "Klein", "v": {"gw_taucher": 2, "dlk": 1, "elw": 1, "fire": 1, "boot": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Ongeregeldheden in de wijk", "s": "Klein", "v": {"grukw": 6, "bike_police": 1, "fustw": 6, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Ongeregeldheden voetbalsupporters horeca", "s": "Klein", "v": {"grukw": 6, "police_horse": 1, "gefkw": 1, "ovd_p": 1, "fustw": 4, "lebefkw": 1}, "n": 12, "e": []}, {"c": "Ongeval in septic tank", "s": "Klein", "v": {"rw": 1, "elw": 1, "gwgefahrgut": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Ongeval met hete luchtballon", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "fire": 2, "spokesman": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Ongeval met trein en personenauto", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 4, "car_carrier": 1, "fustw": 3}, "n": 3, "e": []}, {"c": "Ongeval met trein en persoon", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Ongeval met trein en vrachtwagen (THV Klein)", "s": "Klein", "v": {"rw": 1, "car_carrier_large": 1, "elw": 1, "fire": 1, "railway_fire_engine": 3, "fustw": 2, "railway_electric_response": 1}, "n": 2, "e": []}, {"c": "Ongeval met trein en vrachtwagen (THV Middel)", "s": "Klein", "v": {"rw": 1, "car_carrier_large": 1, "elw": 1, "fire": 2, "railway_fire_engine": 2, "fustw": 3, "railway_electric_response": 1}, "n": 4, "e": []}, {"c": "Onrust in de wijk", "s": "Klein", "v": {"grukw": 3, "bike_police": 1, "fustw": 4, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Ontruimen kraakpand", "s": "Klein", "v": {"grukw": 3, "gefkw": 1, "ovd_p": 1, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Ontruimingsoefening", "s": "Klein", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "ovd_p": 1, "fire": 2, "fustw": 3}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Opvang slachtoffers", "s": "Klein", "v": {"fire": 1, "ovd_p": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Overval bankkantoor", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Overval frietkraam", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Overval winkel", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5}, "n": 2, "e": []}, {"c": "Paniek op de tribune", "s": "Klein", "v": {"gefkw": 1, "police_horse": 4, "fustw": 5}, "n": 1, "e": []}, {"c": "Peperkoekhuis in brand", "s": "Klein", "v": {"fire": 5, "elw": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Personen aangetroffen in vrachtwagen", "s": "Klein", "v": {"gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "polizeihubschrauber": 1, "fustw": 8}, "n": 2, "e": []}, {"c": "Personen onwel door hitte", "s": "Klein", "v": {"elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Personenauto te water", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 3}, "n": 7, "e": []}, {"c": "Persoon bekneld in bouwkraan", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Persoon bekneld in gierput", "s": "Klein", "v": {"rw": 1, "hazard_response_suits": 1, "ovd_p": 1, "gwa": 1, "hazard_response_material": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 4, "hazard_response_disinfection": 1}, "n": 8, "e": []}, {"c": "Persoon bekneld onder garagedeur", "s": "Klein", "v": {"rw": 1, "elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Persoon onwel in hijskraan", "s": "Klein", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw2": 1, "fire": 1, "spokesman": 1, "bike_police": 2, "fustw": 1, "police_motorcycle": 1}, "n": 1, "e": []}, {"c": "Persoon te water", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 2, "fustw": 1}, "n": 5, "e": []}, {"c": "Persoon vermist", "s": "Klein", "v": {"grukw": 6, "ovd_p": 1, "polizeihubschrauber": 1, "fustw": 3, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Plofkraak", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "polizeihubschrauber": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Politie aangevallen met illegaal vuurwerk", "s": "Klein", "v": {"grukw": 3, "ovd_p": 1, "hondengeleider": 2, "fustw": 5, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Protesterende elven", "s": "Klein", "v": {"grukw": 6, "ovd_p": 1, "hondengeleider": 1, "fustw": 3, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Rieten kap woning in brand door vuurwerk", "s": "Klein", "v": {"dlk": 1, "elw": 1, "gwa": 1, "fire": 5, "fustw": 2}, "n": 1, "e": []}, {"c": "Schipbreukeling vermist", "s": "Klein", "v": {"coastal_boat": 3, "gw_wasserrettung": 2}, "n": 1, "e": []}, {"c": "Scootmobiel te water", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "dlk": 1, "elw2": 1, "fire": 1, "boot": 1, "bike_police": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Steekincident (groot)", "s": "Klein", "v": {"elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fustw": 10}, "n": 2, "e": []}, {"c": "Straatroof", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Supporters met vuurwerk op tribune", "s": "Klein", "v": {"grukw": 2, "gefkw": 1, "ovd_p": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Toezicht Horeca", "s": "Klein", "v": {"police_horse": 4, "hondengeleider": 1, "bike_police": 1, "fustw": 3}, "n": 3, "e": []}, {"c": "Toezicht bij manifestatie", "s": "Klein", "v": {"grukw": 6, "ovd_p": 1, "bike_police": 1, "fustw": 3, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Toezicht/Begeleiding Surfwedstrijd", "s": "Klein", "v": {"gw_wasserrettung": 4, "boot": 4, "fustw": 2}, "n": 1, "e": [], "vt": {"100": 1}}, {"c": "Vader vermist", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Valentijnsdecoraties in restaurant in brand gevlogen", "s": "Klein", "v": {"fire": 5, "elw": 1, "dlk": 1}, "n": 1, "e": []}, {"c": "Vat met gevaarlijke stoffen omgevallen", "s": "Klein", "v": {"rw": 1, "foam": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 4, "e": []}, {"c": "Vechtpartij horecagebied", "s": "Klein", "v": {"police_horse": 4, "bike_police": 2, "fustw": 7, "hondengeleider": 1}, "n": 2, "e": []}, {"c": "Vechtpartij in café", "s": "Klein", "v": {"ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 1, "e": []}, {"c": "Verdacht pakket bij voordeur", "s": "Klein", "v": {"ovd_p": 2, "fire": 1, "bomb_disposal_robot": 1, "bomb_disposal": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Verdacht pakket luchthaven", "s": "Klein", "v": {"bomb_disposal": 1, "fustw": 1, "military_police": 3}, "n": 1, "e": []}, {"c": "Verdachte vaten aangetroffen", "s": "Klein", "v": {"elw": 1, "ovd_p": 1, "fire": 1, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Vergeten jubileum", "s": "Klein", "v": {"grukw": 3, "gefkw": 1, "ovd_p": 1, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Verhoog bewustzijn van het bestaan van 112 onder kinderen", "s": "Klein", "v": {"rw": 1, "police_horse": 1, "dlk": 1, "elw": 1, "gefkw": 1, "hondengeleider": 1, "fire": 1, "spokesman": 1, "bike_police": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Verjaardagsgasten hebben taart gestolen", "s": "Klein", "v": {"gefkw": 1, "ovd_p": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Verkeerscontrole", "s": "Klein", "v": {"police_motorcycle": 6}, "n": 1, "e": []}, {"c": "Verkeersongeval met beknelling", "s": "Klein", "v": {"gw_taucher": 1, "rw": 1, "elw": 1, "fire": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Verkeersongeval met gevaarlijke stoffen (middel)", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Verkeersongeval met touringcar", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "any_traffic_unit": 2, "ovd_p": 1, "fire": 3, "fustw": 4}, "n": 11, "e": []}, {"c": "Verkeersruzie loopt uit de hand", "s": "Klein", "v": {"gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Verward persoon (Hoge dreiging)", "s": "Klein", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Verward persoon op dak", "s": "Klein", "v": {"dlk": 1, "at_m": 1, "ovd_p": 1, "at_o": 4, "at_c": 1, "fire": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Vliegtuig buiten start-/landingsbaan beland", "s": "Klein", "v": {"elw": 1, "elw_airport": 1, "fire": 1, "fustw": 2, "arff": 2}, "n": 1, "e": []}, {"c": "Voertuigbrand in tunnel", "s": "Klein", "v": {"gwl2wasser": 1, "foam": 1, "elw": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Voetbalwedstrijd", "s": "Klein", "v": {"grukw": 3, "police_horse": 4, "lebefkw": 1}, "n": 2, "e": [], "vt": {"100": 1}}, {"c": "Vrachtwagen te water", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 1, "fustw": 2}, "n": 6, "e": []}, {"c": "Vrachtwagen vast in tunnel", "s": "Klein", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 1, "fire": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Vrachtwagenongeval met zwaar letsel", "s": "Klein", "v": {"rw": 1, "elw": 1, "any_traffic_unit": 1, "traffic_patrol": 1, "fire": 2, "fustw": 2}, "n": 2, "e": []}, {"c": "Vreemde lucht in kantoorgebouw", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Vreemde lucht in winkelcentrum", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Vuilniswagen aangestoken", "s": "Klein", "v": {"fire": 3, "elw": 1, "foam": 1, "fustw": 6}, "n": 2, "e": []}, {"c": "Wateroverlast", "s": "Klein", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Watersporter vermist", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "fire": 1, "boot": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Windsurfer vermist", "s": "Klein", "v": {"gw_wasserrettung": 4, "polizeihubschrauber": 1, "boot": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Woningoverval", "s": "Klein", "v": {"polizeihubschrauber": 1, "ovd_p": 1, "fustw": 5, "hondengeleider": 1}, "n": 2, "e": []}, {"c": "Zoekactie vermist persoon", "s": "Klein", "v": {"police_horse": 2, "coastal_boat": 1, "gw_wasserrettung": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Zwemmer vermist (Grip 1)", "s": "Klein", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 2}, "n": 2, "e": []}, {"c": "Zwemmer vermist (Middel)", "s": "Klein", "v": {"gw_taucher": 2, "rw": 1, "dlk": 1, "elw": 1, "fire": 2, "boot": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanhouding georganiseerde misdaad", "s": "Middel", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "Aankondiging voor nieuwe 112 functionaliteiten", "s": "Middel", "v": {"grukw": 3, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "fustw": 10, "lebefkw": 1}, "n": 1, "e": [], "vt": {"100": 1}}, {"c": "Aanrijding bus en tram", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 2, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 8, "spokesman": 1, "railway_fire_engine": 3, "fustw": 10}, "n": 4, "e": []}, {"c": "Aanrijding trein & betonmixer", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 8, "elw": 2, "fire": 8, "gwmesstechnik": 2, "car_carrier_large": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 2, "polizeihubschrauber": 1}, "n": 32, "e": []}, {"c": "Aanvaring 2 vrachtschepen (Grip 4)", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "coastal_boat": 3, "elw": 1, "elw2": 1, "elw3": 1, "ovd_p": 1, "care_service": 1, "fire": 2, "polizeihubschrauber": 1, "spokesman": 1, "boot": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Aanvaring met rondvaartboot (Grip 3)", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met passagiersschip (Grip 4)", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "coastal_boat": 3, "elw": 1, "elw2": 1, "elw3": 1, "ovd_p": 1, "care_service": 1, "fire": 3, "gwgefahrgut": 1, "polizeihubschrauber": 1, "spokesman": 1, "boot": 2, "gwmesstechnik": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Aanvaring vrachtschip met veerboot (Grip 4)", "s": "Middel", "v": {"gw_taucher": 4, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "care_service": 1, "fire": 2, "boot": 2, "fustw": 4}, "n": 2, "e": []}, {"c": "Achtervolging eindigt met botstende verdachte in supermarkt, waterleiding breekt", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw": 1, "ovd_p": 1, "fire": 4, "polizeihubschrauber": 1, "fustw": 8}, "n": 1, "e": []}, {"c": "Achtervolging gevaarlijke verdachte", "s": "Middel", "v": {"gefkw": 1, "ovd_p": 1, "traffic_patrol": 2, "hondengeleider": 2, "polizeihubschrauber": 1, "fustw": 15}, "n": 2, "e": []}, {"c": "Akkerbrand", "s": "Middel", "v": {"elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 2, "gwa": 2, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 2, "e": []}, {"c": "Ammoniakalarm in opslagloods", "s": "Middel", "v": {"rw": 1, "hazard_response_suits": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "hazard_response_material": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4, "hazard_response_disinfection": 1}, "n": 8, "e": []}, {"c": "Begeleiding demonstratie (groot)", "s": "Middel", "v": {"grukw": 6, "police_horse": 5, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "fustw": 4, "lebefkw": 1}, "n": 2, "e": [], "vt": {"100": 1}}, {"c": "Begeleiding supporters", "s": "Middel", "v": {"grukw": 6, "police_horse": 4, "gefkw": 1, "ovd_p": 2, "hondengeleider": 2, "bike_police": 1, "fustw": 10, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Binnenstap drugspand met vuurwapengevaarlijke verdachte", "s": "Middel", "v": {"at_m": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "polizeihubschrauber": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Bouwsteiger ingestort", "s": "Middel", "v": {"rw": 1, "dlk": 2, "elw": 2, "fire": 4, "search_and_rescue": 1, "fustw": 5}, "n": 2, "e": []}, {"c": "Brand bij afvalverwerker (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "care_service": 1, "gwa": 1, "fire": 8, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand bij afvalverwerker (Grip 3)", "s": "Middel", "v": {"gwl2wasser": 4, "rw": 1, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "care_service": 1, "gwa": 1, "fire": 12, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand bij afvalverwerker (Zeer Groot)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1}, "n": 1, "e": []}, {"c": "Brand in Bibliotheek", "s": "Middel", "v": {"rw": 2, "foam": 2, "elw": 2, "elw2": 1, "fire": 6, "spokesman": 1, "bike_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in Silo", "s": "Middel", "v": {"rw": 1, "foam": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand in bioscoop", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 2, "elw": 2, "elw3": 1, "ovd_p": 2, "elw2": 1, "gwa": 1, "fire": 5, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 2, "fustw": 9}, "n": 2, "e": []}, {"c": "Brand in boerderij", "s": "Middel", "v": {"dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 2, "e": []}, {"c": "Brand in bouwmarkt (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "foam": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "care_service": 1, "gwa": 1, "fire": 4, "gwmesstechnik": 1, "fustw": 2}, "n": 8, "e": []}, {"c": "Brand in bouwmarkt (Grip 2)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "foam": 2, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 8, "e": []}, {"c": "Brand in chocolade-eierenfabriek", "s": "Middel", "v": {"gwl2wasser": 4, "dlk": 4, "elw": 4, "elw2": 1, "gwa": 2, "fire": 16, "fustw": 8}, "n": 1, "e": []}, {"c": "Brand in fabriekshal", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 6, "e": []}, {"c": "Brand in gasverdeelstation", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "foam": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 2, "gwa": 1, "care_service": 1, "hazard_response_material": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 8, "industrial_response_engine": 1}, "n": 32, "e": []}, {"c": "Brand in graandroger", "s": "Middel", "v": {"gwl2wasser": 1, "foam": 1, "rw": 1, "dlk": 2, "elw": 2, "elw2": 1, "gwa": 2, "fire": 4, "fustw": 2}, "n": 1, "e": [], "vt": {"100": 1}}, {"c": "Brand in hangaar", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "gwa": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand in hoogspanningsruimte", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 3}, "n": 1, "e": []}, {"c": "Brand in hooischuur", "s": "Middel", "v": {"foam": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 4, "e": []}, {"c": "Brand in houtzagerij", "s": "Middel", "v": {"gwl2wasser": 1, "foam": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 3, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 3}, "n": 4, "e": []}, {"c": "Brand in kerkgebouw", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 2, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "fustw": 2}, "n": 6, "e": []}, {"c": "Brand in magazijn", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 6, "gwgefahrgut": 1, "gwmesstechnik": 2, "fustw": 2}, "n": 4, "e": []}, {"c": "Brand in meubelzaak", "s": "Middel", "v": {"gwl2wasser": 4, "foam": 1, "dlk": 3, "elw": 3, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 1, "e": []}, {"c": "Brand in nachtclub", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 1, "elw3": 1, "ovd_p": 1, "elw2": 1, "gwa": 1, "hondengeleider": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 3, "e": []}, {"c": "Brand in opslagloods", "s": "Middel", "v": {"gwl2wasser": 4, "foam": 3, "rw": 2, "dlk": 4, "elw": 4, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 16}, "n": 1, "e": []}, {"c": "Brand in passagierstrein (Grip 1)", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 10, "elw": 2, "gwa": 1, "fire": 6, "gwmesstechnik": 3, "gwl2wasser": 2, "foam": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "elw2": 1, "ovd_p": 2}, "n": 16, "e": []}, {"c": "Brand in passagierstrein (Groot)", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "elw": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "spokesman": 1, "railway_fire_engine": 2, "fustw": 4, "railway_electric_response": 1}, "n": 2, "e": []}, {"c": "Brand in restaurant", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 3}, "n": 1, "e": []}, {"c": "Brand in sauna", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 2, "fustw": 5}, "n": 2, "e": []}, {"c": "Brand in serverruimte (Groot)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 3, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 3, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Brand in serverruimte (Middel)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 2, "elw": 2, "elw3": 1, "gwa": 1, "fire": 5, "gwmesstechnik": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in snackbar (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 2, "foam": 1, "rw": 1, "dlk": 3, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 10, "spokesman": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand in snackbar (Zeer Groot)", "s": "Middel", "v": {"gwl2wasser": 1, "dlk": 2, "elw": 2, "elw2": 1, "fire": 6, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand in station (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 3, "foam": 1, "dlk": 2, "elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 8, "e": []}, {"c": "Brand in station (Groot)", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand in tankstation", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "foam": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 5, "e": []}, {"c": "Brand in terminal", "s": "Middel", "v": {"foam": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "gwa": 1, "ovd_p": 1, "fire": 3, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand in theater", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 4}, "n": 6, "e": []}, {"c": "Brand in tram (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "fire": 8, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "railway_fire_engine": 3, "fustw": 6}, "n": 8, "e": []}, {"c": "Brand in ziekenhuis (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 4, "foam": 1, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 6, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 8, "e": []}, {"c": "Brand in ziekenhuis (Groot)", "s": "Middel", "v": {"gwl2wasser": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "spokesman": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand op bedrijventerrein", "s": "Middel", "v": {"foam": 2, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 4}, "n": 2, "e": []}, {"c": "Brand op passagiersschip", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 3, "boot": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand op veerpont", "s": "Middel", "v": {"gw_taucher": 3, "rw": 1, "foam": 1, "dlk": 2, "elw": 1, "elw2": 1, "ovd_p": 1, "fire": 3, "boot": 3, "fustw": 4, "gw_wasserrettung": 1}, "n": 3, "e": []}, {"c": "Brand op windmolenpark", "s": "Middel", "v": {"rw": 1, "dlk": 2, "elw": 2, "elw2": 1, "ovd_p": 2, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 1, "e": []}, {"c": "Brand partycentrum", "s": "Middel", "v": {"gwl2wasser": 2, "foam": 1, "dlk": 2, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "gwmesstechnik": 2, "fustw": 4}, "n": 1, "e": []}, {"c": "Brand zonnepanelen", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 2, "dlk": 3, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 2, "gwa": 2, "fire": 2, "gwgefahrgut": 2, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 4, "fustw": 13}, "n": 4, "e": []}, {"c": "Brandende goederenwagon (Groot)", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "foam": 1, "elw": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 4, "industrial_response_engine": 1}, "n": 4, "e": []}, {"c": "Brandende tankwagen", "s": "Middel", "v": {"gwl2wasser": 1, "foam": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 3, "e": []}, {"c": "Chloorgas ontsnapt", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 3, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 5, "gwgefahrgut": 1, "gwmesstechnik": 3, "fustw": 4}, "n": 1, "e": []}, {"c": "Controle bij de openingsceremonie van sport evenement", "s": "Middel", "v": {"grukw": 3, "elw": 2, "gefkw": 1, "ovd_p": 1, "fire": 4, "fustw": 3, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Demonstranten vastgelijmd aan snelweg", "s": "Middel", "v": {"rw": 1, "grukw": 3, "gefkw": 2, "ovd_p": 2, "any_traffic_unit": 2, "hondengeleider": 2, "fire": 2, "fustw": 20, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Duinbrand (Grip 1)", "s": "Middel", "v": {"elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 3, "fustw": 4, "gw_wasserrettung": 2, "brush_truck": 6}, "n": 4, "e": []}, {"c": "Duinbrand (Grip 2)", "s": "Middel", "v": {"elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 2, "gwa": 2, "care_service": 1, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 5, "fustw": 6, "gw_wasserrettung": 2, "brush_truck": 10}, "n": 4, "e": []}, {"c": "Europese 112 dag viering", "s": "Middel", "v": {"rw": 1, "grukw": 2, "police_horse": 2, "dlk": 1, "elw": 1, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "fustw": 4, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Explosie in woonhuis", "s": "Middel", "v": {"rw": 2, "dlk": 2, "elw": 2, "elw2": 1, "elw3": 1, "gwa": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 4, "e": []}, {"c": "Explosief gevonden in winkelcentrum", "s": "Middel", "v": {"rw": 1, "elw3": 1, "fustw": 6, "elw": 1, "fire": 1, "bike_police": 1, "gwgefahrgut": 1, "spokesman": 1, "ovd_p": 1, "elw2": 1, "hondengeleider": 1}, "n": 3, "e": []}, {"c": "Festival", "s": "Middel", "v": {"police_horse": 8, "ovd_p": 1, "hondengeleider": 1, "bike_police": 2, "fustw": 5}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Gaslek bedrijventerrein", "s": "Middel", "v": {"rw": 1, "foam": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwgefahrgut": 1, "fire": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4}, "n": 4, "e": []}, {"c": "Gestolen vrachtwagen botst in een casino", "s": "Middel", "v": {"elw": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 3, "fustw": 10}, "n": 1, "e": []}, {"c": "Gevel dreigt in te storten", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 3, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 2, "fustw": 3}, "n": 2, "e": []}, {"c": "Gijzeling", "s": "Middel", "v": {"grukw": 2, "at_m": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 3, "at_c": 1, "polizeihubschrauber": 1, "fustw": 10}, "n": 2, "e": []}, {"c": "Grote alcoholcontrole bij race-evenement", "s": "Middel", "v": {"gefkw": 2, "ovd_p": 1, "hondengeleider": 4, "bike_police": 2, "fustw": 14}, "n": 1, "e": []}, {"c": "Grote zoekactie vermist persoon", "s": "Middel", "v": {"police_horse": 2, "polizeihubschrauber": 1, "boot": 2, "gw_wasserrettung": 4, "fustw": 6}, "n": 3, "e": []}, {"c": "Heidebrand (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 4, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 4, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Heidebrand (Grip 2)", "s": "Middel", "v": {"gwl2wasser": 5, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 4, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Lekkende goederenwagon (Groot)", "s": "Middel", "v": {"rw": 2, "hazard_response_suits": 1, "elw": 1, "elw2": 1, "gwa": 1, "hazard_response_material": 1, "fire": 4, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 3, "hazard_response_disinfection": 1}, "n": 8, "e": []}, {"c": "Massale paniek bij halloween parade", "s": "Middel", "v": {"elw": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "fustw": 10}, "n": 1, "e": []}, {"c": "Nationale 112 award ceremonie", "s": "Middel", "v": {"gwl2wasser": 1, "rw": 1, "dlk": 2, "elw": 3, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 6}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Natuurbrand (Grip 1)", "s": "Middel", "v": {"gwl2wasser": 2, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "fustw": 4, "brush_truck": 6}, "n": 4, "e": []}, {"c": "Natuurbrand (Grip 2)", "s": "Middel", "v": {"gwl2wasser": 3, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "fustw": 4, "brush_truck": 6}, "n": 4, "e": []}, {"c": "Natuurbrand (Grip 3)", "s": "Middel", "v": {"gwl2wasser": 5, "rw": 1, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "care_service": 1, "spokesman": 1, "gwmesstechnik": 1, "fustw": 6, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Natuurbrand (Grip 4)", "s": "Middel", "v": {"gwl2wasser": 6, "rw": 1, "elw": 3, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 2, "care_service": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 6, "brush_truck": 8}, "n": 4, "e": []}, {"c": "Noodlanding groot vliegtuig", "s": "Middel", "v": {"rw": 1, "elw": 1, "elw_airport": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 2, "gwgefahrgut": 1, "gwmesstechnik": 2, "fustw": 4, "arff": 3}, "n": 1, "e": []}, {"c": "Oefening Arrestatieteam", "s": "Middel", "v": {"at_c": 1, "at_o": 4, "at_m": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "Omgevallen hijskraan", "s": "Middel", "v": {"rw": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 3, "fustw": 6}, "n": 1, "e": []}, {"c": "Onaangekondigde demonstratie", "s": "Middel", "v": {"grukw": 6, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "bike_police": 1, "fustw": 5, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Onaangekondigde paashaasstaking", "s": "Middel", "v": {"grukw": 3, "gefkw": 1, "ovd_p": 1, "polizeihubschrauber": 1, "fustw": 10, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Ontsnapping gevaarlijke gedetineerde", "s": "Middel", "v": {"at_m": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 2, "at_c": 1, "polizeihubschrauber": 1, "bike_police": 2, "fustw": 12}, "n": 1, "e": []}, {"c": "Ontspoorde tram botst tegen gebouw", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 10, "elw": 2, "gwa": 1, "fire": 8, "gwmesstechnik": 3, "gwl2wasser": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 1}, "n": 16, "e": []}, {"c": "Opbreken manifestatie", "s": "Middel", "v": {"grukw": 9, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 1, "fustw": 8, "lebefkw": 2}, "n": 2, "e": []}, {"c": "Overval tankstation met gijzeling", "s": "Middel", "v": {"at_m": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "polizeihubschrauber": 1, "fustw": 6}, "n": 2, "e": []}, {"c": "Overval waardetransport", "s": "Middel", "v": {"at_m": 1, "gefkw": 1, "ovd_p": 3, "at_o": 4, "hondengeleider": 3, "at_c": 1, "polizeihubschrauber": 2, "fustw": 20}, "n": 1, "e": []}, {"c": "Passagierstrein botst op brandweerwagen in een spoorwegovergang", "s": "Middel", "v": {"rw": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "any_traffic_unit": 2, "fire": 6, "polizeihubschrauber": 1, "spokesman": 1, "railway_fire_engine": 3, "fustw": 6, "railway_electric_response": 1}, "n": 4, "e": []}, {"c": "Personen onwel in school", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 6}, "n": 1, "e": []}, {"c": "Personen vast in achtbaan", "s": "Middel", "v": {"rw": 1, "dlk": 2, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "fire": 4, "fustw": 6}, "n": 1, "e": []}, {"c": "Persoon met gevaarlijke stoffen", "s": "Middel", "v": {"gwl2wasser": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 4, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "fustw": 10}, "n": 2, "e": []}, {"c": "Protest voor racecircuit", "s": "Middel", "v": {"grukw": 3, "police_horse": 2, "hondengeleider": 1, "fustw": 10, "lebefkw": 1}, "n": 1, "e": []}, {"c": "School shooting", "s": "Middel", "v": {"at_m": 1, "elw3": 1, "ovd_p": 2, "at_o": 4, "hondengeleider": 2, "at_c": 1, "polizeihubschrauber": 1, "bike_police": 2, "fustw": 15}, "n": 2, "e": []}, {"c": "Schoolbus te water", "s": "Middel", "v": {"gw_taucher": 3, "rw": 2, "dlk": 1, "elw": 2, "ovd_p": 1, "elw2": 1, "fire": 3, "spokesman": 1, "boot": 2, "fustw": 4}, "n": 12, "e": []}, {"c": "Schrootbrand op schip", "s": "Middel", "v": {"gwl2wasser": 2, "foam": 1, "dlk": 2, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 6, "gwgefahrgut": 1, "spokesman": 1, "bike_police": 1, "gwmesstechnik": 3, "fustw": 6}, "n": 3, "e": []}, {"c": "Spontane opstand", "s": "Middel", "v": {"grukw": 6, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 2, "fustw": 10, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Toezicht manifestatie pietendiscussie", "s": "Middel", "v": {"grukw": 6, "police_horse": 8, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "polizeihubschrauber": 1, "fustw": 4, "lebefkw": 1}, "n": 1, "e": []}, {"c": "Toezicht nieuwjaarsfeest", "s": "Middel", "v": {"grukw": 6, "police_horse": 4, "gefkw": 1, "ovd_p": 1, "hondengeleider": 2, "bike_police": 5, "fustw": 4, "lebefkw": 1}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Uit de handgelopen overwinningsfeest", "s": "Middel", "v": {"grukw": 4, "police_horse": 4, "gefkw": 1, "ovd_p": 1, "hondengeleider": 1, "fustw": 8, "lebefkw": 1}, "n": 3, "e": []}, {"c": "Uitslaande brand in veestal", "s": "Middel", "v": {"foam": 2, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 1, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 3}, "n": 2, "e": []}, {"c": "Vermoeden van opslag grote partij illegaal vuurwerk", "s": "Middel", "v": {"rw": 1, "at_m": 1, "elw": 1, "gefkw": 1, "ovd_p": 1, "at_o": 4, "at_c": 1, "fire": 2, "bomb_disposal": 1, "bike_police": 2, "bomb_disposal_robot": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verward persoon draait gaskraan open", "s": "Middel", "v": {"rw": 1, "at_m": 1, "elw": 1, "ovd_p": 1, "at_o": 4, "hondengeleider": 1, "at_c": 1, "fire": 1, "fustw": 4}, "n": 1, "e": []}, {"c": "Vliegtuig met brandmelding in vrachtruim", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 5, "arff": 2}, "n": 1, "e": []}, {"c": "Vliegtuig met motorisch probleem", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 5, "arff": 2}, "n": 1, "e": []}, {"c": "Vliegtuig met probleem met landingsgestel", "s": "Middel", "v": {"rw": 1, "dlk": 1, "elw": 1, "elw3": 1, "elw2": 1, "elw_airport": 1, "ovd_p": 1, "fire": 4, "gwgefahrgut": 1, "fustw": 5, "arff": 2}, "n": 1, "e": []}, {"c": "Vliegtuig neergestort", "s": "Middel", "v": {"rw": 3, "dlk": 2, "elw": 3, "elw3": 2, "elw2": 2, "ovd_p": 2, "fire": 10, "gwgefahrgut": 1, "spokesman": 1, "fustw": 14}, "n": 8, "e": []}, {"c": "Vloeistof lekkage uit gekantelde aanhanger", "s": "Middel", "v": {"rw": 2, "elw": 1, "elw2": 1, "ovd_p": 1, "fire": 2, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 2, "bike_police": 1, "fustw": 6}, "n": 1, "e": []}, {"c": "Voetbalwedstrijd, risicowedstrijd", "s": "Middel", "v": {"grukw": 6, "police_horse": 8, "gefkw": 1, "hondengeleider": 2, "lebefkw": 1}, "n": 3, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Vrachtwagen op file ingereden", "s": "Middel", "v": {"rw": 2, "elw": 1, "elw2": 1, "ovd_p": 1, "any_traffic_unit": 2, "traffic_patrol": 1, "fire": 4, "spokesman": 1, "fustw": 4}, "n": 2, "e": []}, {"c": "Vrachtwagen rijdt tegen losgeschoten aanhanger", "s": "Middel", "v": {"rw": 1, "elw": 1, "ovd_p": 1, "any_traffic_unit": 2, "fire": 3, "fustw": 8}, "n": 1, "e": []}, {"c": "Woonhuis ingestort", "s": "Middel", "v": {"rw": 2, "dlk": 1, "elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 1, "fire": 2, "gwgefahrgut": 1, "polizeihubschrauber": 1, "spokesman": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Zwaar vuurwerk aangetroffen", "s": "Middel", "v": {"rw": 1, "elw": 1, "elw3": 1, "elw2": 1, "ovd_p": 1, "hondengeleider": 1, "fire": 2, "gwgefahrgut": 1, "polizeihubschrauber": 1, "spokesman": 1, "gwmesstechnik": 1, "bomb_disposal": 1, "bomb_disposal_robot": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "100 Ambulancestandplaats mijlpaal", "s": "Groot", "v": {"rw": 3, "dlk": 5, "elw": 6, "elw3": 3, "elw2": 3, "gwa": 2, "fire": 15, "spokesman": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "1000 Brandweerkazerne mijlpaal", "s": "Groot", "v": {"dlk": 25, "elw": 10, "elw3": 3, "elw2": 6, "gwa": 3, "fire": 100, "gwgefahrgut": 3, "spokesman": 1, "gwmesstechnik": 3}, "n": 1, "e": []}, {"c": "1000 Politiebureau mijlpaal", "s": "Groot", "v": {"rw": 5, "at_m": 1, "dlk": 5, "elw3": 3, "at_c": 1, "fustw": 100, "elw": 6, "traffic_patrol": 1, "gwa": 2, "fire": 15, "bike_police": 3, "gefkw": 2, "at_o": 4, "spokesman": 1, "lebefkw": 1, "grukw": 6, "police_horse": 4, "elw2": 4, "ovd_p": 6, "hondengeleider": 3, "polizeihubschrauber": 2}, "n": 1, "e": []}, {"c": "250 Ambulancestandplaats mijlpaal", "s": "Groot", "v": {"rw": 3, "dlk": 5, "elw": 6, "elw3": 3, "elw2": 3, "gwa": 2, "fire": 15, "spokesman": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "500 Ambulancestandplaats mijlpaal", "s": "Groot", "v": {"rw": 3, "dlk": 5, "elw": 6, "elw3": 3, "elw2": 3, "gwa": 2, "fire": 15, "spokesman": 1, "fustw": 10}, "n": 1, "e": []}, {"c": "500 Brandweerkazerne mijlpaal", "s": "Groot", "v": {"dlk": 25, "elw": 10, "elw3": 3, "elw2": 6, "gwa": 3, "fire": 50, "gwgefahrgut": 3, "spokesman": 1, "gwmesstechnik": 3}, "n": 1, "e": []}, {"c": "500 Politiebureau mijlpaal", "s": "Groot", "v": {"rw": 5, "at_m": 1, "dlk": 5, "elw3": 3, "at_c": 1, "fustw": 50, "elw": 6, "gwa": 2, "fire": 15, "bike_police": 3, "gefkw": 2, "at_o": 4, "spokesman": 1, "lebefkw": 1, "grukw": 6, "elw2": 4, "ovd_p": 6, "hondengeleider": 3, "polizeihubschrauber": 2}, "n": 1, "e": []}, {"c": "750 Brandweerkazerne mijlpaal", "s": "Groot", "v": {"dlk": 25, "elw": 10, "elw3": 3, "elw2": 6, "gwa": 3, "fire": 75, "gwgefahrgut": 3, "spokesman": 1, "gwmesstechnik": 3}, "n": 1, "e": []}, {"c": "750 Politiebureau mijlpaal", "s": "Groot", "v": {"rw": 5, "at_m": 1, "dlk": 5, "elw3": 3, "at_c": 1, "fustw": 75, "elw": 6, "gwa": 2, "fire": 15, "bike_police": 3, "gefkw": 2, "at_o": 4, "spokesman": 1, "lebefkw": 1, "grukw": 6, "elw2": 4, "ovd_p": 6, "hondengeleider": 3, "polizeihubschrauber": 2}, "n": 1, "e": []}, {"c": "Blokkade door boze menigte", "s": "Groot", "v": {"grukw": 6, "police_horse": 10, "gefkw": 2, "ovd_p": 1, "hondengeleider": 4, "polizeihubschrauber": 1, "fustw": 20, "lebefkw": 1}, "n": 2, "e": []}, {"c": "Brand bij afvalverwerker", "s": "Groot", "v": {"gwl2wasser": 6, "rw": 2, "dlk": 2, "elw": 5, "elw3": 1, "elw2": 2, "gwa": 1, "fire": 20, "gwgefahrgut": 1, "gwmesstechnik": 4, "fustw": 5}, "n": 1, "e": []}, {"c": "Brand bij papierrecyclaar", "s": "Groot", "v": {"gwl2wasser": 4, "rw": 2, "foam": 2, "dlk": 3, "elw": 4, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 2, "care_service": 1, "fire": 12, "gwgefahrgut": 2, "spokesman": 1, "gwmesstechnik": 4, "fustw": 6, "industrial_response_engine": 1}, "n": 16, "e": []}, {"c": "Brand in kantoorpand", "s": "Groot", "v": {"gwl2wasser": 3, "rw": 2, "dlk": 5, "elw": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 1, "fire": 15, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 10}, "n": 1, "e": []}, {"c": "Brand in nucleaire installatie", "s": "Groot", "v": {"rw": 3, "dlk": 6, "elw3": 2, "care_service": 1, "fustw": 8, "hazard_response_disinfection_large": 1, "elw": 6, "gwa": 2, "hazard_response_material": 1, "fire": 20, "gwmesstechnik": 6, "industrial_response_engine": 1, "gwl2wasser": 8, "foam": 2, "hazard_response_suits": 1, "gwgefahrgut": 3, "spokesman": 2, "elw2": 3, "ovd_p": 2, "industrial_response_fire_engine": 1, "polizeihubschrauber": 1}, "n": 256, "e": []}, {"c": "Brand in opslagloods met gevaarlijke stoffen", "s": "Groot", "v": {"rw": 10, "dlk": 10, "elw3": 5, "fustw": 10, "arff": 1, "elw": 10, "gwa": 10, "fire": 30, "bike_police": 2, "gwmesstechnik": 6, "gwl2wasser": 10, "foam": 10, "gwgefahrgut": 6, "spokesman": 5, "elw2": 5, "ovd_p": 1, "hondengeleider": 2, "polizeihubschrauber": 1}, "n": 1, "e": []}, {"c": "Brand in stadion", "s": "Groot", "v": {"rw": 1, "dlk": 3, "elw3": 1, "fustw": 12, "elw": 3, "gwa": 1, "fire": 1, "bike_police": 2, "gwmesstechnik": 6, "gefkw": 1, "gwgefahrgut": 2, "spokesman": 1, "lebefkw": 1, "grukw": 6, "elw2": 2, "ovd_p": 2, "hondengeleider": 2, "polizeihubschrauber": 1}, "n": 5, "e": []}, {"c": "Brand in station (Grip 2)", "s": "Groot", "v": {"gwl2wasser": 5, "foam": 1, "dlk": 3, "elw": 6, "elw3": 1, "elw2": 3, "ovd_p": 1, "gwa": 2, "fire": 12, "gwgefahrgut": 2, "spokesman": 1, "gwmesstechnik": 4, "fustw": 8}, "n": 8, "e": []}, {"c": "Brand in vuurwerkopslag", "s": "Groot", "v": {"rw": 1, "dlk": 3, "elw3": 1, "care_service": 1, "fustw": 12, "elw": 3, "gwa": 2, "hazard_response_material": 1, "fire": 10, "gwmesstechnik": 6, "industrial_response_engine": 1, "gwl2wasser": 4, "foam": 2, "gwgefahrgut": 2, "spokesman": 1, "elw2": 2, "ovd_p": 3, "industrial_response_fire_engine": 1, "polizeihubschrauber": 1}, "n": 64, "e": []}, {"c": "Brand in ziekenhuis (Grip 2)", "s": "Groot", "v": {"gwl2wasser": 5, "rw": 2, "foam": 1, "dlk": 4, "elw": 3, "elw3": 1, "elw2": 1, "ovd_p": 1, "gwa": 2, "fire": 12, "gwgefahrgut": 1, "spokesman": 1, "gwmesstechnik": 4, "fustw": 10}, "n": 8, "e": []}, {"c": "Brand overheidsgebouw", "s": "Groot", "v": {"rw": 2, "gwl2wasser": 3, "foam": 1, "dlk": 3, "elw": 3, "elw3": 1, "elw2": 2, "ovd_p": 2, "gwa": 2, "hondengeleider": 2, "fire": 8, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 5, "fustw": 15}, "n": 4, "e": []}, {"c": "Dieseltrein met gevaarlijke stoffen ontspoord", "s": "Groot", "v": {"rw": 3, "dlk": 2, "elw3": 1, "care_service": 1, "railway_fire_engine": 4, "fustw": 14, "hazard_response_disinfection_large": 1, "elw": 4, "gwa": 2, "hazard_response_material": 1, "fire": 12, "gwmesstechnik": 6, "industrial_response_engine": 1, "gwl2wasser": 2, "foam": 3, "hazard_response_suits": 1, "gwgefahrgut": 2, "spokesman": 1, "railway_fire_equipment_container": 1, "elw2": 2, "ovd_p": 2, "industrial_response_fire_engine": 1, "polizeihubschrauber": 1}, "n": 128, "e": []}, {"c": "Duinbrand (Grip 3)", "s": "Groot", "v": {"elw": 3, "elw3": 2, "elw2": 2, "ovd_p": 2, "gwa": 2, "care_service": 1, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 1, "bike_police": 2, "gwmesstechnik": 6, "fustw": 6, "gw_wasserrettung": 2, "brush_truck": 10}, "n": 4, "e": []}, {"c": "Duinbrand (Grip 4)", "s": "Groot", "v": {"elw": 3, "elw3": 2, "elw2": 2, "ovd_p": 2, "gwa": 2, "care_service": 1, "gwgefahrgut": 2, "polizeihubschrauber": 1, "spokesman": 2, "bike_police": 2, "gwmesstechnik": 6, "fustw": 8, "gw_wasserrettung": 2, "brush_truck": 12}, "n": 4, "e": []}, {"c": "Explosie in woonwijk", "s": "Groot", "v": {"rw": 2, "dlk": 3, "elw3": 1, "bomb_disposal_robot": 1, "fustw": 4, "arff": 3, "elw": 5, "gwa": 2, "fire": 10, "bomb_disposal": 2, "gwmesstechnik": 4, "gwl2wasser": 2, "foam": 2, "gwgefahrgut": 2, "spokesman": 1, "elw2": 2, "ovd_p": 1, "military_police": 4}, "n": 1, "e": []}, {"c": "Explosie luchthaven", "s": "Groot", "v": {"rw": 2, "dlk": 3, "elw3": 1, "bomb_disposal_robot": 1, "fustw": 4, "arff": 3, "elw": 5, "gwa": 2, "fire": 10, "bomb_disposal": 2, "gwmesstechnik": 4, "gwl2wasser": 2, "foam": 2, "gwgefahrgut": 2, "spokesman": 1, "elw2": 2, "ovd_p": 1, "military_police": 4}, "n": 1, "e": []}, {"c": "Massa-beroerte tijdens het eten van fondue (enorm)", "s": "Groot", "v": {"rw": 1, "dlk": 2, "elw": 3, "elw3": 1, "elw2": 1, "gwa": 1, "fire": 20, "gwgefahrgut": 1, "gwmesstechnik": 1, "fustw": 14}, "n": 1, "e": []}, {"c": "Natuurbrand", "s": "Groot", "v": {"rw": 4, "elw": 10, "elw3": 2, "elw2": 4, "gwa": 2, "fustw": 8, "brush_truck": 20}, "n": 1, "e": []}, {"c": "Natuurbrand (Grip 5)", "s": "Groot", "v": {"gwl2wasser": 8, "rw": 2, "elw": 3, "elw3": 1, "elw2": 2, "ovd_p": 1, "gwa": 2, "care_service": 1, "spokesman": 1, "gwmesstechnik": 3, "fustw": 8, "brush_truck": 10}, "n": 4, "e": []}, {"c": "Olietanker in de problemen", "s": "Groot", "v": {"gwl2wasser": 2, "rw": 4, "elw": 3, "coastal_boat": 2, "elw3": 2, "elw2": 1, "gwa": 1, "ovd_p": 1, "fire": 16, "gwgefahrgut": 2, "spokesman": 1, "gwmesstechnik": 4, "fustw": 10}, "n": 1, "e": []}, {"c": "Rellen na stadsderby", "s": "Groot", "v": {"grukw": 9, "police_horse": 4, "gefkw": 2, "ovd_p": 2, "hondengeleider": 4, "polizeihubschrauber": 1, "bike_police": 3, "fustw": 15, "lebefkw": 1}, "n": 8, "e": []}, {"c": "Rellen tijdens voetbal wedstrijd", "s": "Groot", "v": {"grukw": 9, "police_horse": 8, "gefkw": 2, "ovd_p": 3, "hondengeleider": 3, "polizeihubschrauber": 1, "bike_police": 2, "fustw": 25, "lebefkw": 2}, "n": 1, "e": []}, {"c": "Terroristische aanslag", "s": "Groot", "v": {"rw": 5, "dlk": 3, "at_m": 1, "elw": 6, "elw3": 2, "elw2": 3, "ovd_p": 2, "gwa": 3, "at_o": 4, "hondengeleider": 3, "at_c": 1, "polizeihubschrauber": 2, "fire": 15, "spokesman": 2, "fustw": 25}, "n": 2, "e": []}, {"c": "Trein ontspoord", "s": "Groot", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 10, "elw": 2, "gwa": 1, "fire": 8, "search_and_rescue": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "foam": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 2, "polizeihubschrauber": 1}, "n": 128, "e": []}, {"c": "Trein ontspoord na botsing met goederentrein", "s": "Groot", "v": {"rw": 2, "dlk": 1, "elw3": 1, "care_service": 1, "railway_fire_engine": 3, "fustw": 12, "elw": 3, "gwa": 2, "hazard_response_material": 1, "fire": 10, "gwmesstechnik": 3, "gwl2wasser": 2, "foam": 1, "hazard_response_suits": 1, "gwgefahrgut": 1, "spokesman": 1, "railway_electric_response": 1, "railway_fire_equipment_container": 1, "elw2": 1, "ovd_p": 2, "polizeihubschrauber": 1, "hazard_response_disinfection": 1}, "n": 256, "e": []}, {"c": "Uit de hand gelopen manifestatie", "s": "Groot", "v": {"grukw": 18, "police_horse": 24, "gefkw": 20, "ovd_p": 3, "hondengeleider": 8, "polizeihubschrauber": 1, "fustw": 50, "lebefkw": 3}, "n": 1, "e": []}, {"c": "ANPR hit: Gesignaleerd persoon", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "ANPR hit: Mobiel banditisme", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "ANPR hit: Rijden zonder rijbewijs", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "ANPR hit: Vervreemd voertuig", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Aanhouding verdachte in winkelcentrum", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2, "bike_police": 1}, "n": 1, "e": []}, {"c": "Aanrijding blokarters", "s": "Klein", "v": {"gw_wasserrettung": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Aanrijding hulpverleningsvoertuig", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2}, "n": 4, "e": []}, {"c": "Accu ontploft", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Achtervolging gestolen scooter", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Alcoholcontrole", "s": "Klein", "v": {"fustw": 5, "gefkw": 1}, "n": 1, "e": []}, {"c": "Assistentie collega", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Assistentie treinconducteur", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 4, "ovd_p": 1}, "n": 2, "e": []}, {"c": "Auto met pech op vluchtstrook", "s": "Klein", "v": {"car_carrier": 1, "any_traffic_unit": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Auto tankstation ingereden", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Auto tegen woonhuis", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Autobrand op snelweg", "s": "Klein", "v": {"elw": 1, "any_traffic_unit": 1, "fire": 1, "fustw": 1, "gwl2wasser": 1}, "n": 1, "e": []}, {"c": "Bedreiging met vuurwapen", "s": "Klein", "v": {"fustw": 3, "ovd_p": 1}, "n": 2, "e": []}, {"c": "Bergen object uit water voor politie", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "fustw": 2, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Beveiliger aangevallen", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Bladeren op spoor", "s": "Klein", "v": {"fire": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Bloemen gestolen", "s": "Klein", "v": {"fustw": 5}, "n": 1, "e": []}, {"c": "Boom op auto", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Boom op dak", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Bosbrand (Groot)", "s": "Klein", "v": {"brush_truck": 2, "elw2": 1, "elw": 1}, "n": 1, "e": []}, {"c": "Bosbrand (Middel)", "s": "Klein", "v": {"elw": 1, "brush_truck": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Bouwvakker bekneld onder bouwmateriaal", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Bouwvakker van hoogte gevallen (Spoed)", "s": "Klein", "v": {"dlk": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand bij afvalverwerker (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "gwl2wasser": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand bij zendmast", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in asielzoekerscentrum (middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in bouwmarkt (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand in bovenwoning (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in cafetaria (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in garagebox", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in keuken", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 3, "e": []}, {"c": "Brand in passagierstrein (Klein)", "s": "Klein", "v": {"railway_fire_engine": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in schuurtje", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in serverruimte (Klein)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brand in silo", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand in slaapkamer", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brand in spoorwissel", "s": "Klein", "v": {"railway_fire_engine": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Brand in station (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brand in tram (Middel)", "s": "Klein", "v": {"elw": 1, "railway_fire_engine": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in tuinhuis", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brand in vakantiewoning", "s": "Klein", "v": {"elw": 1, "dlk": 1, "gwl2wasser": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brand in werkplaats (Middel)", "s": "Klein", "v": {"elw": 1, "fire": 2, "fustw": 1, "gwa": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Brand in woonkamer", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brand in woonwagen (Middel)", "s": "Klein", "v": {"elw": 1, "fire": 2, "fustw": 1, "dlk": 1, "gwl2wasser": 1}, "n": 1, "e": []}, {"c": "Brand op balkon door vuurwerk", "s": "Klein", "v": {"dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brandend plezierjacht", "s": "Klein", "v": {"gw_taucher": 1, "elw": 1, "fire": 2, "fustw": 1, "boot": 1}, "n": 2, "e": []}, {"c": "Brandend pompoenveld", "s": "Klein", "v": {"elw": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brandend praalwagen", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 3, "fustw": 1}, "n": 1, "e": []}, {"c": "Brandende aanhangwagen", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 2, "fustw": 1}, "n": 2, "e": []}, {"c": "Brandende frietkraam", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Brandende goederenwagon (Klein)", "s": "Klein", "v": {"elw": 1, "gwgefahrgut": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Brandende personenauto in parkeergarage (Middel)", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Brandende vliegtuigtrekker", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 2, "e": []}, {"c": "Brandende wegberm", "s": "Klein", "v": {"elw": 1, "any_traffic_unit": 1, "gwl2wasser": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Brandstichting", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Crash op Circuit", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Diefstal personenauto", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Dier op de snelweg", "s": "Klein", "v": {"any_traffic_unit": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Droger in brand", "s": "Klein", "v": {"dlk": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Dronken bouwvakker rijdt cementwagen in de greppel", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Duinbrand", "s": "Klein", "v": {"gw_wasserrettung": 1, "brush_truck": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Fietser op de snelweg", "s": "Klein", "v": {"any_traffic_unit": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Frankenstein gespot", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Gasten hebben een vergiftigd drankje gedronken op verjaardagsfeest", "s": "Klein", "v": {"elw": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Gekantelde paaseivrachtwagen", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Gemaskerd bal trofee gestolen", "s": "Klein", "v": {"fustw": 5}, "n": 1, "e": []}, {"c": "Gesabotteerde vuurwerkshow", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Gevallen groep mountainbikers", "s": "Klein", "v": {"gw_wasserrettung": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Gevecht om de lelijkste kersttrui", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Gewonden op strand/ in de duinen", "s": "Klein", "v": {"gw_wasserrettung": 3, "fustw": 2}, "n": 1, "e": []}, {"c": "Grap veroorzaakt hartaanval", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Grote boek van Sinterklaas aangespoeld", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Heidebrand (Middel)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "brush_truck": 2}, "n": 1, "e": []}, {"c": "Hennepkwekerij aangetroffen", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Identiteitsfraude", "s": "Klein", "v": {"fustw": 3}, "n": 2, "e": []}, {"c": "Illegaal vuurwerk in huis", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Illegale plantage (klein)", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 3, "gefkw": 1, "grukw": 1}, "n": 1, "e": []}, {"c": "Illegale stoffen gevonden in buffet", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Inbraak in bedrijfspand", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 3, "e": []}, {"c": "Inbraak in woning", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 4, "ovd_p": 1}, "n": 2, "e": []}, {"c": "Inbraakalarm", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Inbraakalarm bedrijfspand", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Inbraakalarm woning", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Insluiping in woning", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Inval in woning", "s": "Klein", "v": {"fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Kelderbrand door vuurwerk", "s": "Klein", "v": {"elw": 1, "fire": 3}, "n": 1, "e": []}, {"c": "Kersenbloesems in brand", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 3}, "n": 1, "e": []}, {"c": "Kerstboom gestolen", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Kerstman vast in schoorsteen", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Kind vast in hek", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Kind vast in klimtoestel", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Kinderreanimatie", "s": "Klein", "v": {"fire": 2, "fustw": 3}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Kitesurfer in problemen", "s": "Klein", "v": {"gw_wasserrettung": 2, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Klein vliegtuig met motorisch probleem", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "arff": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Koeien dief op de vlucht", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 5}, "n": 1, "e": []}, {"c": "Koolmonoxide vrijgekomen", "s": "Klein", "v": {"elw": 1, "gwgefahrgut": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "LZV met pech op snelweg", "s": "Klein", "v": {"any_traffic_unit": 2, "fustw": 3}, "n": 1, "e": []}, {"c": "Lekkage gevaarlijke stoffen (Klein)", "s": "Klein", "v": {"gwgefahrgut": 1, "elw": 1, "fire": 1, "fustw": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Lekkende goederenwagon (Klein)", "s": "Klein", "v": {"elw": 1, "fire": 1, "gwgefahrgut": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Man over boord", "s": "Klein", "v": {"coastal_boat": 3}, "n": 1, "e": []}, {"c": "Militair betrokken bij verkeersongeluk", "s": "Klein", "v": {"military_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Militair onder invloed achter het stuur", "s": "Klein", "v": {"military_police": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Mogelijk explosief gevonden bij magneetvissen", "s": "Klein", "v": {"fustw": 2, "bike_police": 1}, "n": 1, "e": []}, {"c": "Monster uitgebroken", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Monteur in aanraking met hoogspanning", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Natuurbrand (Groot)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "brush_truck": 3}, "n": 1, "e": []}, {"c": "Natuurbrand (Middel)", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "brush_truck": 2}, "n": 1, "e": []}, {"c": "Oefening brandweerduikers", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Onbeheerde bagage gevonden", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2, "ovd_p": 1}, "n": 4, "e": []}, {"c": "Onbevoegde op spoor", "s": "Klein", "v": {"railway_fire_engine": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Onbevoegden op spoor", "s": "Klein", "v": {"railway_fire_engine": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Ongeluk met overstekend hert", "s": "Klein", "v": {"fire": 2, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Ongeluk op mistige weg", "s": "Klein", "v": {"fire": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Ongelukken in de carnavalsoptocht", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Ongeval met sneeuwploeg", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Ongeval waterscooter", "s": "Klein", "v": {"gw_wasserrettung": 2, "boot": 1, "coastal_boat": 1}, "n": 2, "e": []}, {"c": "Ontplofte gasfles", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Open dag, groot", "s": "Klein", "v": {"fire": 2, "dlk": 1, "rw": 1, "fustw": 1}, "n": 1, "e": [], "vt": {"100": 1}}, {"c": "Open dag, klein", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Overval tankstation", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Overvalalarm bankkantoor", "s": "Klein", "v": {"fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Overvalalarm supermarkt", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Paard in sloot", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Paaseieren vermist", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Paaseieren zoeken onder water", "s": "Klein", "v": {"gw_taucher": 2, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Paashaas in een kraan", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Paniekknop geactiveerd", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Paraglider neergestort", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Parkeergarage onder water", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 2}, "n": 2, "e": []}, {"c": "Personen geraakt door weggevlogen parasol", "s": "Klein", "v": {"gw_wasserrettung": 3, "fire": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Personen op dak van school", "s": "Klein", "v": {"dlk": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Personen opgesloten in sauna", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Personen vallen voorbijgangers lastig", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Personenauto in sloot", "s": "Klein", "v": {"gw_taucher": 1, "elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 4, "e": []}, {"c": "Persoon bekneld in machine", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld onder boom", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld onder heftruck", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld onder kerstpakketten", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon bekneld tussen containers", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Persoon geraakt door schroef van boot", "s": "Klein", "v": {"gw_taucher": 1, "fire": 1, "fustw": 2, "boot": 1}, "n": 1, "e": []}, {"c": "Persoon met mes gezien", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Persoon onwel in attractie", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Persoon onwel na mixen mest", "s": "Klein", "v": {"gwgefahrgut": 1, "gwmesstechnik": 1, "elw": 1, "fire": 1, "fustw": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Persoon opgesloten in sauna", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Persoon vast in roltrap", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Persoon vermist rondom mui", "s": "Klein", "v": {"gw_wasserrettung": 1, "polizeihubschrauber": 1, "fustw": 2, "boot": 1}, "n": 2, "e": []}, {"c": "Picknick met kaarslicht veroorzaakt bosbrand", "s": "Klein", "v": {"elw": 1, "gwl2wasser": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Prioriteit: paasei-jacht", "s": "Klein", "v": {"fustw": 6}, "n": 1, "e": []}, {"c": "Racefans houden straatrace", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Racistisch gezang van fans op de tribune", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Ramkraak", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Reanimatie", "s": "Klein", "v": {"fire": 1, "fustw": 2}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Reanimatie drenkeling", "s": "Klein", "v": {"fire": 1, "fustw": 2}, "n": 1, "e": [], "vt": {"100": 1, "101": 1}}, {"c": "Rookontwikkeling in vrachtruim vliegtuig", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Ruzie op terras", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Ruzie tijdens uitgaansnacht", "s": "Klein", "v": {"ovd_p": 1, "hondengeleider": 1, "fustw": 3, "bike_police": 1}, "n": 1, "e": []}, {"c": "Schietincident", "s": "Klein", "v": {"fustw": 5, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Schoorsteenbrand woning met rietenkap", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Sneeuwploeg gekanteld op provinciale weg", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Speler vermist", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Spookrijder", "s": "Klein", "v": {"traffic_patrol": 1, "fustw": 3}, "n": 2, "e": []}, {"c": "Stankoverlast", "s": "Klein", "v": {"elw": 1, "gwgefahrgut": 1, "fire": 1, "fustw": 1}, "n": 2, "e": []}, {"c": "Steekincident", "s": "Klein", "v": {"fustw": 5, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Stilgevallen trein", "s": "Klein", "v": {"railway_fire_engine": 4}, "n": 1, "e": []}, {"c": "Storing in attractie pretpark", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Straat afzetten voor politie", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Straat onder water", "s": "Klein", "v": {"fire": 1, "gwl2wasser": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Surfer vermist", "s": "Klein", "v": {"coastal_boat": 2, "gw_wasserrettung": 2}, "n": 1, "e": []}, {"c": "Valse kaartjes race in verkoop", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Vechtpartij in bankkantoor", "s": "Klein", "v": {"fustw": 4, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Verdacht pakket gevonden bij de ingang van het sportstadion", "s": "Klein", "v": {"fustw": 5}, "n": 1, "e": []}, {"c": "Verdacht vaartuig in de haven", "s": "Klein", "v": {"military_police": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Verdachte situatie", "s": "Klein", "v": {"fustw": 2, "bike_police": 1}, "n": 3, "e": []}, {"c": "Verdachte situatie luchthaven", "s": "Klein", "v": {"military_police": 2, "fustw": 1}, "n": 1, "e": []}, {"c": "Verjaardagsgast vermist", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verjaardagsgasten hebben versiering gestolen", "s": "Klein", "v": {"fustw": 4}, "n": 1, "e": []}, {"c": "Verkeersongeval door gevallen bladeren", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Verkeersongeval door gladheid", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 3, "e": []}, {"c": "Verkeersongeval door verliefdheid", "s": "Klein", "v": {"fire": 1, "rw": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verkeersongeval met gevaarlijke stoffen (Klein)", "s": "Klein", "v": {"gwgefahrgut": 1, "elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 1, "e": []}, {"c": "Verkeersongeval met lijnbus en fietser", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 3, "e": []}, {"c": "Verkeersongeval met sportersbus", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Verkeersongeval met vrachtwagen en fietser", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 2, "rw": 1}, "n": 4, "e": []}, {"c": "Verkeersruzie", "s": "Klein", "v": {"fustw": 3, "ovd_p": 1}, "n": 1, "e": []}, {"c": "Verlaten kinderfiets langs waterkant", "s": "Klein", "v": {"elw": 1, "fire": 1, "gw_taucher": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Verlaten kleding langs waterkant", "s": "Klein", "v": {"elw": 1, "fire": 1, "gw_taucher": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Verlaten slee langs waterkant", "s": "Klein", "v": {"elw": 1, "fire": 1, "gw_taucher": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Verlovingsring gestolen tijdens aanzoek", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Vermist persoon", "s": "Klein", "v": {"polizeihubschrauber": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Vermist persoon op begraafplaats", "s": "Klein", "v": {"fire": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Verward persoon bij spoor", "s": "Klein", "v": {"fustw": 3}, "n": 2, "e": []}, {"c": "Vliegtuig met brandgeur in cabine", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Vliegtuig met hydraulisch probleem", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Vliegtuig met rook in cabine", "s": "Klein", "v": {"elw_airport": 1, "arff": 2, "fire": 1}, "n": 1, "e": []}, {"c": "Vluchtende verdachte in voetgangersgebied", "s": "Klein", "v": {"hondengeleider": 1, "fustw": 2, "bike_police": 1}, "n": 1, "e": []}, {"c": "Voedselvergiftiging door vergiftigd snoep", "s": "Klein", "v": {"elw": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Voetganger aangereden door rendier", "s": "Klein", "v": {"elw": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Voetganger onder tram", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Voetganger op de snelweg", "s": "Klein", "v": {"any_traffic_unit": 1, "fustw": 3}, "n": 1, "e": []}, {"c": "Vogel vast in schoorsteen", "s": "Klein", "v": {"fire": 1, "dlk": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Voorzorgslanding klein vliegtuig", "s": "Klein", "v": {"elw_airport": 1, "arff": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Vrachtwagen gekanteld", "s": "Klein", "v": {"elw": 1, "any_traffic_unit": 1, "fire": 1, "fustw": 1, "rw": 1}, "n": 4, "e": []}, {"c": "Vrachtwagen gekanteld door ijzel", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Vrachtwagen met eierpunch gekanteld", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Vrachtwagen omgevallen in de greppel", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Vrachtwagen omgewaaid", "s": "Klein", "v": {"elw": 1, "fire": 2, "rw": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Vreemde lucht", "s": "Klein", "v": {"elw": 1, "fire": 1, "gwgefahrgut": 1, "rw": 1}, "n": 1, "e": []}, {"c": "Vreemde lucht portiek", "s": "Klein", "v": {"fire": 2, "dlk": 1, "gwmesstechnik": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Vuur door elektrische verjaardagsversiering (groot)", "s": "Klein", "v": {"elw": 1, "fire": 4}, "n": 1, "e": []}, {"c": "Vuurwerkoverlast", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Wasmachine in brand", "s": "Klein", "v": {"dlk": 1, "fire": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Wielrenner aangereden", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 2}, "n": 1, "e": []}, {"c": "Wielrenner ongeluk tijdens wedstrijd", "s": "Klein", "v": {"elw": 1, "fire": 1, "rw": 1, "fustw": 1}, "n": 1, "e": []}, {"c": "Winkeloverval door geesten", "s": "Klein", "v": {"fustw": 3}, "n": 1, "e": []}, {"c": "Woningbrand", "s": "Klein", "v": {"elw": 1, "dlk": 1, "fire": 2, "fustw": 2}, "n": 1, "e": []}, {"c": "Zoektocht naar verdwenen vriendje", "s": "Klein", "v": {"hondengeleider": 1, "polizeihubschrauber": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Zwemmer in nood", "s": "Klein", "v": {"fire": 1, "fustw": 2}, "n": 2, "e": []}, {"c": "Zwemmer vermist", "s": "Klein", "v": {"gw_wasserrettung": 1, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Zwemmer vermist (Klein)", "s": "Klein", "v": {"gw_taucher": 1, "elw": 1, "fire": 1, "fustw": 1, "boot": 1}, "n": 1, "e": []}, {"c": "Blikseminslag rietenkap (Grip 1)", "s": "Middel", "v": {"spokesman": 1, "fustw": 5, "dlk": 1, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "rw": 1, "ovd_p": 1, "gwmesstechnik": 2, "gwl2wasser": 2, "fire": 6}, "n": 8, "e": []}, {"c": "Blikseminslag rietenkap (Grip 2)", "s": "Middel", "v": {"spokesman": 1, "fustw": 7, "dlk": 2, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "rw": 1, "ovd_p": 1, "gwmesstechnik": 4, "gwl2wasser": 2, "fire": 8}, "n": 8, "e": []}, {"c": "Blikseminslag rietenkap (Groot)", "s": "Klein", "v": {"spokesman": 1, "fustw": 2, "dlk": 1, "thatched_firefighting": 1, "gwa": 1, "elw": 1, "rw": 1, "gwmesstechnik": 1, "gwl2wasser": 1, "fire": 4}, "n": 2, "e": []}, {"c": "Blikseminslag rietenkap (Klein)", "s": "Klein", "v": {"fire": 1, "thatched_firefighting": 1}, "n": 1, "e": []}, {"c": "Blikseminslag rietenkap (Middel)", "s": "Klein", "v": {"dlk": 1, "thatched_firefighting": 1, "elw": 1, "rw": 1, "fire": 2}, "n": 1, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Grip 1)", "s": "Middel", "v": {"spokesman": 1, "fustw": 4, "dlk": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "fire": 7}, "n": 8, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Grip 2)", "s": "Middel", "v": {"spokesman": 1, "fustw": 7, "dlk": 2, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 2, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "fire": 10}, "n": 8, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Groot)", "s": "Klein", "v": {"fustw": 2, "dlk": 1, "thatched_firefighting": 1, "gwa": 1, "elw": 1, "gwmesstechnik": 1, "gwl2wasser": 2, "fire": 4}, "n": 2, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Klein)", "s": "Klein", "v": {"fire": 1, "thatched_firefighting": 1}, "n": 1, "e": []}, {"c": "Brand in rietenkap na werkzaamheden (Middel)", "s": "Klein", "v": {"dlk": 1, "thatched_firefighting": 1, "fire": 2, "elw": 1}, "n": 1, "e": []}, {"c": "Ezel in sloot", "s": "Klein", "v": {"rw": 1, "gw_taucher": 1, "livestock_hoist": 1, "fire": 1}, "n": 2, "e": []}, {"c": "Geit in gierput", "s": "Klein", "v": {"livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Koe in gierput", "s": "Klein", "v": {"rw": 1, "livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Koe in sloot", "s": "Klein", "v": {"rw": 1, "livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Rietenkapbrand (Klein)", "s": "Klein", "v": {"fire": 1, "thatched_firefighting": 1}, "n": 1, "e": []}, {"c": "Rietkapbrand (Grip 1)", "s": "Middel", "v": {"spokesman": 1, "fustw": 4, "dlk": 1, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 2, "gwl2wasser": 2, "fire": 6}, "n": 8, "e": []}, {"c": "Rietkapbrand (Grip 2)", "s": "Middel", "v": {"spokesman": 1, "fustw": 6, "dlk": 2, "gwgefahrgut": 1, "care_service": 1, "thatched_firefighting": 1, "elw2": 1, "gwa": 1, "elw": 2, "elw3": 1, "ovd_p": 1, "gwmesstechnik": 3, "gwl2wasser": 2, "fire": 8}, "n": 8, "e": []}, {"c": "Rietkapbrand (Groot)", "s": "Klein", "v": {"spokesman": 1, "fustw": 2, "dlk": 1, "gwgefahrgut": 1, "thatched_firefighting": 1, "gwa": 1, "elw": 1, "gwmesstechnik": 1, "gwl2wasser": 1, "fire": 4}, "n": 2, "e": []}, {"c": "Rietkapbrand (Middel)", "s": "Klein", "v": {"dlk": 1, "thatched_firefighting": 1, "fire": 2, "elw": 1}, "n": 1, "e": []}, {"c": "Schaap in sloot", "s": "Klein", "v": {"livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Varken in gierput", "s": "Klein", "v": {"rw": 1, "livestock_hoist": 1, "fire": 1}, "n": 1, "e": []}, {"c": "Brand in diervoerfabriek (Grip 1)", "s": "Middel", "v": {"gwa": 1, "gwl2wasser": 3, "gwgefahrgut": 1, "fustw": 5, "elw": 2, "gwmesstechnik": 2, "elw3": 1, "elw2": 1, "ovd_p": 1, "spokesman": 1, "fire": 6, "dlk": 2}, "n": 2, "e": []}, {"c": "Brand in diervoerfabriek (Groot)", "s": "Klein", "v": {"gwa": 1, "gwl2wasser": 2, "gwgefahrgut": 1, "fustw": 2, "elw": 1, "gwmesstechnik": 1, "spokesman": 1, "fire": 4, "dlk": 1}, "n": 1, "e": []}, {"c": "Brand in diervoerfabriek (Middel)", "s": "Klein", "v": {"gwl2wasser": 1, "fustw": 1, "elw": 1, "fire": 3, "dlk": 1}, "n": 1, "e": []}];
 
         // The game rejects captions over 60 characters: cut at a word boundary.
         const capOf = c => { const t = CONFIG.PREFIX + c; if (t.length <= 60) return t; const cut = t.slice(0, 59); return cut.slice(0, cut.lastIndexOf(' ') > 30 ? cut.lastIndexOf(' ') : 59).replace(/[ ,;:-]+$/, '') + '…'; };
@@ -2208,7 +2568,8 @@ MKS.module({
             const cats = {};
             form.querySelectorAll('[name="aao[aao_category_id]"] option').forEach(o => { if (o.value) cats[o.text.trim()] = o.value; });
             const list = await get('/aaos');
-            const existing = new Set([...list.querySelectorAll('a[href$="/edit"][href^="/aaos/"]')].map(a => a.textContent.trim()).filter(Boolean));
+            const existing = new Map([...list.querySelectorAll('a[href$="/edit"][href^="/aaos/"]')]
+                .map(a => [a.textContent.trim(), a.getAttribute('href')]).filter(([n]) => n));
             return { token, cats, existing, slots: new Set([...form.elements].map(e => e.name)) };
         }
 
@@ -2216,6 +2577,12 @@ MKS.module({
             const body = new URLSearchParams({ utf8: '✓', authenticity_token: token, 'aao_category[caption]': caption, 'aao_category[order_number]': String(order), 'aao_category[hidden]': '0' });
             const r = await fetch('/aao_category/create', { method: 'POST', credentials: 'include', body });
             if (!r.ok) throw new Error('category create failed ' + r.status);
+        }
+
+        // GGB (100) en NHT (101) staan alleen als los voertuigtype op het formulier
+        // (vehicle_type_ids[...]), niet als algemeen aao[...] veld.
+        function applyVehicleTypeIds(fd, vt) {
+            for (const [id, n] of Object.entries(vt || {})) fd.set('vehicle_type_ids[' + id + ']', String(n));
         }
 
         async function createPreset(p, catId, token) {
@@ -2227,12 +2594,43 @@ MKS.module({
             fd.set('aao[aao_category_id]', catId);
             if (CONFIG.COLOR) fd.set('aao[color]', CONFIG.COLOR);
             for (const [slot, n] of Object.entries(p.v)) fd.set('aao[' + slot + ']', String(n));
+            applyVehicleTypeIds(fd, p.vt);
             const r = await fetch('/aaos', { method: 'POST', credentials: 'include', body: new URLSearchParams(fd) });
             if (!r.ok) throw new Error('preset create failed ' + r.status);
             if ([...parse(await r.text()).forms].some(f => /\/aaos$/.test(f.action))) throw new Error('rejected by validation: ' + p.c);
         }
 
-        let preview = null; // [{ s, c, n }] from the last check
+        // Vergelijkt wat een bestaand voorstel nu heeft met wat het moet hebben.
+        // Geeft null terug als alles al klopt.
+        function diffPreset(form, p) {
+            const diff = {};
+            for (const [slot, n] of Object.entries(p.v)) {
+                const cur = form.querySelector('[name="aao[' + slot + ']"]')?.value || '0';
+                if (String(cur) !== String(n)) diff['aao[' + slot + ']'] = [cur, n];
+            }
+            for (const [id, n] of Object.entries(p.vt || {})) {
+                const cur = form.querySelector('[name="vehicle_type_ids[' + id + ']"]')?.value || '0';
+                if (String(cur) !== String(n)) diff['vehicle_type_ids[' + id + ']'] = [cur, n];
+            }
+            return Object.keys(diff).length ? diff : null;
+        }
+
+        async function patchPreset(href, p) {
+            const editDoc = await get(href);
+            const form = [...editDoc.forms].find(f => /\/aaos\/\d+$/.test(f.action) || f.querySelector('[name=_method]'));
+            if (!form) throw new Error('bewerkformulier niet gevonden voor ' + href);
+            const diff = diffPreset(form, p);
+            if (!diff) return null; // klopt al, niets versturen
+            const fd = new FormData(form);
+            for (const [slot, n] of Object.entries(p.v)) fd.set('aao[' + slot + ']', String(n));
+            applyVehicleTypeIds(fd, p.vt);
+            const r = await fetch(form.action, { method: 'POST', credentials: 'include', body: new URLSearchParams(fd) });
+            if (!r.ok) throw new Error('bijwerken mislukt ' + r.status);
+            return diff;
+        }
+
+        let preview = null;  // { todo, toCheck } from the last dry run
+        let toUpdate = null; // [{ p, diff }] found during the last dry run's check
         let busy = false;
 
         async function check() {
@@ -2241,25 +2639,48 @@ MKS.module({
             PRESETS.forEach(p => Object.keys(p.v).forEach(k => { if (!st.slots.has('aao[' + k + ']')) unknown.add(k); }));
             if (unknown.size) log('LET OP: onbekende voertuigsoorten (worden door het spel genegeerd):', [...unknown].join(', '));
             const todo = PRESETS.filter(p => !st.existing.has(capOf(p.c)));
+            const toCheck = PRESETS.filter(p => st.existing.has(capOf(p.c)));
             const noCat = CONFIG.CATEGORIES.filter(n => !st.cats[n]);
-            return { st, todo, noCat };
+            return { st, todo, toCheck, noCat };
         }
 
         async function dryRun() {
-            const { todo, noCat } = await check();
-            preview = todo;
-            log(`${PRESETS.length} voorstellen, ${PRESETS.length - todo.length} bestaan al, ${todo.length} nieuw.`);
-            if (noCat.length) log('Maak eerst deze categorieën aan (Eigen inzetvoorstellen-categorieën):', noCat.join(', '));
-            status();
+            if (busy) return;
+            busy = true;
+            try {
+                const { st, todo, toCheck, noCat } = await check();
+                preview = { todo, toCheck };
+                log(`${PRESETS.length} voorstellen, ${PRESETS.length - todo.length} bestaan al, ${todo.length} nieuw.`);
+                if (noCat.length) log('Maak eerst deze categorieën aan (Eigen inzetvoorstellen-categorieën):', noCat.join(', '));
+                log('Bestaande voorstellen controleren op verouderde waarden (alleen lezen)…');
+                status();
+                const changed = [];
+                let i = 0;
+                for (const p of toCheck) {
+                    if (!running) break;
+                    i++;
+                    ctx.status(`Controleren ${i}/${toCheck.length}: ${p.c}`, { tone: 'busy', progress: [i, toCheck.length], dock: true });
+                    const editDoc = await get(st.existing.get(capOf(p.c)));
+                    const form = [...editDoc.forms].find(f => /\/aaos\/\d+$/.test(f.action) || f.querySelector('[name=_method]'));
+                    const diff = form && diffPreset(form, p);
+                    if (diff) { changed.push({ p, diff }); log(`(${i}/${toCheck.length}) wijkt af:`, p.c, diff); }
+                    else if (i % 25 === 0) log(`(${i}/${toCheck.length}) gecontroleerd…`);
+                    await sleep(CONFIG.THROTTLE_MS);
+                }
+                toUpdate = changed;
+                log(`Controle klaar. ${changed.length} bestaande voorstellen zouden worden bijgewerkt.`);
+            } finally {
+                busy = false;
+                status();
+            }
         }
 
         async function create() {
             if (busy) return;
             busy = true;
             try {
-                const { st, todo, noCat } = await check();
+                const { st, todo, toCheck, noCat } = await check();
                 if (noCat.length) throw new Error('Maak eerst deze categorieën aan (Eigen inzetvoorstellen-categorieën): ' + noCat.join(', '));
-                if (!todo.length) { log('Niets te doen: alle voorstellen bestaan al.'); return; }
                 let done = 0;
                 const failed = [];
                 for (const p of todo) {
@@ -2274,8 +2695,23 @@ MKS.module({
                     }
                     await sleep(CONFIG.THROTTLE_MS);
                 }
-                log(`Klaar. ${done} aangemaakt.`, failed.length ? 'Afgewezen: ' + failed.join(' | ') : '');
+                let patched = 0, checked = 0;
+                for (const p of toCheck) {
+                    if (!running) break;
+                    checked++;
+                    ctx.status(`Controleren ${checked}/${toCheck.length}: ${p.c}`, { tone: 'busy', progress: [checked, toCheck.length], dock: true });
+                    try {
+                        const diff = await patchPreset(st.existing.get(capOf(p.c)), p);
+                        if (diff) { patched++; log(`(bijgewerkt ${patched}, gecontroleerd ${checked}/${toCheck.length})`, p.c, diff); }
+                    } catch (e) {
+                        ctx.err('bijwerken', p.c, e);
+                        failed.push('bijwerken:' + p.c);
+                    }
+                    await sleep(CONFIG.THROTTLE_MS);
+                }
+                log(`Klaar. ${done} aangemaakt, ${patched} bijgewerkt (van ${checked} gecontroleerd).`, failed.length ? 'Afgewezen: ' + failed.join(' | ') : '');
                 preview = null;
+                toUpdate = null;
             } finally {
                 busy = false;
                 status();
@@ -2283,26 +2719,35 @@ MKS.module({
         }
 
         function status() {
-            ctx.status(preview ? `${preview.length} nieuwe voorstellen klaar om aan te maken` : 'Klaar voor gebruik', { tone: preview && preview.length ? 'warn' : 'idle' });
+            const n = (preview ? preview.todo.length : 0) + (toUpdate ? toUpdate.length : 0);
+            ctx.status(n ? `${n} voorstellen klaar om aan te maken of bij te werken` : 'Klaar voor gebruik', { tone: n ? 'warn' : 'idle' });
         }
 
         let running = true;
         ctx.actions([
+            { label: 'Controleren', run: dryRun, title: 'Laat zien wat er zou gebeuren, zonder iets aan te maken of te wijzigen.' },
             { label: 'Aanmaken', kind: 'primary', run: create,
                 confirm: `Weet je het zeker?
 
-Dit maakt tot ${PRESETS.length} inzetvoorstellen aan in het spel. Weghalen kan alleen met de hand, één voor één.
-Bestaande voorstellen blijven ongemoeid.` },
+Dit maakt tot ${PRESETS.length} inzetvoorstellen aan in het spel en werkt bestaande voorstellen bij als hun
+voertuigen niet meer kloppen (bijv. nieuwe GGB/NHT-velden). Weghalen kan alleen met de hand, één voor één.` },
         ]);
         ctx.panel((el) => {
             const esc = ctx.esc;
             let html = '';
             if (preview) {
-                html += `<h4 class="mks-h">Nieuw (${preview.length})</h4>`;
-                html += preview.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Groep</th><th>Naam</th><th>Voertuigen</th></tr></thead><tbody>
-                    ${preview.map((p) => `<tr><td>${esc(p.s)}</td><td>${esc(capOf(p.c))}</td>
+                html += `<h4 class="mks-h">Nieuw (${preview.todo.length})</h4>`;
+                html += preview.todo.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Groep</th><th>Naam</th><th>Voertuigen</th></tr></thead><tbody>
+                    ${preview.todo.map((p) => `<tr><td>${esc(p.s)}</td><td>${esc(capOf(p.c))}</td>
                     <td class="mono mks-dim">${esc(Object.entries(p.v).map(([k, n]) => `${n}× ${k}`).join(', '))}</td></tr>`).join('')}
                     </tbody></table></div>` : '<p class="mks-note">Alle voorstellen bestaan al.</p>';
+            }
+            if (toUpdate) {
+                html += `<h4 class="mks-h">Bij te werken (${toUpdate.length})</h4>`;
+                html += toUpdate.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Naam</th><th>Wijziging</th></tr></thead><tbody>
+                    ${toUpdate.map(({ p, diff }) => `<tr><td>${esc(capOf(p.c))}</td>
+                    <td class="mono mks-dim">${esc(Object.entries(diff).map(([k, [o, n]]) => `${k}: ${o}→${n}`).join(', '))}</td></tr>`).join('')}
+                    </tbody></table></div>` : '<p class="mks-note">Alle bestaande voorstellen zijn up-to-date.</p>';
             }
             if (lines.length) {
                 html += `<h4 class="mks-h">Logboek</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
@@ -3234,7 +3679,25 @@ MKS.module({
         function generateFireTarget(building, vehicle, regio, post, exactData, claimed) {
             const rule = classifyFireVehicle(resolveTypeCaption(vehicle), vehicle.caption || '', vehicle.vehicle_type);
             if (!rule) return null;
+            const t = generateFireTargetInner(building, rule, regio, post, exactData, claimed);
+            // A current name fits when it is the same regio, role digit and label,
+            // at this station's post or on one of its real roepnummers.
+            const realNums = new Set((exactData ? exactData.list : []).map((raw) => {
+                const p = parseFireCallsign(raw);
+                return p ? `${p.regio}-${p.post}${p.typeDigit}${p.seq}` : '';
+            }));
+            const post2 = String(post).padStart(2, '0');
+            t.fits = (caption) => {
+                const p = parseFireCallsign(caption || '');
+                if (!p || p.regio !== regio || p.typeDigit !== rule.digit || p.label !== (rule.label || '')) return null;
+                const real = realNums.has(`${p.regio}-${p.post}${p.typeDigit}${p.seq}`);
+                if (!real && p.post !== post2) return null;
+                return { seq: Number(p.seq), exact: real };
+            };
+            return t;
+        }
 
+        function generateFireTargetInner(building, rule, regio, post, exactData, claimed) {
             if (exactData) {
                 const targets = exactData.list.map((raw) => ({ raw, parsed: parseFireCallsign(raw) }));
                 // Only ever take a real roepnummer whose role actually matches this
@@ -3274,11 +3737,21 @@ MKS.module({
             return { name: `${regio}-${String(post).padStart(2, '0')}${rule.digit}${seq}${label}`, seqKey, exact: false };
         }
 
+        function escRe(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+        // Builds a fits() check from a regex whose one capture group is the sequence number.
+        function fitsBy(re) {
+            return (caption) => {
+                const m = (caption || '').match(re);
+                return m ? { seq: Number(m[1]), exact: false } : null;
+            };
+        }
+
         function generateAmbulanceTarget(building, vehicle, regio) {
             const rule = classifyAmbulance(resolveTypeCaption(vehicle), vehicle.vehicle_type);
             const seqKey = `amb:${building.id}:${rule.block}`;
             const seq = nextSeq(seqKey);
-            return { name: `${regio}-${rule.block}${String(seq).padStart(2, '0')} ${rule.label}`, seqKey, exact: false };
+            const re = new RegExp(`^${escRe(`${regio}-${rule.block}`)}(\\d{2}) ${escRe(rule.label)}$`);
+            return { name: `${regio}-${rule.block}${String(seq).padStart(2, '0')} ${rule.label}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
         // Direct numeric vehicle_type -> role, same rationale as the fire/ambulance
@@ -3325,7 +3798,8 @@ MKS.module({
             const seqScope = teamNum ? `team:${unitAbbr}${teamNum}` : `building:${building.id}`;
             const seqKey = `pol:${seqScope}:${role}`;
             const seq = nextSeq(seqKey);
-            return { name: `${prefix}.${String(seq).padStart(2, '0')} ${role}`, seqKey, exact: false };
+            const re = new RegExp(`^${escRe(prefix)}\\.(\\d{2}) ${escRe(role)}$`);
+            return { name: `${prefix}.${String(seq).padStart(2, '0')} ${role}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
         function generateAviationTarget(building) {
@@ -3375,7 +3849,8 @@ MKS.module({
             // the same org never both produce e.g. "RWS-1 DA-RWS".
             const seqKey = `gen:${discipline}:${label || building.id}`;
             const seq = nextSeq(seqKey);
-            return { name: `${code}-${seq}${label ? ' ' + label : ''}`, seqKey, exact: false };
+            const re = new RegExp(`^${escRe(code)}-(\\d+)${label ? ' ' + escRe(label) : ''}$`);
+            return { name: `${code}-${seq}${label ? ' ' + label : ''}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
         function computeTarget(building, vehicle, vehiclesAtBuilding) {
@@ -3425,6 +3900,22 @@ MKS.module({
         function keepOrUnique(name, vehicle, usedNames, captionCount) {
             if (name === vehicle.caption && captionCount.get(name) === 1) return name;
             return ensureUnique(name, usedNames);
+        }
+
+        // "What would I have named this?" If the vehicle's current name already
+        // follows the same scheme (same station, role and label, only a different
+        // sequence number), keep it instead of renumbering the whole fleet. The
+        // counter is moved past the kept number so new vehicles never reuse it.
+        function adoptOrUnique(target, vehicle, usedNames, captionCount, adopted) {
+            const fit = target.fits ? target.fits(vehicle.caption) : null;
+            delete target.fits;
+            if (fit && !adopted.has(vehicle.caption)) {
+                adopted.add(vehicle.caption);
+                if (target.seqKey) seqCounters[target.seqKey] = Math.max(seqCounters[target.seqKey] || 0, fit.seq);
+                return { ...target, name: vehicle.caption, exact: fit.exact };
+            }
+            target.name = keepOrUnique(target.name, vehicle, usedNames, captionCount);
+            return target;
         }
 
         function ensureUnique(name, usedNames) {
@@ -3697,6 +4188,7 @@ MKS.module({
 
             const usedNames = new Set(vehicles.map((v) => v.caption));
             const captionCount = countCaptions(vehicles);
+            const adopted = new Set();
             captionById.clear();
             vehicles.forEach((v) => captionById.set(v.id, v.caption));
             stats.vehicles = vehicles.length;
@@ -3726,7 +4218,7 @@ MKS.module({
                             recordUnclassified(building, vehicle);
                             continue; // can't work out its role -> leave it exactly as-is
                         }
-                        target.name = keepOrUnique(target.name, vehicle, usedNames, captionCount);
+                        target = adoptOrUnique(target, vehicle, usedNames, captionCount, adopted);
                         target.building = building.id;
                         assignments[vehicle.id] = target;
                     }
@@ -3796,6 +4288,7 @@ MKS.module({
             }
             const usedNames = new Set(vehicles.map((v) => v.caption));
             const captionCount = countCaptions(vehicles);
+            const adopted = new Set();
             vehicles.forEach((v) => captionById.set(v.id, v.caption));
             stats.vehicles = vehicles.length;
 
@@ -3803,9 +4296,9 @@ MKS.module({
                 const building = buildingsById[vehicle.building_id];
                 if (!building) continue;
                 const vehiclesHere = (vehiclesByBuilding[building.id] || []).sort((a, b) => a.id - b.id);
-                const target = computeTarget(building, vehicle, vehiclesHere);
+                let target = computeTarget(building, vehicle, vehiclesHere);
                 if (!target) { recordUnclassified(building, vehicle); continue; }
-                target.name = keepOrUnique(target.name, vehicle, usedNames, captionCount);
+                target = adoptOrUnique(target, vehicle, usedNames, captionCount, adopted);
                 target.building = building.id;
                 assignments[vehicle.id] = target;
                 if (target.name !== vehicle.caption) enqueueRename(vehicle.id, target.name);
@@ -4058,7 +4551,14 @@ MKS.module({
             'ambulance standplaats', 'ambulancepost', 'standplaats', 'ambulance',
             'politiebureau', 'politiepost', 'politie hoofdbureau', 'politie',
             'ravu', 'rav', 'kazerne',
+            // Labels this script writes itself, so a rescan of its own output
+            // doesn't stack another label on top ("Vliegbasis Vliegbasis ...").
+            'vliegbasis', 'rws steunpunt', 'rws',
         ];
+        // Place keys are written with hyphens ("utrecht-leidsche rijn") but the
+        // display name can use spaces ("Utrecht Leidsche Rijn"); compare both
+        // forms the same so a renamed building still finds its own entry.
+        const foldHyphens = (s) => s.replace(/-/g, ' ');
         function stripPrefix(normCaption) {
             let out = normCaption;
             // Strip a leading regio/post code the script itself writes ("09 ",
@@ -4166,6 +4666,9 @@ MKS.module({
         function displayPlaceName(stripped) {
             if (PLACE_DISPLAY_NAME[stripped]) return PLACE_DISPLAY_NAME[stripped];
             for (const [norm, disp] of Object.entries(PLACE_DISPLAY_NAME)) {
+                if (foldHyphens(norm) === foldHyphens(stripped)) return disp;
+            }
+            for (const [norm, disp] of Object.entries(PLACE_DISPLAY_NAME)) {
                 if (wordBoundaryIncludes(stripped, norm) || wordBoundaryIncludes(norm, stripped)) return disp;
             }
             return titleCase(stripped);
@@ -4224,7 +4727,7 @@ MKS.module({
             const tryDict = (dict, regio) => {
                 for (const key of Object.keys(dict)) {
                     const nkey = normalize(key);
-                    if (nkey === stripped || (alias && nkey === alias)) return { post: dict[key][0].split('-')[1].slice(0, 2), regio };
+                    if (foldHyphens(nkey) === foldHyphens(stripped) || (alias && nkey === alias)) return { post: dict[key][0].split('-')[1].slice(0, 2), regio };
                 }
                 let best = null;
                 for (const key of Object.keys(dict)) {
@@ -4851,6 +5354,20 @@ MKS.module({
         // logs it. usedNames holds every building's CURRENT caption, so a
         // building whose computed name equals its own caption must not count as
         // colliding with itself (that self-collision was what produced "(2)").
+        // "Is this what I would have named it?" Feed the computed name back in as
+        // if it were the building's caption: a correct name must come out the
+        // same. If it drifts (label stacking, place lookup changing), renaming
+        // would repeat on every scan or update, so the building is left alone.
+        function stableTarget(building) {
+            const target = computeTarget(building);
+            if (!target) return { target: null };
+            target.name = enforceNameLength(target.name);
+            if (target.name === building.caption) return { target };
+            const again = computeTarget({ ...building, caption: target.name });
+            if (again && enforceNameLength(again.name) !== target.name) return { target: null, unstable: target.name };
+            return { target };
+        }
+
         function claimName(name, building, usedNames) {
             if (name === building.caption) return name;
             if (usedNames.has(name)) return null;
@@ -5259,12 +5776,16 @@ MKS.module({
                     target = existing;
                     usedNames.add(target.name);
                 } else {
-                    target = computeTarget(building);
+                    const res = stableTarget(building);
+                    target = res.target;
+                    if (res.unstable) {
+                        recordUnclassified(building, `computed name "${res.unstable}" would change again on the next scan — left untouched`);
+                        continue;
+                    }
                     if (!target) {
                         if (!isDeliberatelySkipped(building)) recordUnclassified(building, 'unknown building_type or no place name could be derived');
                         continue;
                     }
-                    target.name = enforceNameLength(target.name);
                     const claimed = claimName(target.name, building, usedNames);
                     if (!claimed) {
                         recordUnclassified(building, `name collision: "${target.name}" already used by another building — left untouched`);
@@ -5306,12 +5827,15 @@ MKS.module({
             stats.buildings = buildings.length;
 
             for (const building of fresh) {
-                const target = computeTarget(building);
+                const { target, unstable } = stableTarget(building);
+                if (unstable) {
+                    recordUnclassified(building, `computed name "${unstable}" would change again on the next scan — left untouched`);
+                    continue;
+                }
                 if (!target) {
                     if (!isDeliberatelySkipped(building)) recordUnclassified(building, 'unknown building_type or no place name could be derived');
                     continue;
                 }
-                target.name = enforceNameLength(target.name);
                 const claimed = claimName(target.name, building, usedNames);
                 if (!claimed) {
                     recordUnclassified(building, `name collision: "${target.name}" already used by another building — left untouched`);
@@ -6237,6 +6761,9 @@ MKS.module({
             help: 'Toont credits per uur als los item in de navigatiebalk. Uit = alleen in het menu Wheeliecat\'s scripts.' },
         { key: 'sampleMin', label: 'Meten elke', type: 'number', default: 5, min: 1, max: 60, step: 1, unit: 'min' },
         { key: 'rateHours', label: 'Tempo over de laatste', type: 'number', default: 3, min: 1, max: 24, step: 1, unit: 'uur' },
+        { key: 'autoLog', label: 'Credit-logboek automatisch bijhouden', type: 'bool', default: true,
+            help: 'Leest op de achtergrond de nieuwe regels van het credit-logboek en bewaart ze in je browser. Zo bouw je een geschiedenis op die langer is dan het spel zelf toont.' },
+        { key: 'logMin', label: 'Logboek bijwerken elke', type: 'number', default: 15, min: 5, max: 120, step: 5, unit: 'min' },
     ],
 
     run(ctx) {
@@ -6253,15 +6780,22 @@ MKS.module({
             KEEP_DAYS: 400,            // after RAW_DAYS keep one sample per hour, until this
             RATE_WINDOW_H: ctx.cfg.rateHours,     // navbar rate: earned per online hour over this window
             BADGE_MS: 60000,
-            LOG_MAX_PAGES: 30,         // credit log pages fetched per import
-            LOG_DAYS: 14,              // stop importing when rows get older than this
+            LOG_MAX_PAGES: 30,         // credit log pages fetched on the first import
+            LOG_SYNC_PAGES: 10,        // max pages per later sync (normally 1 is enough)
+            LOG_DAYS: 14,              // first import: stop when rows get older than this
+            LOG_RAW_DAYS: 14,          // keep single log rows this long, then fold them per day
+            LOG_ANCHOR: 5,             // consecutive rows that must match to find the overlap
+            LOG_SYNC_MS: ctx.cfg.logMin * 60000,
             LOG_DELAY_MS: 400,
             REQUEST_TIMEOUT_MS: 20000,
             SAMPLES_KEY: 'incomeTracker.samples.v1',
             LAST_KEY: 'incomeTracker.lastSample',
             GOAL_KEY: 'incomeTracker.goal',
             TAB_KEY: 'incomeTracker.tab',
-            LOG_KEY: 'incomeTracker.log.v1',
+            LOG_RANGE_KEY: 'incomeTracker.logRange',
+            LOG_KEY: 'incomeTracker.log.v2',
+            LOG_KEY_V1: 'incomeTracker.log.v1',
+            LOG_LAST_KEY: 'incomeTracker.logLastSync',
         };
 
         const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -6572,37 +7106,112 @@ MKS.module({
             return r.amount >= 0 ? 'Inzet' : 'Overig';
         }
 
-        let importing = false;
-        async function importLog(onProgress) {
-            if (importing) return;
-            importing = true;
-            const all = [];
-            let headers = [];
-            const stopAt = Date.now() - CONFIG.LOG_DAYS * 86400e3;
+        /* ------------------------------------------------------------------------
+         * Stored log: { at, headers, rows, days }
+         *   rows: [{ amount, desc, date }] newest first, the last LOG_RAW_DAYS
+         *   days: { dayStart: [[desc, sign, n, total, max, min], ...] } older rows,
+         *         folded into one line per description per day
+         * Sync reads /credits from page 1 until it finds the newest stored rows
+         * again, so normally one request. Rows have no id: the match is on a
+         * run of consecutive rows with the same amount, description and date.
+         * Dates may be relative ("2 uur geleden"), so older rows get more slack.
+         * Rows without a readable date get u: 1 and match on any date.
+         * ---------------------------------------------------------------------- */
+        const sameRow = (a, b) => a.amount === b.amount && a.desc === b.desc
+            && (a.u || b.u || Math.abs(a.date - b.date) <= Math.max(120e3, (Date.now() - b.date) / 10));
+        function findAnchor(fetched, stored) {
+            const k = Math.min(CONFIG.LOG_ANCHOR, stored.length);
+            if (!k) return -1;
+            for (let i = 0; i + k <= fetched.length; i++) {
+                let ok = true;
+                for (let j = 0; j < k && ok; j++) ok = sameRow(fetched[i + j], stored[j]);
+                if (ok) return i;
+            }
+            return -1;
+        }
+
+        function compactLog(data) {
+            const cut = floorDay(Date.now() - CONFIG.LOG_RAW_DAYS * 86400e3);
+            const drop = Date.now() - CONFIG.KEEP_DAYS * 86400e3;
+            const keep = [];
+            for (const r of data.rows) {
+                if (r.date >= cut) { keep.push(r); continue; }
+                const day = floorDay(r.date);
+                const list = data.days[day] || (data.days[day] = []);
+                const sign = r.amount < 0 ? -1 : 1;
+                let e = list.find(x => x[0] === r.desc && x[1] === sign);
+                if (!e) list.push(e = [r.desc, sign, 0, 0, 0, Infinity]);
+                const abs = Math.abs(r.amount);
+                e[2]++; e[3] += r.amount; e[4] = Math.max(e[4], abs); e[5] = Math.min(e[5], abs);
+            }
+            data.rows = keep;
+            for (const d of Object.keys(data.days)) if (+d < drop) delete data.days[d];
+        }
+
+        const loadLog = () => {
             try {
+                const d = JSON.parse(GM_getValue(CONFIG.LOG_KEY, 'null'));
+                if (d) return d;
+                // v1 (manual import, overwritten each time): carry it over once.
+                const old = JSON.parse(GM_getValue(CONFIG.LOG_KEY_V1, 'null'));
+                if (old) return { at: old.at, headers: old.headers || [], days: {},
+                    rows: old.rows.map(r => ({ amount: r.amount, desc: r.desc, date: r.date || old.at })) };
+            } catch (e) { warn('log load failed', e); }
+            return null;
+        };
+        const saveLog = (d) => GM_setValue(CONFIG.LOG_KEY, JSON.stringify(d));
+        const logBytes = () => (GM_getValue(CONFIG.LOG_KEY, '') || '').length;
+
+        let importing = false;
+        async function syncLog(onProgress, force) {
+            if (importing) return;
+            const last = Number(GM_getValue(CONFIG.LOG_LAST_KEY, 0));
+            if (!force && Date.now() - last < CONFIG.LOG_SYNC_MS - 30e3) return;
+            importing = true;
+            GM_setValue(CONFIG.LOG_LAST_KEY, Date.now());  // claim the slot before the requests (other tabs)
+            const say = onProgress || (() => {});
+            try {
+                const stored = loadLog();
+                const now = Date.now();
+                const newest = stored && stored.rows.length ? stored.rows[0].date : 0;
+                const stopAt = Math.max(now - CONFIG.LOG_DAYS * 86400e3, newest - 3600e3);
+                const maxPages = stored ? CONFIG.LOG_SYNC_PAGES : CONFIG.LOG_MAX_PAGES;
+                const fetched = [];
+                let headers = stored ? stored.headers : [];
+                let anchor = -1;
                 let maxPage = 1;
-                for (let p = 1; p <= Math.min(maxPage, CONFIG.LOG_MAX_PAGES); p++) {
-                    onProgress(`Pagina ${p}${maxPage > 1 ? ' / ' + Math.min(maxPage, CONFIG.LOG_MAX_PAGES) : ''}…`);
+                for (let p = 1; p <= Math.min(maxPage, maxPages); p++) {
+                    say(`Pagina ${p}${maxPage > 1 ? ' / ' + Math.min(maxPage, maxPages) : ''}…`);
                     const res = await fetchWithTimeout(`/credits?page=${p}`);
                     if (!res.ok) throw new Error(`GET /credits?page=${p} failed: ${res.status}`);
                     const parsed = parseCreditLog(await res.text());
-                    if (p === 1) { headers = parsed.headers; }
+                    if (p === 1 && parsed.headers.length) headers = parsed.headers;
                     maxPage = Math.max(maxPage, parsed.maxPage);
                     if (!parsed.rows.length) break;
-                    all.push(...parsed.rows);
+                    fetched.push(...parsed.rows.map(r => r.date ? { amount: r.amount, desc: r.desc, date: r.date } : { amount: r.amount, desc: r.desc, date: now, u: 1 }));
+                    if (stored && (anchor = findAnchor(fetched, stored.rows)) >= 0) break;
                     const dated = parsed.rows.filter(r => r.date);
                     if (dated.length && dated.every(r => r.date < stopAt)) break;
                     await sleep(CONFIG.LOG_DELAY_MS);
                 }
-                const data = { at: Date.now(), headers, rows: all.filter(r => !r.date || r.date >= stopAt) };
-                GM_setValue(CONFIG.LOG_KEY, JSON.stringify(data));
-                log(`credit log: ${all.length} rows, headers:`, headers);
+                let fresh;
+                if (!stored) fresh = fetched.filter(r => r.date >= now - CONFIG.LOG_DAYS * 86400e3);
+                else if (anchor >= 0) fresh = fetched.slice(0, anchor);
+                // No overlap found (long offline or changed text): only take rows
+                // dated after the newest stored one, so nothing is counted twice.
+                else fresh = fetched.filter(r => !r.u && r.date > newest);
+                const data = stored || { days: {}, rows: [] };
+                data.at = now;
+                data.headers = headers;
+                data.rows = fresh.concat(data.rows);
+                compactLog(data);
+                saveLog(data);
+                if (fresh.length) log(`credit log: +${fresh.length} rows${stored && anchor < 0 ? ' (no overlap)' : ''}`);
                 return data;
             } finally {
                 importing = false;
             }
         }
-        const loadLog = () => { try { return JSON.parse(GM_getValue(CONFIG.LOG_KEY, 'null')); } catch (e) { return null; } };
 
         /* ========================================================================
          * FORMATTING
@@ -6688,7 +7297,7 @@ MKS.module({
         const ui = {
             tab: GM_getValue(CONFIG.TAB_KEY, 'overview'),
             logSort: 'total', logDir: -1, logSearch: '', logSign: 'in',
-            logStatus: '',
+            logStatus: '', logRange: Number(GM_getValue(CONFIG.LOG_RANGE_KEY, 14)),
         };
 
         function open() {
@@ -6988,21 +7597,31 @@ MKS.module({
         function renderLog(body) {
             const data = loadLog();
             const age = data ? Math.round((Date.now() - data.at) / 60e3) : null;
+            // Single rows plus folded day lines, as { desc, amount, n, max, min, date }.
+            const from = ui.logRange ? floorDay(addDays(Date.now(), -(ui.logRange - 1))) : 0;
+            const rows = !data ? [] : data.rows.filter(r => r.date >= from)
+                .map(r => ({ desc: r.desc, amount: r.amount, n: 1, max: Math.abs(r.amount), min: Math.abs(r.amount), date: r.date }))
+                .concat(Object.entries(data.days).filter(([d]) => +d >= from)
+                    .flatMap(([d, list]) => list.map(e => ({ desc: e[0], amount: e[3], n: e[2], max: e[4], min: e[5], date: +d }))));
+            const oldest = data ? Math.min(Date.now(), ...data.rows.map(r => r.date), ...Object.keys(data.days).map(Number)) : null;
+            const status = data
+                ? `${ctx.cfg.autoLog ? 'Automatisch bijgewerkt' : 'Bijgewerkt'} ${age < 1 ? 'net' : age + ' min geleden'} · bewaard sinds ${dayLabel(oldest)} · ${(logBytes() / 1024).toFixed(0)} KB in je browser`
+                : `Leest max. ${CONFIG.LOG_MAX_PAGES} pagina's van /credits (laatste ${CONFIG.LOG_DAYS} dagen).`;
             let html = `<div class="it-ctl">
-                <button id="it-log-import" ${importing ? 'disabled' : ''}>${data ? '↻ Logboek opnieuw inlezen' : '📥 Credit-logboek inlezen'}</button>
-                <span class="it-note" id="it-log-status">${esc(ui.logStatus || (data ? `Ingelezen ${age < 1 ? 'net' : age + ' min geleden'} · ${nl(data.rows.length)} regels` : `Leest max. ${CONFIG.LOG_MAX_PAGES} pagina's van /credits (laatste ${CONFIG.LOG_DAYS} dagen).`))}</span>
+                <button id="it-log-import" ${importing ? 'disabled' : ''}>${data ? '↻ Nu bijwerken' : '📥 Credit-logboek inlezen'}</button>
+                ${data ? `<select id="it-log-range">${[[1, 'Vandaag'], [7, 'Laatste 7 dagen'], [14, 'Laatste 14 dagen'], [30, 'Laatste 30 dagen'], [90, 'Laatste 90 dagen'], [0, 'Alles']]
+                    .map(([v, l]) => `<option value="${v}" ${ui.logRange === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
+                <span class="it-note" id="it-log-status">${esc(ui.logStatus || status)}</span>
               </div>`;
-            if (data && data.rows.length) {
-                const rows = data.rows;
-                const dated = rows.filter(r => r.date);
-                const spanTxt = dated.length ? `${timeLabel(Math.min(...dated.map(r => r.date)))} – ${timeLabel(Math.max(...dated.map(r => r.date)))}` : 'datum onbekend';
+            if (data && (data.rows.length || Object.keys(data.days).length)) {
+                const spanTxt = rows.length ? `${timeLabel(Math.min(...rows.map(r => r.date)))} – ${timeLabel(Math.max(...rows.map(r => r.date)))}` : 'geen regels in deze periode';
 
                 // Category summary.
                 const cat = new Map();
                 for (const r of rows) {
                     const k = category(r) + (r.amount < 0 ? ' (uit)' : '');
                     const c = cat.get(k) || { n: 0, sum: 0 };
-                    c.n++; c.sum += r.amount;
+                    c.n += r.n; c.sum += r.amount;
                     cat.set(k, c);
                 }
                 const catRows = [...cat.entries()].sort((x, y) => Math.abs(y[1].sum) - Math.abs(x[1].sum));
@@ -7014,8 +7633,8 @@ MKS.module({
                     if (ui.logSign === 'in' && r.amount < 0) continue;
                     if (ui.logSign === 'out' && r.amount >= 0) continue;
                     const g = groups.get(r.desc) || { desc: r.desc, n: 0, total: 0, max: 0, min: Infinity, last: 0, cat: category(r) };
-                    g.n++; g.total += r.amount;
-                    g.max = Math.max(g.max, Math.abs(r.amount)); g.min = Math.min(g.min, Math.abs(r.amount));
+                    g.n += r.n; g.total += r.amount;
+                    g.max = Math.max(g.max, r.max); g.min = Math.min(g.min, r.min);
                     g.last = Math.max(g.last, r.date || 0);
                     groups.set(r.desc, g);
                 }
@@ -7071,14 +7690,16 @@ MKS.module({
                 const btn = body.querySelector('#it-log-import');
                 btn.disabled = true;
                 try {
-                    await importLog((m) => { ui.logStatus = m; const s = overlay && overlay.querySelector('#it-log-status'); if (s) s.textContent = m; });
+                    await syncLog((m) => { ui.logStatus = m; const s = overlay && overlay.querySelector('#it-log-status'); if (s) s.textContent = m; }, true);
                     ui.logStatus = '';
                 } catch (e) {
-                    warn('log import failed', e);
+                    warn('log sync failed', e);
                     ui.logStatus = 'Inlezen mislukt: ' + e.message;
                 }
                 render();
             };
+            const range = body.querySelector('#it-log-range');
+            if (range) range.onchange = () => { ui.logRange = Number(range.value); GM_setValue(CONFIG.LOG_RANGE_KEY, ui.logRange); render(); };
             const q = body.querySelector('#it-log-q');
             if (q) q.oninput = () => {
                 ui.logSearch = q.value;
@@ -7183,9 +7804,129 @@ MKS.module({
         }
         sample(false);
         setInterval(() => sample(false), CONFIG.SAMPLE_MS);
+        if (ctx.cfg.autoLog) {
+            const autoSync = () => syncLog(null, false)
+                .then(d => { if (d && overlay && ui.tab === 'log' && document.activeElement?.id !== 'it-log-q') render(); })
+                .catch(e => warn('auto log sync failed', e));
+            setTimeout(autoSync, 15e3);  // let the page settle first
+            setInterval(autoSync, CONFIG.LOG_SYNC_MS);
+        }
         setInterval(updateBadge, CONFIG.BADGE_MS);
         updateBadge();
         log('started');
+    },
+});
+
+/* ==== module: daily-summary =============================================== */
+MKS.module({
+    id: 'daily-summary',
+    name: 'Dagsamenvatting totalen',
+    icon: '📊',
+    category: 'tools',
+    description: 'Boven de dagsamenvatting (Credits → Dagsamenvatting): inkomsten, uitgaven en netto van die dag, en per soort het aantal en de credits: '
+        + 'eigen inzetten, teaminzetten, patiënten, arrestanten, teamopnames, taken en beloningen, geannuleerd en loos alarm, uitgaven. '
+        + 'Klik een vak om de tabel daarop te filteren.',
+    at: 'ready',
+    frames: 'all',
+    pages: /^\/credits\/daily/,
+    pageNote: 'Alleen op de dagsamenvatting',
+    live: true,
+
+    run(ctx) {
+        const table = document.querySelector('#iframe-inside-container table.table, #iframe-inside-container table');
+        if (!table) return;
+
+        // First match wins. `test` gets the description and the credits.
+        const GROUPS = [
+            { key: 'spend', label: 'Uitgaven', color: '#ef4a52', test: (d, c) => c < 0 },
+            { key: 'patients', label: 'Patiënten', color: '#f0a83c', test: (d) => /^Patiënten behandeling/i.test(d) },
+            { key: 'teamIn', label: 'Teamopnames', color: '#9b7bea', test: (d) => /Teamopname/i.test(d) },
+            { key: 'prisoners', label: 'Arrestanten', color: '#3ecf8e', test: (d) => /^Arrestanten/i.test(d) },
+            { key: 'tasks', label: 'Taken & beloningen', color: '#e0c341', test: (d) => /^Taak '|beloning|^Prestatie|^Bonus/i.test(d) },
+            { key: 'void', label: 'Geannuleerd & loos alarm', color: '#8a96a3', test: (d) => / - (Gecanceld|Loos alarm)$/i.test(d) },
+            { key: 'team', label: 'Teaminzetten', color: '#31c4dd', test: (d) => /^\[Team\]/.test(d) },
+            { key: 'missions', label: 'Eigen inzetten', color: '#4f8df5', test: () => true },
+        ];
+
+        const num = (s) => {
+            const m = String(s).match(/-?\d[\d.]*/);
+            return m ? Number(m[0].replace(/\./g, '')) : 0;
+        };
+
+        // Column order is Credits | Ø | Aantal | Beschrijving; read the headers
+        // anyway in case the game moves them.
+        const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
+        const col = (name, fallback) => { const i = heads.findIndex((h) => h.startsWith(name)); return i >= 0 ? i : fallback; };
+        const iCredits = col('credits', 0);
+        const iCount = col('aantal', 2);
+        const iDesc = col('beschrijving', 3);
+
+        const rows = [...table.querySelectorAll('tbody > tr')].map((tr) => {
+            const credits = num(tr.cells[iCredits] && tr.cells[iCredits].textContent);
+            const desc = (tr.cells[iDesc] ? tr.cells[iDesc].textContent : '').trim().replace(/\s+/g, ' ');
+            const count = num(tr.cells[iCount] && tr.cells[iCount].textContent) || 1;
+            const group = GROUPS.find((g) => g.test(desc, credits));
+            return { tr, credits, count, desc, group: group.key };
+        });
+
+        const sums = Object.fromEntries(GROUPS.map((g) => [g.key, { n: 0, credits: 0 }]));
+        let income = 0, spend = 0;
+        for (const r of rows) {
+            sums[r.group].n += r.count;
+            sums[r.group].credits += r.credits;
+            if (r.credits >= 0) income += r.credits; else spend += r.credits;
+        }
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .mks-ds { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin: 8px 0 14px; }
+            .mks-ds-card { border: 1px solid rgba(128,128,128,.35); border-left: 4px solid var(--c); border-radius: 6px; padding: 6px 10px;
+                cursor: pointer; user-select: none; background: rgba(128,128,128,.06); }
+            .mks-ds-card:hover { background: rgba(128,128,128,.14); }
+            .mks-ds-card.on { background: rgba(128,128,128,.22); box-shadow: 0 0 0 2px var(--c) inset; }
+            .mks-ds-card.total { cursor: default; }
+            .mks-ds-card .l { font-size: 12px; opacity: .75; }
+            .mks-ds-card .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+            .mks-ds-card .s { font-size: 12px; opacity: .75; font-variant-numeric: tabular-nums; }
+            .mks-ds-hidden { display: none !important; }
+        `;
+        document.head.appendChild(style);
+
+        const nl = ctx.nl;
+        const signed = (n) => (n > 0 ? '+' : '') + nl(n);
+        const box = document.createElement('div');
+        box.className = 'mks-ds';
+        const totalCards = [
+            { label: 'Inkomsten', color: '#3ecf8e', v: nl(income) },
+            { label: 'Uitgaven', color: '#ef4a52', v: nl(spend), g: 'spend', s: `${nl(sums.spend.n)}×` },
+            { label: 'Netto', color: income + spend >= 0 ? '#3ecf8e' : '#ef4a52', v: signed(income + spend) },
+        ].map((c) => `<div class="mks-ds-card${c.g ? '' : ' total'}" ${c.g ? `data-g="${c.g}" title="Klik: alleen deze regels tonen"` : ''} style="--c:${c.color}">`
+            + `<div class="l">${c.label}</div><div class="v">${c.v}</div>${c.s ? `<div class="s">${c.s}</div>` : ''}</div>`);
+        const groupCards = GROUPS.filter((g) => g.key !== 'spend' && sums[g.key].n).map((g) => {
+            const s = sums[g.key];
+            const avg = s.n ? Math.round(s.credits / s.n) : 0;
+            return `<div class="mks-ds-card" data-g="${g.key}" style="--c:${g.color}" title="Klik: alleen deze regels tonen">
+                <div class="l">${g.label}</div><div class="v">${nl(s.credits)}</div><div class="s">${nl(s.n)}× · Ø ${nl(avg)}</div></div>`;
+        });
+        box.innerHTML = totalCards.concat(groupCards).join('');
+        table.insertAdjacentElement('beforebegin', box);
+
+        let active = null;
+        box.addEventListener('click', (ev) => {
+            const card = ev.target.closest('.mks-ds-card[data-g]');
+            if (!card) return;
+            active = active === card.dataset.g ? null : card.dataset.g;
+            box.querySelectorAll('.mks-ds-card[data-g]').forEach((c) => c.classList.toggle('on', c.dataset.g === active));
+            for (const r of rows) r.tr.classList.toggle('mks-ds-hidden', !!active && r.group !== active);
+        });
+
+        return {
+            stop() {
+                rows.forEach((r) => r.tr.classList.remove('mks-ds-hidden'));
+                box.remove();
+                style.remove();
+            },
+        };
     },
 });
 
@@ -7660,15 +8401,18 @@ MKS.module({
     name: 'Plaatsingsadvies',
     icon: '📍',
     category: 'map',
-    description: 'Tijdens het bouwen of verplaatsen van een gebouw: toont het adres en welke echte OpenStreetMap-objecten binnen een straal van de gekozen plek liggen, '
-        + 'zodat je ziet of het een geloofwaardige echte locatie is. Een echte post van hetzelfde type wordt groen gemarkeerd. Blokkeert of vult nooit iets in.',
+    description: 'Tijdens het bouwen of verplaatsen van een gebouw: toont de echte hulpdienstposten (brandweer, ambulance, politie, ziekenhuis, heli, KNRM, '
+        + 'Rijkswaterstaat, defensie) in de buurt van de marker, volgens OpenStreetMap. Klik op een post en de marker springt erheen. '
+        + 'Vult verder niets in en koopt nooit iets: bouwen doe je zelf.',
     tagline: 'Verschijnt bij gebouw plaatsen',
     at: 'load',
     frames: 'all',
     live: true,
     settings: [
-        { key: 'radius', label: 'Zoekstraal', type: 'range', default: 50, min: 10, max: 150, step: 5, unit: ' m' },
-        { key: 'address', label: 'Adres tonen (Nominatim)', type: 'bool', default: true },
+        { key: 'radiusKm', label: 'Zoekstraal', type: 'range', default: 5, min: 0.5, max: 10, step: 0.5, unit: ' km' },
+        { key: 'onlyType', label: 'Alleen posten van het gekozen gebouwtype', type: 'bool', default: true,
+            help: 'Uit: alle soorten hulpdienstposten. Bij een gebouwtype zonder echte tegenhanger zie je altijd alles.' },
+        { key: 'address', label: 'Adres van de marker tonen (Nominatim)', type: 'bool', default: true },
         { key: 'debug', label: 'Uitgebreid loggen in console', type: 'bool', default: false },
     ],
 
@@ -7676,83 +8420,76 @@ MKS.module({
         /* ========================================================================
          * CONFIG
          * ====================================================================
-         * Purely advisory: never fills in a name, never blocks the submit
-         * button, never touches the form. It only shows a panel of what
-         * OpenStreetMap says is at the coordinates the game's own lat/lng
-         * fields currently hold.
+         * The posts come from dist/data/posts-nl.json in the suite repo
+         * (made by `node build.js osm`), not from a live Overpass query: that
+         * query takes minutes and the public server is often overloaded. The
+         * file is cached in GM storage and refreshed once a week.
+         *
+         * The only thing this module changes is the position of the game's
+         * own placement marker, and only when you click a post.
          * ==================================================================== */
         const CONFIG = {
             get DEBUG() { return ctx.cfg.debug; },
-            get RADIUS_METERS() { return ctx.cfg.radius; },
+            get RADIUS_M() { return ctx.cfg.radiusKm * 1000; },
             POLL_MS: 500,       // how often to check whether the lat/lng fields changed
-            DEBOUNCE_MS: 900,   // wait this long after the last change before querying
-            // overpass-api.de is the only reliable public instance. The others
-            // are fallbacks and often down.
-            OVERPASS_ENDPOINTS: [
-                'https://overpass-api.de/api/interpreter',
-                'https://overpass.private.coffee/api/interpreter',
-                'https://overpass.kumi.systems/api/interpreter',
-            ],
+            DEBOUNCE_MS: 400,   // wait this long after the last change before searching
+            DATA_URL: 'https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/data/posts-nl.json',
+            DATA_CACHE_KEY: 'mks.placementAdvisor.posts',
+            DATA_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
             NOMINATIM_URL: 'https://nominatim.openstreetmap.org/reverse',
             // Sent only by the GM_xmlhttpRequest fallback; page fetch() cannot
             // set a User-Agent.
             USER_AGENT: 'Meldkamerspel-Suite (github.com/Wheeliecat-dev/meldkamerspel-suite)',
             REQUEST_TIMEOUT_MS: 20 * 1000,
-            RETRIES: 2,         // extra tries per endpoint on 429/504 (server busy)
-            MAX_ROWS: 15,
+            ON_SPOT_M: 60,      // marker this close to a post = "on" that post
+            MAX_ROWS: 25,
         };
 
         const esc = ctx.esc;
         const log = (...a) => { if (CONFIG.DEBUG) console.log('%c[PlacementAdvisor]', 'color:#a06', ...a); };
         const warn = (...a) => console.warn('[PlacementAdvisor]', ...a);
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
         /* ========================================================================
-         * Gebouwtype (building_type) -> the OSM tags a real one has. `match` is
-         * used to highlight a real post of the same type in the list; `hint` is
-         * shown next to the chosen type. Values match the game's own
-         * <select id="building_building_type"> options.
+         * Post categories (codes as written by build.js) and which category
+         * belongs to each game building type (<select id="building_building_type">).
+         * Types without a real counterpart (e.g. uitgangsstelling) show all.
          * ==================================================================== */
-        const is = (key, ...values) => (t) => values.includes(t[key]);
-        const any = (...fns) => (t) => fns.some((f) => f(t));
-        const TYPES = {
-            '0': { hint: 'brandweerkazerne', match: is('amenity', 'fire_station') },
-            '17': { hint: 'brandweerkazerne', match: is('amenity', 'fire_station') },
-            '3': { hint: 'ambulancepost', match: is('emergency', 'ambulance_station') },
-            '13': { hint: 'ambulancepost', match: is('emergency', 'ambulance_station') },
-            '2': { hint: 'ziekenhuis', match: any(is('amenity', 'hospital'), is('healthcare', 'hospital')) },
-            '5': { hint: 'politiebureau', match: is('amenity', 'police') },
-            '11': { hint: 'politiebureau', match: is('amenity', 'police') },
-            '18': { hint: 'politiebureau', match: is('amenity', 'police') },
-            '6': { hint: 'helikopterplatform', match: is('aeroway', 'helipad', 'heliport') },
-            '9': { hint: 'helikopterplatform', match: is('aeroway', 'helipad', 'heliport') },
-            '21': { hint: 'helikopterplatform', match: is('aeroway', 'helipad', 'heliport') },
-            '7': { hint: 'hogeschool/universiteit', match: is('amenity', 'university', 'college') },
-            '16': { hint: 'reddingsbrigade', match: any(is('emergency', 'lifeguard', 'lifeguard_base'), is('amenity', 'lifeboat_station')) },
-            '19': { hint: 'kustwacht/reddingsstation', match: any(is('emergency', 'lifeboat_station', 'water_rescue'), is('amenity', 'lifeboat_station')) },
-            '22': { hint: 'overheidskantoor', match: is('office', 'government') },
-            '23': { hint: 'militair terrein', match: (t) => !!t.military },
-            '25': { hint: 'kazerne (militair)', match: (t) => !!t.military },
+        const CATS = {
+            F: { icon: '🚒', label: 'Brandweerkazerne' },
+            A: { icon: '🚑', label: 'Ambulancepost' },
+            P: { icon: '🚓', label: 'Politiebureau' },
+            H: { icon: '🏥', label: 'Ziekenhuis' },
+            L: { icon: '🚁', label: 'Helikopterplatform' },
+            W: { icon: '🛟', label: 'Reddingsbrigade / KNRM' },
+            R: { icon: '🚧', label: 'Rijkswaterstaat' },
+            M: { icon: '🪖', label: 'Defensie' },
+        };
+        const TYPE_CAT = {
+            0: 'F', 17: 'F', 4: 'F',
+            3: 'A', 13: 'A',
+            2: 'H',
+            5: 'P', 11: 'P', 18: 'P', 8: 'P',
+            6: 'L', 9: 'L', 21: 'L',
+            16: 'W', 19: 'W', 20: 'W',
+            22: 'R',
+            23: 'M', 25: 'M', 26: 'M',
         };
 
         /* ========================================================================
          * HTTP
          * ====================================================================
-         * Page fetch() first: overpass-api.de answers HTTP 406 to requests that
-         * carry a browser User-Agent but no Origin/Sec-Fetch headers, which is
-         * exactly what GM_xmlhttpRequest sends. A real page fetch has those
-         * headers, and both Overpass and Nominatim allow CORS. GM is only the
-         * fallback (e.g. when fetch is blocked), with our own User-Agent.
+         * Page fetch() first (GitHub raw and Nominatim both allow CORS).
+         * GM_xmlhttpRequest is the fallback when fetch is blocked.
          * ==================================================================== */
         class HttpError extends Error {
             constructor(status) { super(`HTTP ${status}`); this.status = status; }
         }
 
-        async function pageFetch(url, opts) {
+        async function pageFetch(url) {
             const ac = new AbortController();
             const t = setTimeout(() => ac.abort(), CONFIG.REQUEST_TIMEOUT_MS);
             try {
-                const res = await fetch(url, { ...opts, signal: ac.signal, credentials: 'omit' });
+                const res = await fetch(url, { signal: ac.signal, credentials: 'omit' });
                 if (!res.ok) throw new HttpError(res.status);
                 return await res.text();
             } finally {
@@ -7760,13 +8497,12 @@ MKS.module({
             }
         }
 
-        function gmFetch(url, opts) {
+        function gmFetch(url) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
-                    method: opts.method || 'GET',
+                    method: 'GET',
                     url,
-                    data: opts.body,
-                    headers: { ...(opts.headers || {}), 'User-Agent': CONFIG.USER_AGENT },
+                    headers: { 'User-Agent': CONFIG.USER_AGENT },
                     timeout: CONFIG.REQUEST_TIMEOUT_MS,
                     onload: (res) => {
                         if (res.status >= 200 && res.status < 300) resolve(res.responseText);
@@ -7778,48 +8514,45 @@ MKS.module({
             });
         }
 
-        // Retries on "server busy" (429, 504), then falls back to GM.
-        async function request(url, opts = {}) {
-            for (let attempt = 0; ; attempt++) {
-                try {
-                    return await pageFetch(url, opts);
-                } catch (e) {
-                    const busy = e instanceof HttpError && (e.status === 429 || e.status === 504);
-                    if (busy && attempt < CONFIG.RETRIES) { await sleep(2000 * (attempt + 1)); continue; }
-                    if (e instanceof HttpError) throw e;
-                    log(`fetch ${url} failed (${e.message}), trying GM_xmlhttpRequest`);
-                    return gmFetch(url, opts);
-                }
+        async function request(url) {
+            try {
+                return await pageFetch(url);
+            } catch (e) {
+                if (e instanceof HttpError) throw e;
+                log(`fetch ${url} failed (${e.message}), trying GM_xmlhttpRequest`);
+                return gmFetch(url);
             }
         }
 
         /* ========================================================================
-         * OVERPASS + NOMINATIM
+         * DATA
          * ==================================================================== */
-        const QUERY_KEYS = ['name', 'amenity', 'emergency', 'office', 'military', 'healthcare', 'aeroway'];
+        function readCache() {
+            try { return JSON.parse(GM_getValue(CONFIG.DATA_CACHE_KEY, 'null')); } catch (e) { return null; }
+        }
 
-        async function queryOverpass(lat, lon, radius) {
-            // Only tagged objects with a key we care about. A bare
-            // node(around) also returns every untagged way vertex.
-            const around = `around:${radius},${lat},${lon}`;
-            const parts = QUERY_KEYS.map((k) => `nwr(${around})[${k}];`).join('');
-            const query = `[out:json][timeout:15];(${parts});out center tags;`;
-            const body = `data=${encodeURIComponent(query)}`;
-            let lastErr;
-            for (const endpoint of CONFIG.OVERPASS_ENDPOINTS) {
-                try {
-                    const text = await request(endpoint, {
-                        method: 'POST',
-                        body,
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    });
-                    return JSON.parse(text);
-                } catch (e) {
-                    lastErr = e;
-                    warn(`Overpass ${endpoint} failed, trying next`, e);
-                }
+        let postsPromise = null;
+        // -> [[lat, lon, cat, name, osmId], ...]
+        function loadPosts() {
+            if (postsPromise) return postsPromise;
+            const cached = readCache();
+            if (cached && Date.now() - cached.t < CONFIG.DATA_MAX_AGE_MS) {
+                postsPromise = Promise.resolve(cached.posts);
+                return postsPromise;
             }
-            throw lastErr;
+            postsPromise = request(CONFIG.DATA_URL)
+                .then((text) => {
+                    const data = JSON.parse(text);
+                    GM_setValue(CONFIG.DATA_CACHE_KEY, JSON.stringify({ t: Date.now(), date: data.date, posts: data.posts }));
+                    log(`loaded ${data.posts.length} posts (OSM ${data.date})`);
+                    return data.posts;
+                })
+                .catch((e) => {
+                    postsPromise = null;
+                    if (cached) { warn('could not refresh posts, using old copy', e); return cached.posts; }
+                    throw e;
+                });
+            return postsPromise;
         }
 
         async function reverseGeocode(lat, lon) {
@@ -7841,40 +8574,87 @@ MKS.module({
             return 2 * R * Math.asin(Math.sqrt(a));
         }
 
-        // Which tag on an element best describes it, for display.
-        function describeElement(tags) {
-            const keys = ['amenity', 'emergency', 'healthcare', 'office', 'military', 'aeroway', 'shop', 'tourism', 'leisure', 'railway', 'highway', 'building'];
-            for (const key of keys) {
-                if (tags[key] && tags[key] !== 'yes') return `${key}=${tags[key]}`;
+        function nearbyPosts(posts, lat, lon, cat) {
+            const rows = [];
+            for (const [plat, plon, pcat, name, osm] of posts) {
+                if (cat && pcat !== cat) continue;
+                const distance = distanceMeters(lat, lon, plat, plon);
+                if (distance > CONFIG.RADIUS_M) continue;
+                rows.push({ lat: plat, lon: plon, cat: pcat, name, osm, distance });
             }
-            return tags.building ? 'building' : '';
+            rows.sort((a, b) => a.distance - b.distance);
+            return rows;
         }
 
-        // Tag keys worth showing even without a name (institutional).
-        const NAMELESS_WORTHY_KEYS = ['amenity', 'emergency', 'office', 'military', 'healthcare', 'aeroway'];
+        const fmtDist = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
+        const osmUrl = (id) => `https://www.openstreetmap.org/${{ n: 'node', w: 'way', r: 'relation' }[id[0]]}/${id.slice(1)}`;
 
-        // NOTE: for a way (a building outline, a platform, ...) `out center`
-        // gives the centroid of the whole way, which can lie outside the
-        // radius although the way crosses it. Distances are an estimate.
-        function relevantElements(elements, lat, lon, type) {
-            const rows = [];
-            for (const el of elements) {
-                const tags = el.tags || {};
-                if (!tags.name && !NAMELESS_WORTHY_KEYS.some((k) => tags[k])) continue;
-                const elat = el.lat ?? el.center?.lat;
-                const elon = el.lon ?? el.center?.lon;
-                if (elat === undefined || elon === undefined) continue;
-                rows.push({
-                    name: tags.name || '(zonder naam)',
-                    desc: describeElement(tags),
-                    distance: Math.round(distanceMeters(lat, lon, elat, elon)),
-                    match: !!(type && type.match(tags)),
-                    osm: `https://www.openstreetmap.org/${el.type}/${el.id}`,
-                });
+        /* ========================================================================
+         * GAME MARKER
+         * ====================================================================
+         * The game shows a draggable Leaflet marker while you place a building
+         * and writes its position into #building_latitude/#building_longitude.
+         * We find that marker on the map (the draggable one closest to the
+         * current field values), move it, and fire the drag events so the
+         * game's own handlers run as if you dragged it.
+         * ==================================================================== */
+        function gameMap() {
+            // The form can sit in a lightbox iframe; the map lives in the top window.
+            for (const w of [ctx.W, window.parent, window.top]) {
+                try {
+                    const W = w.wrappedJSObject || w;
+                    if (W.map && W.L && typeof W.map.eachLayer === 'function') return { map: W.map, L: W.L };
+                } catch (e) { /* cross-origin frame */ }
             }
-            // A real post of the chosen type first, then by distance.
-            rows.sort((a, b) => (b.match - a.match) || (a.distance - b.distance));
-            return rows;
+            return null;
+        }
+
+        function findPlacementMarker(map, L, lat, lon) {
+            let best = null;
+            let bestD = Infinity;
+            map.eachLayer((layer) => {
+                if (!(layer instanceof L.Marker)) return;
+                const draggable = layer.options.draggable || (layer.dragging && layer.dragging.enabled());
+                if (!draggable) return;
+                const ll = layer.getLatLng();
+                const d = Math.abs(ll.lat - lat) + Math.abs(ll.lng - lon);
+                if (d < bestD) { bestD = d; best = layer; }
+            });
+            return best;
+        }
+
+        function setField(input, value) {
+            input.value = value;
+            const $ = ctx.W.jQuery || ctx.W.$;
+            if (typeof $ === 'function') $(input).trigger('change');
+            else input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function moveMarker(lat, lon) {
+            const fields = findLatLngInputs();
+            const g = gameMap();
+            let moved = false;
+            if (g) {
+                const curLat = fields ? Number(fields.lat.value) : lat;
+                const curLon = fields ? Number(fields.lon.value) : lon;
+                const marker = findPlacementMarker(g.map, g.L, curLat, curLon);
+                if (marker) {
+                    marker.setLatLng([lat, lon]);
+                    marker.fire('dragstart');
+                    marker.fire('drag');
+                    marker.fire('dragend', { target: marker, distance: 1 });
+                    g.map.panTo([lat, lon]);
+                    moved = true;
+                }
+            }
+            // Make sure the form has the new position even if the game's
+            // handler did not write it.
+            if (fields) {
+                setField(fields.lat, lat);
+                setField(fields.lon, lon);
+            }
+            if (!moved) warn('placement marker not found on the map; only the form fields were set');
+            log(`moved marker to ${lat}, ${lon}`);
         }
 
         /* ========================================================================
@@ -7882,6 +8662,7 @@ MKS.module({
          * ==================================================================== */
         let panelEl = null;
         let dismissedKey = null; // coordinates the user closed the panel for
+        let shownRows = [];
 
         function ensurePanel() {
             if (panelEl && document.body.contains(panelEl)) return panelEl;
@@ -7889,8 +8670,15 @@ MKS.module({
             panelEl.id = 'pa-panel';
             panelEl.style.cssText = 'position:fixed;top:70px;right:8px;z-index:99999;background:#111;color:#eee;font:12px/1.4 sans-serif;padding:10px 12px;border-radius:6px;opacity:0.95;width:320px;max-height:70vh;overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
             panelEl.addEventListener('click', (e) => {
-                if (e.target.closest('.pa-close')) { dismissedKey = lastKey; removePanel(); }
-                if (e.target.closest('.pa-retry')) { lastKey = null; lastRawFieldValue = null; }
+                if (e.target.closest('.pa-close')) { dismissedKey = lastKey; removePanel(); return; }
+                if (e.target.closest('.pa-retry')) { recheck(); return; }
+                if (e.target.closest('.pa-all')) { ctx.set('onlyType', !ctx.cfg.onlyType); recheck(); return; }
+                if (e.target.closest('a')) return; // OSM link
+                const row = e.target.closest('.pa-row');
+                if (row) {
+                    const r = shownRows[Number(row.dataset.i)];
+                    if (r) moveMarker(r.lat, r.lon);
+                }
             });
             document.body.appendChild(panelEl);
             return panelEl;
@@ -7910,42 +8698,52 @@ MKS.module({
         }
 
         const muted = (s) => `<div style="color:#999;">${s}</div>`;
+        const link = (cls, text) => `<span class="${cls}" style="color:#7ad;cursor:pointer;text-decoration:underline;">${text}</span>`;
 
         function renderIdle() {
-            show(muted(`Typ een adres of sleep de marker. Dan zie je wat daar echt staat (OpenStreetMap, straal ${CONFIG.RADIUS_METERS} m).`));
+            show(muted(`Typ een adres of sleep de marker. Je ziet dan de echte hulpdienstposten binnen ${fmtDist(CONFIG.RADIUS_M)}.`));
         }
 
-        function headerHtml(lat, lon, typeLabel, type, address) {
-            return muted(`${lat.toFixed(5)}, ${lon.toFixed(5)} · straal ${CONFIG.RADIUS_METERS} m`)
-                + (address ? `<div style="margin:2px 0;">🏠 ${esc(address)}</div>` : '')
-                + (typeLabel ? `<div style="color:#7ad;margin:2px 0 6px;">Gekozen type: ${esc(typeLabel)}${type ? ` <span style="color:#999;">(zoek: ${esc(type.hint)})</span>` : ''}</div>` : '');
-        }
-
-        function renderLoading(lat, lon) {
-            show(muted(`Zoeken rond ${lat.toFixed(5)}, ${lon.toFixed(5)} ...`));
+        function renderLoading() {
+            show(muted('Posten laden...'));
         }
 
         function renderError(msg) {
-            show(`<div style="color:#e66;">${esc(msg)}</div>`
-                + '<button type="button" class="pa-retry" style="margin-top:6px;color:#222;">Opnieuw proberen</button>');
+            show(`<div style="color:#e66;">${esc(msg)}</div><div style="margin-top:6px;">${link('pa-retry', 'Opnieuw proberen')}</div>`);
         }
 
-        function renderResults(lat, lon, rows, typeLabel, type, address) {
-            let html = headerHtml(lat, lon, typeLabel, type, address);
-            if (type) {
-                const hit = rows.find((r) => r.match);
-                html += hit
-                    ? `<div style="color:#5c5;margin-bottom:6px;">✔ Echte ${esc(type.hint)} op ${hit.distance} m</div>`
-                    : `<div style="color:#e90;margin-bottom:6px;">Geen ${esc(type.hint)} binnen ${CONFIG.RADIUS_METERS} m</div>`;
+        function renderResults(rows, typeLabel, cat, address) {
+            const radius = fmtDist(CONFIG.RADIUS_M);
+            let html = address ? `<div style="margin-bottom:2px;">🏠 ${esc(address)}</div>` : '';
+            if (typeLabel) {
+                html += `<div style="color:#7ad;">Gekozen type: ${esc(typeLabel)}</div>`;
             }
-            if (!rows.length) {
-                show(html + muted(`Niets met een naam binnen ${CONFIG.RADIUS_METERS} m volgens OpenStreetMap.`));
+            if (cat) {
+                html += muted(ctx.cfg.onlyType
+                    ? `Alleen ${esc(CATS[cat].label.toLowerCase())} · ${link('pa-all', 'toon alle posten')}`
+                    : `Alle posten · ${link('pa-all', `alleen ${esc(CATS[cat].label.toLowerCase())}`)}`);
+            }
+            const onSpot = rows.find((r) => r.distance <= CONFIG.ON_SPOT_M && (!cat || r.cat === cat));
+            if (onSpot) html += `<div style="color:#5c5;margin-top:4px;">✔ Marker staat op ${esc(onSpot.name || CATS[onSpot.cat].label)}</div>`;
+            html += '<div style="margin-bottom:4px;"></div>';
+
+            shownRows = rows.slice(0, CONFIG.MAX_ROWS);
+            if (!shownRows.length) {
+                show(html + muted(`Geen echte ${cat && ctx.cfg.onlyType ? esc(CATS[cat].label.toLowerCase()) : 'hulpdienstpost'} binnen ${radius}.`));
                 return;
             }
-            html += rows.slice(0, CONFIG.MAX_ROWS).map((r) => `<div style="padding:3px 0;border-top:1px solid #333;${r.match ? 'color:#5c5;' : ''}">`
-                + `<a href="${r.osm}" target="_blank" rel="noopener" style="color:inherit;font-weight:bold;">${esc(r.name)}</a><br>`
-                + `<span style="color:#999;">${esc(r.desc)} · ${r.distance} m</span></div>`).join('');
-            if (rows.length > CONFIG.MAX_ROWS) html += muted(`+ ${rows.length - CONFIG.MAX_ROWS} meer`);
+            html += shownRows.map((r, i) => {
+                const c = CATS[r.cat];
+                const match = cat && r.cat === cat;
+                return `<div class="pa-row" data-i="${i}" title="Klik: marker hierheen" style="padding:4px 2px;border-top:1px solid #333;cursor:pointer;${match ? 'color:#5c5;' : ''}"`
+                    + ' onmouseover="this.style.background=\'#222\'" onmouseout="this.style.background=\'\'">'
+                    + `${c.icon} <b>${esc(r.name || '(zonder naam)')}</b><br>`
+                    + `<span style="color:#999;">${esc(c.label)} · ${fmtDist(r.distance)} · `
+                    + `<a href="${osmUrl(r.osm)}" target="_blank" rel="noopener" style="color:#999;">OSM</a></span></div>`;
+            }).join('');
+            if (rows.length > shownRows.length) html += muted(`+ ${rows.length - shownRows.length} verder weg`);
+            html += muted('<div style="margin-top:6px;">Klik op een post om de marker erheen te zetten.</div>'
+                + '<div style="font-size:10px;">Gegevens © OpenStreetMap-bijdragers (ODbL)</div>');
             show(html);
         }
 
@@ -7963,9 +8761,15 @@ MKS.module({
 
         let lastKey = null;
         let lastRawFieldValue = null;
+        let lastAddress = { key: null, text: '' };
         let debounceTimer = null;
         let seq = 0;            // drops answers for coordinates that are no longer current
         let formOpen = false;
+
+        function recheck() {
+            lastKey = null;
+            lastRawFieldValue = null;
+        }
 
         function scheduleCheck(latVal, lonVal, typeSelect) {
             clearTimeout(debounceTimer);
@@ -7973,28 +8777,38 @@ MKS.module({
                 const lat = Number(latVal);
                 const lon = Number(lonVal);
                 if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
-                const key = `${lat.toFixed(6)},${lon.toFixed(6)},${typeSelect ? typeSelect.value : ''},${CONFIG.RADIUS_METERS}`;
+                const typeValue = typeSelect ? typeSelect.value : '';
+                const key = `${lat.toFixed(6)},${lon.toFixed(6)},${typeValue},${CONFIG.RADIUS_M},${ctx.cfg.onlyType}`;
                 if (key === lastKey) return;
                 lastKey = key;
                 const mySeq = ++seq;
 
                 const typeLabel = typeSelect?.selectedOptions[0]?.textContent.trim() || '';
-                const type = typeSelect ? TYPES[typeSelect.value] : null;
+                const typeCat = TYPE_CAT[typeValue] || null;
+                const filterCat = ctx.cfg.onlyType ? typeCat : null;
 
-                renderLoading(lat, lon);
-                const addressP = ctx.cfg.address
-                    ? reverseGeocode(lat, lon).catch((e) => { warn('Nominatim failed', e); return ''; })
-                    : Promise.resolve('');
+                // Address only when the position changed, not on a type/filter change.
+                const posKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+                const addressP = !ctx.cfg.address ? Promise.resolve('')
+                    : lastAddress.key === posKey ? Promise.resolve(lastAddress.text)
+                        : reverseGeocode(lat, lon)
+                            .then((text) => { lastAddress = { key: posKey, text }; return text; })
+                            .catch((e) => { warn('Nominatim failed', e); return ''; });
+
+                if (!postsPromise) renderLoading();
                 try {
-                    const [data, address] = await Promise.all([queryOverpass(lat, lon, CONFIG.RADIUS_METERS), addressP]);
+                    const posts = await loadPosts();
                     if (mySeq !== seq) return;
-                    const rows = relevantElements(data.elements || [], lat, lon, type);
-                    renderResults(lat, lon, rows, typeLabel, type, address);
-                    log(`checked ${key}: ${rows.length} feature(s)`);
+                    const rows = nearbyPosts(posts, lat, lon, filterCat);
+                    renderResults(rows, typeLabel, typeCat, lastAddress.key === posKey ? lastAddress.text : '');
+                    log(`checked ${key}: ${rows.length} post(s)`);
+                    // The address is slower; add it when it arrives.
+                    const address = await addressP;
+                    if (mySeq === seq && address) renderResults(rows, typeLabel, typeCat, address);
                 } catch (e) {
                     if (mySeq !== seq) return;
-                    warn('Overpass query failed', e);
-                    renderError(`OpenStreetMap-server reageert niet (${e.message}). Probeer het zo opnieuw.`);
+                    warn('could not load posts', e);
+                    renderError(`Kon de lijst met posten niet laden (${e.message}).`);
                 }
             }, CONFIG.DEBOUNCE_MS);
         }
@@ -8012,21 +8826,21 @@ MKS.module({
                 }
                 return;
             }
-            if (!formOpen) { formOpen = true; renderIdle(); }
+            if (!formOpen) { formOpen = true; renderIdle(); loadPosts().catch(() => {}); }
             const latVal = fields.lat.value;
             const lonVal = fields.lon.value;
             if (!latVal || !lonVal) return;
             const typeSelect = findGebouwtypeSelect();
             // Only reschedule on a real change: scheduleCheck() resets its
             // debounce timer, so calling it every tick would never let it fire.
-            const rawKey = `${latVal}|${lonVal}|${typeSelect ? typeSelect.value : ''}|${CONFIG.RADIUS_METERS}`;
+            const rawKey = `${latVal}|${lonVal}|${typeSelect ? typeSelect.value : ''}|${CONFIG.RADIUS_M}|${ctx.cfg.onlyType}`;
             if (rawKey === lastRawFieldValue) return;
             lastRawFieldValue = rawKey;
             scheduleCheck(latVal, lonVal, typeSelect);
         }
 
-        // Radius and address apply on the next check; no reload needed.
-        ctx.onSettings(() => { lastRawFieldValue = null; });
+        // Settings apply on the next check; no reload needed.
+        ctx.onSettings(recheck);
 
         log('watching for building placement fields...');
         const timer = setInterval(poll, CONFIG.POLL_MS);
