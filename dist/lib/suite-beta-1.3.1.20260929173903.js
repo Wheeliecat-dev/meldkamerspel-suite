@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.1.202609291727 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.1.20260929173903 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.3.1.202609291727';
+    const VERSION = '1.3.1.20260929173903';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1847,18 +1847,18 @@ MKS.module({
     pageNote: 'In het alarmeervenster (en op de kaartpagina om vooruit te laden)',
     live: true,
     settings: [
-        { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: false,
+        { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: true,
             help: 'Bijvoorbeeld "Hoogwerker 80%". Die hoef je niet meteen te sturen.' },
         { key: 'moveMissing', label: 'Ontbrekende voertuigen links ernaast', type: 'bool', default: true,
             help: 'Zet het rode vak "Missende voertuigen" van het spel in de linkerhelft, naast het lijstje, in plaats van eronder.' },
     ],
 
     run(ctx) {
-        const CACHE_KEY = 'mks-mission-helper-v2';
+        const CACHE_KEY = 'mks-mission-helper-v3';
         const CACHE_MS = 3 * 24 * 3600 * 1000;
         const esc = ctx.esc;
         // Left over from the first beta version.
-        try { ['mks-mission-helper-cache', 'mks-mission-helper-open'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
+        try { ['mks-mission-helper-cache', 'mks-mission-helper-open', 'mks-mission-helper-v2'].forEach((k) => localStorage.removeItem(k)); } catch (e) { /* ignore */ }
 
         /* ========================================================================
          * DATA — the game's own help page (/einsaetze/{type}?additive_overlays=x).
@@ -1889,7 +1889,7 @@ MKS.module({
 
         function parse(html) {
             const doc = new DOMParser().parseFromString(html, 'text/html');
-            const need = [], chance = [];
+            const need = [], chance = [], patients = {};
             for (const table of doc.querySelectorAll('table')) {
                 const title = ((table.querySelector('thead th') || {}).textContent || '').trim();
                 const vehicles = /voertuig|personeel/i.test(title);
@@ -1901,12 +1901,15 @@ MKS.module({
                     const value = tr.cells[1].textContent.trim().replace(/\s+/g, ' ');
                     let m;
                     if ((m = label.match(/^(.*?)\s+benodigd waarschijnlijkheid$/i))) chance.push({ name: m[1], v: value });
+                    else if (/^Minimaal aantal patiënten$/i.test(label)) patients.min = value;
+                    else if (/^Maximale? aantal patiënten$/i.test(label)) patients.max = value;
+                    else if (/patiënt getransporteerd/i.test(label)) patients.transport = value;
                     else if (other && !/^Benodigde? Personeel$/i.test(label)) continue;
                     else if ((m = label.match(/^Benodigd(?:e)?(?: aantal)?\s+(.*)$/i))) need.push({ name: m[1], v: value });
                     else if ((m = label.match(/^(.*?)\s+benodigd$/i))) need.push({ name: m[1], v: value });
                 }
             }
-            return { need, chance };
+            return { need, chance, patients };
         }
 
         async function fetchType(type, overlays) {
@@ -1969,7 +1972,7 @@ MKS.module({
             .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
             .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
-            .mks-mh-chance { opacity: .6; font-size: 12px; margin-top: 3px; }
+            .mks-mh-chance { opacity: .75; font-size: 13px; margin-top: 3px; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
             #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
@@ -1998,6 +2001,12 @@ MKS.module({
                     box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest">${rest.map((x) => `<span><b>${esc(cap(x.name))}</b> `
                         + `${esc(litres(x) ? `${ctx.nl(Number(x.v.replace(/\./g, '')))} l` : x.v)}</span>`).join('')}</div>`);
                 }
+            }
+            const p = data.patients || {};
+            if (p.max) {
+                const n = p.min && p.min !== p.max ? `${p.min}-${p.max}` : p.max;
+                box.insertAdjacentHTML('beforeend', `<div class="mks-mh-rest"><span><b>Patiënten</b> ${esc(n)}</span>`
+                    + `${p.transport ? `<span><b>Transport</b> ${esc(p.transport)}%</span>` : ''}</div>`);
             }
             if (ctx.cfg.chances && data.chance.length) {
                 box.insertAdjacentHTML('beforeend', `<div class="mks-mh-chance">Kans: ${data.chance.map((x) => esc(`${cap(x.name)} ${x.v}%`)).join(' · ')}</div>`);
