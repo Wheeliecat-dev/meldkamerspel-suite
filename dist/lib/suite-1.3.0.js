@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts v1.0.3 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts v1.3.0 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.0.3';
+    const VERSION = '1.3.0';
     const CHANNEL = 'stable';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1697,6 +1697,141 @@ MKS.module({
     },
 });
 
+/* ==== module: preset-search =============================================== */
+MKS.module({
+    id: 'preset-search',
+    name: 'AAO zoeken',
+    icon: '🔍',
+    category: 'missions',
+    description: 'Zoekbalk boven de AAO\'s in het alarmeervenster. Zoekt door alle categorieën tegelijk. '
+        + 'Meerdere woorden = allemaal. <kbd>Enter</kbd> klikt de eerste AAO (vinkt voertuigen aan, alarmeert niet), '
+        + '<kbd>Esc</kbd> wist.',
+    at: 'ready',
+    frames: 'all',
+    pages: /^\/missions\//,
+    pageNote: 'Alleen in het alarmeervenster',
+    live: true,
+    settings: [],
+
+    run() {
+        // While searching, every category pane is shown at once and the
+        // category tabs are hidden, so the result ignores categories.
+        // Buttons stay the game's own elements, so clicking works as usual.
+        const BTN_SEL = '.aao_btn';
+        const BAR_ID = 'mks-preset-search';
+        const ON = 'mks-ps-on';
+        const HIDE = 'mks-ps-hide';
+
+        const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .${ON} > .tab-pane { display: block !important; opacity: 1 !important; }
+            .${HIDE} { display: none !important; }`;
+        document.head.appendChild(style);
+
+        let input, counter, content, tabs;
+
+        const buttons = () => [...document.querySelectorAll(BTN_SEL)];
+        const btnText = (b) => norm(`${b.getAttribute('title') || ''} ${b.textContent}`);
+
+        // The category tabs (Klein / Middel / ...) and the .tab-content that
+        // holds their panes. Both are null when the player has no categories.
+        function findContainers() {
+            const first = document.querySelector(BTN_SEL);
+            content = first ? first.closest('.tab-content') : null;
+            let prev = content && content.previousElementSibling;
+            while (prev && !prev.matches('ul.nav-tabs')) prev = prev.previousElementSibling;
+            tabs = prev || null;
+        }
+
+        function applyFilter() {
+            if (!input) return;
+            const words = norm(input.value).split(' ').filter(Boolean);
+            const searching = words.length > 0;
+            if (content) content.classList.toggle(ON, searching);
+            if (tabs) tabs.classList.toggle(HIDE, searching);
+
+            let shown = 0;
+            const all = buttons();
+            all.forEach((b) => {
+                const show = !searching || words.every((w) => btnText(b).includes(w));
+                b.classList.toggle(HIDE, !show);
+                if (show) shown++;
+            });
+            // Hide categories without a match, so no empty gaps.
+            if (content) {
+                [...content.children].filter((p) => p.classList.contains('tab-pane')).forEach((p) => {
+                    p.classList.toggle(HIDE, searching && !p.querySelector(`${BTN_SEL}:not(.${HIDE})`));
+                });
+            }
+            counter.textContent = searching ? `${shown} / ${all.length}` : '';
+        }
+
+        function addBar() {
+            if (document.getElementById(BAR_ID)) return;
+            findContainers();
+            const first = document.querySelector(BTN_SEL);
+            if (!first) return;
+            const anchor = tabs || content || first.parentElement;
+
+            const bar = document.createElement('div');
+            bar.id = BAR_ID;
+            bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:6px 0;';
+            bar.innerHTML = `
+                <div class="input-group input-group-sm" style="flex:1;max-width:360px">
+                    <span class="input-group-addon"><span class="glyphicon glyphicon-search"></span></span>
+                    <input type="search" class="form-control" placeholder="Zoek AAO…" autocomplete="off">
+                </div>
+                <span class="mks-ps-count" style="color:#888;font-variant-numeric:tabular-nums"></span>`;
+            anchor.parentNode.insertBefore(bar, anchor);
+
+            input = bar.querySelector('input');
+            counter = bar.querySelector('.mks-ps-count');
+            input.addEventListener('input', applyFilter);
+            input.addEventListener('keydown', (e) => {
+                // Keep the game's preset hotkeys from firing while typing.
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const hit = buttons().find((b) => !b.classList.contains(HIDE));
+                    if (hit && input.value.trim()) hit.click();
+                }
+                if (e.key === 'Escape') { input.value = ''; applyFilter(); input.blur(); }
+            });
+            input.addEventListener('keyup', (e) => e.stopPropagation());
+            input.addEventListener('keypress', (e) => e.stopPropagation());
+        }
+
+        addBar();
+
+        // The mission window can re-render parts of the page; put the bar
+        // back and re-apply the search when that happens.
+        let queued = false;
+        const observer = new MutationObserver(() => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(() => {
+                queued = false;
+                if (input && !input.isConnected) input = null;
+                addBar();
+                if (input && input.value) applyFilter();
+            });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        return {
+            stop() {
+                observer.disconnect();
+                if (input) { input.value = ''; applyFilter(); }
+                document.getElementById(BAR_ID)?.remove();
+                style.remove();
+                input = null;
+            },
+        };
+    },
+});
+
 /* ==== module: auto-load-vehicles ========================================== */
 MKS.module({
     id: 'auto-load-vehicles',
@@ -1732,6 +1867,352 @@ MKS.module({
         const obs = new MutationObserver(load);
         obs.observe(document.body, { childList: true, subtree: true });
         return { stop: () => obs.disconnect() };
+    },
+});
+
+/* ==== module: transport-requests ========================================== */
+MKS.module({
+    id: 'transport-requests',
+    name: 'Verbeterde spraakaanvragen',
+    icon: '📻',
+    category: 'missions',
+    description: 'Werk spraakaanvragen snel achter elkaar af. Een knop in de missiefilterbalk telt je open spraakaanvragen en opent de oudste. '
+        + 'Een inzet met een spraakaanvraag opent die meteen. Na het kiezen van een bestemming ga je vanzelf door naar het volgende voertuig, '
+        + 'daarna terug naar de inzet of dicht. Kiest nooit zelf een ziekenhuis of cel.',
+    at: 'ready',
+    frames: 'all',
+    settings: [
+        { key: 'counter', label: 'Teller in de missiefilterbalk', type: 'bool', default: true,
+            help: 'Groen met het aantal open spraakaanvragen. Klik = oudste openen.' },
+        { key: 'autoOpen', label: 'Spraakaanvraag openen vanuit de inzet', type: 'bool', default: true,
+            help: 'Open je een inzet waar een voertuig spraak aanvraagt, dan ga je direct naar dat voertuig.' },
+        { key: 'after', label: 'Na het kiezen van een bestemming', type: 'select', default: 'next',
+            options: [
+                ['next', 'Volgende voertuig, dan terug naar de inzet'],
+                ['nextClose', 'Volgende voertuig, dan venster dicht'],
+                ['mission', 'Terug naar de inzet'],
+                ['close', 'Venster dicht'],
+                ['none', 'Niets doen'],
+            ] },
+    ],
+
+    run(ctx) {
+        const W = ctx.W;
+        const path = location.pathname;
+        const IN_FRAME = window.top !== window.self;
+
+        /* ========================================================================
+         * MISSION WINDOW — jump to the vehicle that asks for a transport.
+         * The game lists status-5 vehicles in a red alert with a green button
+         * to /vehicles/{id}. The missing-vehicles alert is also red, skip it.
+         * A vehicle we already jumped to recently is not opened again, so going
+         * back to the mission never loops (e.g. when no hospital fits).
+         * ==================================================================== */
+        if (/^\/missions\/\d+\/?$/.test(path)) {
+            if (!ctx.cfg.autoOpen) return;
+            const btn = document.querySelector('.alert.alert-danger:not(.alert-missing-vehicles) a.btn.btn-success[href^="/vehicles/"]');
+            if (!btn) return;
+            const KEY = 'mks-transport-opened';
+            let seen = {};
+            try { seen = JSON.parse(sessionStorage.getItem(KEY)) || {}; } catch (e) { /* ignore */ }
+            const now = Date.now();
+            for (const k in seen) if (now - seen[k] > 120000) delete seen[k];
+            const href = btn.getAttribute('href');
+            if (seen[href]) return;
+            seen[href] = now;
+            try { sessionStorage.setItem(KEY, JSON.stringify(seen)); } catch (e) { /* ignore */ }
+            btn.click();
+            return;
+        }
+
+        /* ========================================================================
+         * AFTER ANSWERING — the game shows the result on
+         * /vehicles/{id}/patient/{building} or /vehicles/{id}/gefangener/{building}
+         * with "next vehicle in status 5" (#next-vehicle-fms-5) and a green
+         * button back to the mission.
+         * ==================================================================== */
+        const answered = /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+\/?$/.test(path);
+        const next = document.getElementById('next-vehicle-fms-5');
+        if (answered || (next && /^\/vehicles\/\d+\/?$/.test(path) && !document.getElementById('h2_sprechwunsch'))) {
+            const mode = ctx.cfg.after;
+            if (mode === 'none') return;
+            const close = () => {
+                if (!IN_FRAME) return;
+                if (typeof W.tellParent === 'function') W.tellParent('lightboxClose();');
+                else if (W.parent && typeof W.parent.lightboxClose === 'function') W.parent.lightboxClose();
+            };
+            if ((mode === 'next' || mode === 'nextClose') && next) return next.click();
+            if (mode === 'next' || mode === 'mission') {
+                const back = document.querySelector('#iframe-inside-container a.btn.btn-success[href^="/missions/"]');
+                if (back) return back.click();
+            }
+            close();
+            return;
+        }
+
+        /* ========================================================================
+         * MAP PAGE — counter button in the mission filter bar.
+         * Starts from /api/vehicles once, then follows the game's live status
+         * messages (radioMessage). Oldest request first.
+         * ==================================================================== */
+        if (path !== '/' || IN_FRAME || !ctx.cfg.counter) return;
+        const row = document.querySelector('.mission-filters-row');
+        if (!row) return;
+
+        const open = new Map(); // vehicleId -> { caption, since }
+
+        const btn = document.createElement('a');
+        btn.href = '#';
+        btn.className = 'btn btn-xs btn-default';
+        btn.style.marginLeft = '4px';
+        btn.onclick = (ev) => {
+            ev.preventDefault();
+            const first = [...open.entries()].sort((a, b) => a[1].since - b[1].since)[0];
+            if (first && typeof W.lightboxOpen === 'function') W.lightboxOpen(`/vehicles/${first[0]}`);
+        };
+        row.appendChild(btn);
+
+        function render() {
+            const n = open.size;
+            btn.classList.toggle('btn-success', n > 0);
+            btn.classList.toggle('btn-default', n === 0);
+            btn.innerHTML = `<span class="glyphicon glyphicon-earphone"></span> ${n}`;
+            btn.title = n
+                ? `${n} open spraakaanvra${n === 1 ? 'ag' : 'gen'}. Klik om de oudste te openen:\n`
+                    + [...open.values()].sort((a, b) => a.since - b.since).slice(0, 15).map((v) => v.caption).join('\n')
+                : 'Geen open spraakaanvragen';
+        }
+
+        function onStatus(id, fms, caption) {
+            if (Number(fms) === 5) {
+                if (!open.has(id)) open.set(id, { caption: caption || String(id), since: Date.now() });
+            } else {
+                open.delete(id);
+            }
+            render();
+        }
+
+        // The game defines radioMessage in its own scripts; wait for it.
+        let tries = 0;
+        (function hook() {
+            const orig = W.radioMessage;
+            if (typeof orig !== 'function') {
+                if (++tries <= 30) setTimeout(hook, 1000);
+                else ctx.warn('radioMessage not found; counter only updates on page load');
+                return;
+            }
+            W.radioMessage = function (msg) {
+                try {
+                    if (msg && msg.type === 'vehicle_fms' && (msg.user_id == null || msg.user_id === W.user_id)) {
+                        onStatus(Number(msg.id), msg.fms_real, msg.caption);
+                    }
+                } catch (e) { ctx.warn('radio hook failed', e); }
+                return orig.apply(this, arguments);
+            };
+        })();
+
+        render();
+        fetch('/api/vehicles', { credentials: 'same-origin' })
+            .then((r) => (r.ok ? r.json() : []))
+            .then((list) => {
+                for (const v of list) if (v.fms_real === 5 && !open.has(v.id)) open.set(v.id, { caption: v.caption, since: 0 });
+                render();
+            })
+            .catch((e) => ctx.warn('could not load vehicles', e));
+    },
+});
+
+/* ==== module: destination-filter ========================================== */
+MKS.module({
+    id: 'destination-filter',
+    name: 'Bestemmingfilter',
+    icon: '🏥',
+    category: 'missions',
+    description: 'Verbergt bij een spraakaanvraag de ziekenhuizen en cellen die niet passen: vol, verkeerde afdeling, te duur of te ver. '
+        + 'De beste keuze (dichtstbij, passend, laagste kosten) krijgt een markering; <kbd>Enter</kbd> kiest die. '
+        + 'Een balk boven de lijst toont hoeveel er verborgen zijn, met een knop om alles te tonen.',
+    at: 'ready',
+    frames: 'all',
+    pages: /^\/vehicles\/\d+\/?$/,
+    pageNote: 'Alleen in het voertuigvenster bij een spraakaanvraag',
+    live: true,
+    settings: [
+        { key: 'full', label: 'Volle bestemmingen verbergen', type: 'bool', default: true },
+        { key: 'department', label: 'Ziekenhuizen zonder de juiste afdeling verbergen', type: 'bool', default: true },
+        { key: 'minBeds', label: 'Minimaal aantal vrije bedden', type: 'number', default: 1, min: 0, max: 50, step: 1 },
+        { key: 'cellsShort', label: 'Cellen met te weinig plek verbergen', type: 'bool', default: false,
+            help: 'Oranje knoppen: het cellencomplex heeft minder vrije cellen dan er gevangenen in het voertuig zitten.' },
+        { key: 'maxCost', label: 'Maximale kosten (team)', type: 'select', default: '50',
+            options: [['0', '0 %'], ['10', '10 %'], ['20', '20 %'], ['30', '30 %'], ['40', '40 %'], ['50', '50 % (alles)']] },
+        { key: 'maxKm', label: 'Maximale afstand', type: 'number', default: 0, min: 0, max: 500, step: 5, unit: 'km', help: '0 = geen grens.' },
+        { key: 'ownKm', label: 'Voorrang eigen ziekenhuis', type: 'number', default: 5, min: 0, max: 100, step: 1, unit: 'km',
+            help: 'Bij gelijke kosten wint je eigen ziekenhuis, zolang het niet meer dan zoveel km verder is dan een teamziekenhuis.' },
+        { key: 'enter', label: 'Enter kiest de beste bestemming', type: 'bool', default: true },
+    ],
+
+    run(ctx) {
+        const h2 = document.getElementById('h2_sprechwunsch');
+        if (!h2) return;
+
+        const HIDDEN = 'mks-dest-hidden';
+        const BEST = 'mks-dest-best';
+        const style = document.createElement('style');
+        style.textContent = `
+            .${HIDDEN} { display: none !important; }
+            body.mks-dest-all .${HIDDEN} { display: table-row !important; opacity: .45; }
+            body.mks-dest-all a.btn.${HIDDEN} { display: inline-block !important; }
+            tr.${BEST} > td { box-shadow: inset 0 2px 0 #3ecf8e, inset 0 -2px 0 #3ecf8e; }
+            tr.${BEST} > td:first-child { box-shadow: inset 2px 2px 0 #3ecf8e, inset 0 -2px 0 #3ecf8e; }
+            a.btn.${BEST} { outline: 3px solid #3ecf8e; outline-offset: 1px; }
+            .mks-dest-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 3px; background: #3ecf8e; color: #03241a;
+                font-size: 11px; font-weight: 600; vertical-align: middle; }
+            .mks-dest-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 10px; font-size: 12px; }
+            .mks-dest-bar .mks-dest-why { opacity: .75; }
+        `;
+        document.head.appendChild(style);
+
+        const num = (s) => {
+            const m = String(s).replace(/\./g, '').match(/-?\d+(?:,\d+)?/);
+            return m ? parseFloat(m[0].replace(',', '.')) : NaN;
+        };
+        const cell = (tr, i) => (i >= 0 && tr.cells[i] ? tr.cells[i].textContent.trim() : '');
+
+        /* ========================================================================
+         * CANDIDATES
+         * Hospitals: tables #own-hospitals and #alliance-hospitals, one row per
+         * hospital, button a[href*="/patient/"]. Own hospitals have no cost column.
+         * Cells: buttons a[href*="/gefangener/"] with distance, free cells and
+         * cost in the button text; red = full, orange = not enough room.
+         * ==================================================================== */
+        function candidates() {
+            const out = [];
+            for (const table of document.querySelectorAll('table')) {
+                const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
+                const iDist = heads.findIndex((h) => h.startsWith('afstand'));
+                if (iDist < 0) continue;
+                const iBeds = heads.findIndex((h) => h.startsWith('vrije'));
+                const iCost = heads.findIndex((h) => h.startsWith('kosten'));
+                const iDep = heads.findIndex((h) => h.startsWith('afdeling'));
+                for (const tr of table.querySelectorAll('tbody > tr')) {
+                    const a = tr.querySelector('a.btn[href*="/patient/"]');
+                    if (!a) continue;
+                    const beds = cell(tr, iBeds);
+                    out.push({
+                        el: tr, a, kind: 'hospital', own: table.id === 'own-hospitals',
+                        dist: num(cell(tr, iDist)),
+                        free: iBeds >= 0 ? num(beds.split('/')[0]) : Infinity,
+                        cost: iCost >= 0 ? num(cell(tr, iCost)) || 0 : 0,
+                        dep: iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
+                    });
+                }
+            }
+            for (const a of document.querySelectorAll('a.btn[href*="/gefangener/"]')) {
+                const t = a.textContent.replace(/\s+/g, ' ');
+                const km = t.match(/(\d+(?:[.,]\d+)?)\s*km/);
+                const pct = t.match(/(\d+)\s*%/);
+                out.push({
+                    el: a, a, kind: 'cell',
+                    dist: km ? parseFloat(km[1].replace(',', '.')) : NaN,
+                    free: a.classList.contains('btn-danger') ? 0 : Infinity,
+                    short: a.classList.contains('btn-warning'),
+                    cost: pct ? Number(pct[1]) : 0,
+                    dep: true,
+                });
+            }
+            return out;
+        }
+
+        // Reason a candidate is hidden, or '' when it stays.
+        function reason(c) {
+            const cfg = ctx.cfg;
+            if (c.a.classList.contains('disabled')) return 'niet beschikbaar';
+            if (cfg.full && c.free <= 0) return 'vol';
+            if (c.kind === 'hospital' && c.free < Number(cfg.minBeds)) return 'te weinig bedden';
+            if (c.kind === 'cell' && cfg.cellsShort && c.short) return 'te weinig cellen';
+            if (c.kind === 'hospital' && cfg.department && !c.dep) return 'geen afdeling';
+            if (c.cost > Number(cfg.maxCost)) return 'te duur';
+            if (Number(cfg.maxKm) > 0 && c.dist > Number(cfg.maxKm)) return 'te ver';
+            return '';
+        }
+
+        const bar = document.createElement('div');
+        bar.className = 'mks-dest-bar';
+        h2.insertAdjacentElement('afterend', bar);
+
+        let best = null;
+        function apply() {
+            obs.disconnect();
+            document.querySelectorAll(`.${BEST}`).forEach((el) => el.classList.remove(BEST));
+            document.querySelectorAll('.mks-dest-tag').forEach((el) => el.remove());
+            const list = candidates();
+            const why = {};
+            const shown = [];
+            for (const c of list) {
+                const r = reason(c);
+                c.el.classList.toggle(HIDDEN, !!r);
+                if (r) why[r] = (why[r] || 0) + 1;
+                else shown.push(c);
+            }
+            // Best: cheapest first, then nearest, own hospitals get a head start
+            // of ownKm. Unknown distance goes last.
+            const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? Number(ctx.cfg.ownKm) || 0 : 0);
+            best = shown.slice().sort((x, y) => x.cost - y.cost || rank(x) - rank(y))[0] || null;
+            if (best) {
+                best.el.classList.add(BEST);
+                const tag = document.createElement('span');
+                tag.className = 'mks-dest-tag';
+                tag.textContent = ctx.cfg.enter ? 'Beste keuze · Enter' : 'Beste keuze';
+                (best.kind === 'hospital' ? best.el.cells[0] : best.a).appendChild(tag);
+            }
+            const hidden = list.length - shown.length;
+            const parts = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ');
+            const all = document.body.classList.contains('mks-dest-all');
+            bar.innerHTML = hidden
+                ? `<span><b>${shown.length}</b> van ${list.length} bestemmingen</span><span class="mks-dest-why">verborgen: ${ctx.esc(parts)}</span>`
+                  + `<a href="#" class="btn btn-xs btn-default">${all ? 'Verborgen weer verbergen' : 'Alles tonen'}</a>`
+                : `<span class="mks-dest-why">${list.length} bestemmingen, niets verborgen</span>`;
+            const toggle = bar.querySelector('a');
+            if (toggle) toggle.onclick = (ev) => { ev.preventDefault(); document.body.classList.toggle('mks-dest-all'); apply(); };
+            if (!shown.length && list.length) bar.insertAdjacentHTML('beforeend', '<span class="label label-danger">Geen passende bestemming</span>');
+            obs.takeRecords();
+            watch();
+        }
+
+        function onKey(ev) {
+            if (!ctx.cfg.enter || ev.key !== 'Enter' || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) return;
+            const t = ev.target;
+            if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(t.tagName))) return;
+            if (!best || !document.contains(best.a)) return;
+            ev.preventDefault();
+            best.a.click();
+        }
+        document.addEventListener('keydown', onKey);
+
+        // "Load all" swaps in more alliance hospitals without a page load.
+        // apply() changes the DOM itself, so it stops observing while it runs.
+        const root = document.getElementById('iframe-inside-container') || document.body;
+        let timer = null;
+        const obs = new MutationObserver(() => {
+            clearTimeout(timer);
+            timer = setTimeout(apply, 100);
+        });
+        const watch = () => obs.observe(root, { childList: true, subtree: true });
+
+        apply();
+        ctx.onSettings(apply);
+
+        return {
+            stop() {
+                obs.disconnect();
+                clearTimeout(timer);
+                document.removeEventListener('keydown', onKey);
+                document.body.classList.remove('mks-dest-all');
+                document.querySelectorAll(`.${HIDDEN}, .${BEST}`).forEach((el) => el.classList.remove(HIDDEN, BEST));
+                document.querySelectorAll('.mks-dest-tag').forEach((el) => el.remove());
+                bar.remove();
+                style.remove();
+            },
+        };
     },
 });
 
@@ -1849,6 +2330,173 @@ MKS.module({
         apply();
 
         ctx.onSettings(() => { buildBuckets(); apply(); });
+    },
+});
+
+/* ==== module: map-filter ================================================== */
+MKS.module({
+    id: 'map-filter',
+    name: 'Kaartfilter',
+    icon: '🗺️',
+    category: 'missions',
+    description: 'Inzetten die door de missiefilters verborgen zijn, verdwijnen ook van de kaart. '
+        + 'Werkt met de filters van het spel zelf, de zoekbalk en het Creditfilter.',
+    at: 'ready',
+    frames: 'top',
+    live: true,
+
+    run(ctx) {
+        const W = ctx.W;
+        const panel = document.getElementById('missions-panel-body');
+        if (!panel || !Array.isArray(W.mission_markers)) return;
+
+        const HIDDEN = 'mks-map-hidden';
+        const style = document.createElement('style');
+        style.textContent = `.leaflet-marker-icon.${HIDDEN} { display: none !important; }`;
+        document.head.appendChild(style);
+
+        // An entry is filtered out when it, or a parent inside the mission
+        // panel, is display:none. The game marks filtered entries with the
+        // `hidden` class; the credit filter and search use their own classes.
+        // Stop at the panel so a collapsed sidebar does not empty the map.
+        function filteredOut(entry) {
+            for (let el = entry; el && el !== panel; el = el.parentElement) {
+                if (getComputedStyle(el).display === 'none') return true;
+            }
+            return false;
+        }
+
+        function sync() {
+            W.mission_markers.forEach((m) => {
+                if (!m._icon) return;
+                const entry = document.getElementById(`mission_${m.mission_id}`);
+                // No list entry (yet): leave the marker alone.
+                const hide = !!entry && filteredOut(entry);
+                m._icon.classList.toggle(HIDDEN, hide);
+            });
+        }
+
+        // Progress bars in the list change every second, so batch mutations.
+        // setTimeout, not requestAnimationFrame: rAF stops in background tabs.
+        let timer = null;
+        const schedule = () => {
+            if (timer) return;
+            timer = setTimeout(() => { timer = null; sync(); }, 100);
+        };
+
+        // Filter clicks, search and new or finished missions all change the
+        // list's classes or children.
+        const obs = new MutationObserver(schedule);
+        obs.observe(panel, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style'] });
+
+        // Leaflet builds a new icon element when a marker is (re)added or its
+        // icon changes (mission turns red/yellow/green), which drops our class.
+        const pane = W.map && W.map.getPane && W.map.getPane('markerPane');
+        const paneObs = new MutationObserver(schedule);
+        if (pane) paneObs.observe(pane, { childList: true });
+
+        sync();
+
+        return {
+            stop() {
+                obs.disconnect();
+                paneObs.disconnect();
+                clearTimeout(timer);
+                style.remove();
+                document.querySelectorAll(`.${HIDDEN}`).forEach((el) => el.classList.remove(HIDDEN));
+            },
+        };
+    },
+});
+
+/* ==== module: team-filter ================================================= */
+MKS.module({
+    id: 'team-filter',
+    name: 'Teamfilter',
+    icon: '🤝',
+    category: 'missions',
+    description: 'Een knop in de missiefilterbalk die alle gedeelde teaminzetten verbergt: noodgevallen, geplande inzetten en patiëntenvervoer. '
+        + 'Je eigen geplande inzetten en vervoer blijven zichtbaar. Groen = tonen, rood = verbergen.',
+    at: 'ready',
+    frames: 'top',
+    live: true,
+
+    run(ctx) {
+        const STORE_KEY = 'mks-team-filter';
+        const LIST_IDS = [
+            'mission_list_alliance',
+            'mission_list_alliance_event',
+            'mission_list_sicherheitswache_alliance',
+            'mission_list_krankentransporte_alliance',
+        ];
+        const HIDDEN = 'mks-teamfilter-hidden';
+
+        const row = document.querySelector('.mission-filters-row');
+        if (!row) return;
+
+        let off = false;
+        try { off = localStorage.getItem(STORE_KEY) === 'off'; } catch (e) {}
+        const save = () => { try { localStorage.setItem(STORE_KEY, off ? 'off' : 'on'); } catch (e) {} };
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .${HIDDEN} { display: none !important; }
+            .mks-teamfilter { display: inline-block; margin-left: 4px; }
+        `;
+        document.head.appendChild(style);
+
+        // No `mission_selection` class: the game binds its own toggle handler to it.
+        const btn = document.createElement('a');
+        btn.className = 'btn btn-xs mks-teamfilter';
+        btn.href = '#';
+        btn.onclick = (ev) => {
+            ev.preventDefault();
+            off = !off;
+            save();
+            apply();
+        };
+        row.appendChild(btn);
+
+        function apply() {
+            let count = 0;
+            LIST_IDS.forEach((id) => {
+                const list = document.getElementById(id);
+                if (!list) return;
+                list.querySelectorAll(':scope > .missionSideBarEntry').forEach((entry) => {
+                    entry.classList.toggle(HIDDEN, off);
+                    count++;
+                });
+            });
+            btn.classList.toggle('btn-success', !off);
+            btn.classList.toggle('btn-danger', off);
+            btn.title = off ? 'Teaminzetten verborgen. Klik om te tonen.' : 'Klik om alle teaminzetten te verbergen.';
+            btn.innerHTML = `<span class="glyphicon glyphicon-user"></span> Team ${count}`;
+        }
+
+        // The game adds and removes entries as missions spawn and finish.
+        // setTimeout, not requestAnimationFrame: rAF stops in background tabs.
+        let timer = null;
+        const schedule = () => {
+            if (timer) return;
+            timer = setTimeout(() => { timer = null; apply(); }, 50);
+        };
+        const obs = new MutationObserver(schedule);
+        LIST_IDS.forEach((id) => {
+            const list = document.getElementById(id);
+            if (list) obs.observe(list, { childList: true });
+        });
+
+        apply();
+
+        return {
+            stop() {
+                obs.disconnect();
+                clearTimeout(timer);
+                btn.remove();
+                style.remove();
+                document.querySelectorAll(`.${HIDDEN}`).forEach((el) => el.classList.remove(HIDDEN));
+            },
+        };
     },
 });
 
@@ -6887,6 +7535,119 @@ MKS.module({
     },
 });
 
+/* ==== module: daily-summary =============================================== */
+MKS.module({
+    id: 'daily-summary',
+    name: 'Dagsamenvatting totalen',
+    icon: '📊',
+    category: 'tools',
+    description: 'Boven de dagsamenvatting (Credits → Dagsamenvatting): inkomsten, uitgaven en netto van die dag, en per soort het aantal en de credits: '
+        + 'eigen inzetten, teaminzetten, patiënten, arrestanten, teamopnames, taken en beloningen, geannuleerd en loos alarm, uitgaven. '
+        + 'Klik een vak om de tabel daarop te filteren.',
+    at: 'ready',
+    frames: 'all',
+    pages: /^\/credits\/daily/,
+    pageNote: 'Alleen op de dagsamenvatting',
+    live: true,
+
+    run(ctx) {
+        const table = document.querySelector('#iframe-inside-container table.table, #iframe-inside-container table');
+        if (!table) return;
+
+        // First match wins. `test` gets the description and the credits.
+        const GROUPS = [
+            { key: 'spend', label: 'Uitgaven', color: '#ef4a52', test: (d, c) => c < 0 },
+            { key: 'patients', label: 'Patiënten', color: '#f0a83c', test: (d) => /^Patiënten behandeling/i.test(d) },
+            { key: 'teamIn', label: 'Teamopnames', color: '#9b7bea', test: (d) => /Teamopname/i.test(d) },
+            { key: 'prisoners', label: 'Arrestanten', color: '#3ecf8e', test: (d) => /^Arrestanten/i.test(d) },
+            { key: 'tasks', label: 'Taken & beloningen', color: '#e0c341', test: (d) => /^Taak '|beloning|^Prestatie|^Bonus/i.test(d) },
+            { key: 'void', label: 'Geannuleerd & loos alarm', color: '#8a96a3', test: (d) => / - (Gecanceld|Loos alarm)$/i.test(d) },
+            { key: 'team', label: 'Teaminzetten', color: '#31c4dd', test: (d) => /^\[Team\]/.test(d) },
+            { key: 'missions', label: 'Eigen inzetten', color: '#4f8df5', test: () => true },
+        ];
+
+        const num = (s) => {
+            const m = String(s).match(/-?\d[\d.]*/);
+            return m ? Number(m[0].replace(/\./g, '')) : 0;
+        };
+
+        // Column order is Credits | Ø | Aantal | Beschrijving; read the headers
+        // anyway in case the game moves them.
+        const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
+        const col = (name, fallback) => { const i = heads.findIndex((h) => h.startsWith(name)); return i >= 0 ? i : fallback; };
+        const iCredits = col('credits', 0);
+        const iCount = col('aantal', 2);
+        const iDesc = col('beschrijving', 3);
+
+        const rows = [...table.querySelectorAll('tbody > tr')].map((tr) => {
+            const credits = num(tr.cells[iCredits] && tr.cells[iCredits].textContent);
+            const desc = (tr.cells[iDesc] ? tr.cells[iDesc].textContent : '').trim().replace(/\s+/g, ' ');
+            const count = num(tr.cells[iCount] && tr.cells[iCount].textContent) || 1;
+            const group = GROUPS.find((g) => g.test(desc, credits));
+            return { tr, credits, count, desc, group: group.key };
+        });
+
+        const sums = Object.fromEntries(GROUPS.map((g) => [g.key, { n: 0, credits: 0 }]));
+        let income = 0, spend = 0;
+        for (const r of rows) {
+            sums[r.group].n += r.count;
+            sums[r.group].credits += r.credits;
+            if (r.credits >= 0) income += r.credits; else spend += r.credits;
+        }
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .mks-ds { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin: 8px 0 14px; }
+            .mks-ds-card { border: 1px solid rgba(128,128,128,.35); border-left: 4px solid var(--c); border-radius: 6px; padding: 6px 10px;
+                cursor: pointer; user-select: none; background: rgba(128,128,128,.06); }
+            .mks-ds-card:hover { background: rgba(128,128,128,.14); }
+            .mks-ds-card.on { background: rgba(128,128,128,.22); box-shadow: 0 0 0 2px var(--c) inset; }
+            .mks-ds-card.total { cursor: default; }
+            .mks-ds-card .l { font-size: 12px; opacity: .75; }
+            .mks-ds-card .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+            .mks-ds-card .s { font-size: 12px; opacity: .75; font-variant-numeric: tabular-nums; }
+            .mks-ds-hidden { display: none !important; }
+        `;
+        document.head.appendChild(style);
+
+        const nl = ctx.nl;
+        const signed = (n) => (n > 0 ? '+' : '') + nl(n);
+        const box = document.createElement('div');
+        box.className = 'mks-ds';
+        const totalCards = [
+            { label: 'Inkomsten', color: '#3ecf8e', v: nl(income) },
+            { label: 'Uitgaven', color: '#ef4a52', v: nl(spend), g: 'spend', s: `${nl(sums.spend.n)}×` },
+            { label: 'Netto', color: income + spend >= 0 ? '#3ecf8e' : '#ef4a52', v: signed(income + spend) },
+        ].map((c) => `<div class="mks-ds-card${c.g ? '' : ' total'}" ${c.g ? `data-g="${c.g}" title="Klik: alleen deze regels tonen"` : ''} style="--c:${c.color}">`
+            + `<div class="l">${c.label}</div><div class="v">${c.v}</div>${c.s ? `<div class="s">${c.s}</div>` : ''}</div>`);
+        const groupCards = GROUPS.filter((g) => g.key !== 'spend' && sums[g.key].n).map((g) => {
+            const s = sums[g.key];
+            const avg = s.n ? Math.round(s.credits / s.n) : 0;
+            return `<div class="mks-ds-card" data-g="${g.key}" style="--c:${g.color}" title="Klik: alleen deze regels tonen">
+                <div class="l">${g.label}</div><div class="v">${nl(s.credits)}</div><div class="s">${nl(s.n)}× · Ø ${nl(avg)}</div></div>`;
+        });
+        box.innerHTML = totalCards.concat(groupCards).join('');
+        table.insertAdjacentElement('beforebegin', box);
+
+        let active = null;
+        box.addEventListener('click', (ev) => {
+            const card = ev.target.closest('.mks-ds-card[data-g]');
+            if (!card) return;
+            active = active === card.dataset.g ? null : card.dataset.g;
+            box.querySelectorAll('.mks-ds-card[data-g]').forEach((c) => c.classList.toggle('on', c.dataset.g === active));
+            for (const r of rows) r.tr.classList.toggle('mks-ds-hidden', !!active && r.group !== active);
+        });
+
+        return {
+            stop() {
+                rows.forEach((r) => r.tr.classList.remove('mks-ds-hidden'));
+                box.remove();
+                style.remove();
+            },
+        };
+    },
+});
+
 /* ==== module: coverage-map ================================================ */
 MKS.module({
     id: 'coverage-map',
@@ -7358,13 +8119,18 @@ MKS.module({
     name: 'Plaatsingsadvies',
     icon: '📍',
     category: 'map',
-    description: 'Tijdens het bouwen of verplaatsen van een gebouw: toont welke echte OpenStreetMap-objecten binnen een straal van de gekozen plek liggen, '
-        + 'zodat je ziet of het een geloofwaardige echte locatie is. Blokkeert of vult nooit iets in.',
+    description: 'Tijdens het bouwen of verplaatsen van een gebouw: toont de echte hulpdienstposten (brandweer, ambulance, politie, ziekenhuis, heli, KNRM, '
+        + 'Rijkswaterstaat, defensie) in de buurt van de marker, volgens OpenStreetMap. Klik op een post en de marker springt erheen. '
+        + 'Vult verder niets in en koopt nooit iets: bouwen doe je zelf.',
     tagline: 'Verschijnt bij gebouw plaatsen',
     at: 'load',
     frames: 'all',
+    live: true,
     settings: [
-        { key: 'radius', label: 'Zoekstraal', type: 'range', default: 25, min: 10, max: 150, step: 5, unit: ' m' },
+        { key: 'radiusKm', label: 'Zoekstraal', type: 'range', default: 5, min: 0.5, max: 10, step: 0.5, unit: ' km' },
+        { key: 'onlyType', label: 'Alleen posten van het gekozen gebouwtype', type: 'bool', default: true,
+            help: 'Uit: alle soorten hulpdienstposten. Bij een gebouwtype zonder echte tegenhanger zie je altijd alles.' },
+        { key: 'address', label: 'Adres van de marker tonen (Nominatim)', type: 'bool', default: true },
         { key: 'debug', label: 'Uitgebreid loggen in console', type: 'bool', default: false },
     ],
 
@@ -7372,78 +8138,93 @@ MKS.module({
         /* ========================================================================
          * CONFIG
          * ====================================================================
-         * Purely advisory — this never fills in a name, never blocks the submit
-         * button, never touches the form. It only shows you a panel of what
-         * OpenStreetMap says is really at the coordinates the game's own
-         * lat/lng fields currently hold.
+         * The posts come from dist/data/posts-nl.json in the suite repo
+         * (made by `node build.js osm`), not from a live Overpass query: that
+         * query takes minutes and the public server is often overloaded. The
+         * file is cached in GM storage and refreshed once a week.
+         *
+         * The only thing this module changes is the position of the game's
+         * own placement marker, and only when you click a post.
          * ==================================================================== */
         const CONFIG = {
             get DEBUG() { return ctx.cfg.debug; },
-            get RADIUS_METERS() { return ctx.cfg.radius; },
+            get RADIUS_M() { return ctx.cfg.radiusKm * 1000; },
             POLL_MS: 500,       // how often to check whether the lat/lng fields changed
-            DEBOUNCE_MS: 900,   // wait this long after the last change before querying
-            OVERPASS_ENDPOINTS: [
-                'https://overpass-api.de/api/interpreter',
-                'https://overpass.kumi.systems/api/interpreter',
-                'https://overpass.openstreetmap.ru/api/interpreter',
-                'https://overpass.private.coffee/api/interpreter',
-            ],
-            REQUEST_TIMEOUT_MS: 15 * 1000,
+            DEBOUNCE_MS: 400,   // wait this long after the last change before searching
+            DATA_URL: 'https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/data/posts-nl.json',
+            DATA_CACHE_KEY: 'mks.placementAdvisor.posts',
+            DATA_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+            NOMINATIM_URL: 'https://nominatim.openstreetmap.org/reverse',
+            // Sent only by the GM_xmlhttpRequest fallback; page fetch() cannot
+            // set a User-Agent.
+            USER_AGENT: 'Meldkamerspel-Suite (github.com/Wheeliecat-dev/meldkamerspel-suite)',
+            REQUEST_TIMEOUT_MS: 20 * 1000,
+            ON_SPOT_M: 60,      // marker this close to a post = "on" that post
+            MAX_ROWS: 25,
         };
 
+        const esc = ctx.esc;
         const log = (...a) => { if (CONFIG.DEBUG) console.log('%c[PlacementAdvisor]', 'color:#a06', ...a); };
         const warn = (...a) => console.warn('[PlacementAdvisor]', ...a);
 
         /* ========================================================================
-         * Gebouwtype (building_type) -> what a real one is usually tagged as in
-         * OSM. Purely descriptive/best-effort — shown as a hint in the panel,
-         * never used to filter or validate automatically. Values match the
-         * game's own <select id="building_building_type"> options exactly
-         * (confirmed live from /buildings/new).
+         * Post categories (codes as written by build.js) and which category
+         * belongs to each game building type (<select id="building_building_type">).
+         * Types without a real counterpart (e.g. uitgangsstelling) show all.
          * ==================================================================== */
-        const GEBOUWTYPE_HINTS = {
-            '0': 'amenity=fire_station', '17': 'amenity=fire_station',
-            '4': 'brandweer/veiligheid opleiding (geen vaste OSM-tag)',
-            '23': 'military=* (hangar)',
-            '3': 'emergency=ambulance_station', '13': 'emergency=ambulance_station',
-            '2': 'amenity=hospital',
-            '5': 'amenity=police', '18': 'amenity=police', '11': 'amenity=police',
-            '8': 'politieopleiding (geen vaste OSM-tag)',
-            '9': 'aeroway=helipad',
-            '7': 'amenity=university',
-            '6': 'aeroway=helipad (traumahelikopter)',
-            '16': 'emergency=lifeguard / reddingsbrigade',
-            '19': 'kustwacht (geen vaste OSM-tag)',
-            '20': 'SAR-opleiding (geen vaste OSM-tag)',
-            '21': 'aeroway=helipad',
-            '10': 'uitgangsstelling (geen vaste OSM-tag)',
-            '22': 'Rijkswaterstaat steunpunt (office=government)',
-            '24': 'bergingsbedrijf (geen vaste OSM-tag)',
-            '25': 'military=barracks',
-            '26': 'militaire opleiding (geen vaste OSM-tag)',
-            '27': 'railway=* (spoor incidentbestrijding)',
+        const CATS = {
+            F: { icon: '🚒', label: 'Brandweerkazerne' },
+            A: { icon: '🚑', label: 'Ambulancepost' },
+            P: { icon: '🚓', label: 'Politiebureau' },
+            H: { icon: '🏥', label: 'Ziekenhuis' },
+            L: { icon: '🚁', label: 'Helikopterplatform' },
+            W: { icon: '🛟', label: 'Reddingsbrigade / KNRM' },
+            R: { icon: '🚧', label: 'Rijkswaterstaat' },
+            M: { icon: '🪖', label: 'Defensie' },
+        };
+        const TYPE_CAT = {
+            0: 'F', 17: 'F', 4: 'F',
+            3: 'A', 13: 'A',
+            2: 'H',
+            5: 'P', 11: 'P', 18: 'P', 8: 'P',
+            6: 'L', 9: 'L', 21: 'L',
+            16: 'W', 19: 'W', 20: 'W',
+            22: 'R',
+            23: 'M', 25: 'M', 26: 'M',
         };
 
         /* ========================================================================
-         * OVERPASS QUERY
+         * HTTP
+         * ====================================================================
+         * Page fetch() first (GitHub raw and Nominatim both allow CORS).
+         * GM_xmlhttpRequest is the fallback when fetch is blocked.
          * ==================================================================== */
-        // POST, not GET — a live run hit HTTP 406 from overpass-api.de on GET
-        // requests fired from inside a userscript context (GM_xmlhttpRequest
-        // doesn't send quite the same headers a normal browser navigation
-        // would, and Overpass can be picky about that on GET). POST with the
-        // query as form-encoded body is Overpass's own documented way to submit
-        // a query and sidesteps the issue entirely.
-        function gmFetch(url, body) {
+        class HttpError extends Error {
+            constructor(status) { super(`HTTP ${status}`); this.status = status; }
+        }
+
+        async function pageFetch(url) {
+            const ac = new AbortController();
+            const t = setTimeout(() => ac.abort(), CONFIG.REQUEST_TIMEOUT_MS);
+            try {
+                const res = await fetch(url, { signal: ac.signal, credentials: 'omit' });
+                if (!res.ok) throw new HttpError(res.status);
+                return await res.text();
+            } finally {
+                clearTimeout(t);
+            }
+        }
+
+        function gmFetch(url) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
-                    method: 'POST',
+                    method: 'GET',
                     url,
-                    data: body,
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    headers: { 'User-Agent': CONFIG.USER_AGENT },
                     timeout: CONFIG.REQUEST_TIMEOUT_MS,
                     onload: (res) => {
                         if (res.status >= 200 && res.status < 300) resolve(res.responseText);
-                        else reject(new Error(`HTTP ${res.status}`));
+                        else reject(new HttpError(res.status));
                     },
                     onerror: () => reject(new Error('network error')),
                     ontimeout: () => reject(new Error('timeout')),
@@ -7451,23 +8232,54 @@ MKS.module({
             });
         }
 
-        async function queryOverpass(lat, lon, radius) {
-            const query = `[out:json][timeout:15];(node(around:${radius},${lat},${lon});way(around:${radius},${lat},${lon}););out center tags 40;`;
-            const body = `data=${encodeURIComponent(query)}`;
-            let text;
-            let lastErr;
-            for (const endpoint of CONFIG.OVERPASS_ENDPOINTS) {
-                try {
-                    text = await gmFetch(endpoint, body);
-                    lastErr = null;
-                    break;
-                } catch (e) {
-                    lastErr = e;
-                    warn(`Overpass endpoint ${endpoint} failed, trying next`, e);
-                }
+        async function request(url) {
+            try {
+                return await pageFetch(url);
+            } catch (e) {
+                if (e instanceof HttpError) throw e;
+                log(`fetch ${url} failed (${e.message}), trying GM_xmlhttpRequest`);
+                return gmFetch(url);
             }
-            if (lastErr) throw lastErr;
-            return JSON.parse(text);
+        }
+
+        /* ========================================================================
+         * DATA
+         * ==================================================================== */
+        function readCache() {
+            try { return JSON.parse(GM_getValue(CONFIG.DATA_CACHE_KEY, 'null')); } catch (e) { return null; }
+        }
+
+        let postsPromise = null;
+        // -> [[lat, lon, cat, name, osmId], ...]
+        function loadPosts() {
+            if (postsPromise) return postsPromise;
+            const cached = readCache();
+            if (cached && Date.now() - cached.t < CONFIG.DATA_MAX_AGE_MS) {
+                postsPromise = Promise.resolve(cached.posts);
+                return postsPromise;
+            }
+            postsPromise = request(CONFIG.DATA_URL)
+                .then((text) => {
+                    const data = JSON.parse(text);
+                    GM_setValue(CONFIG.DATA_CACHE_KEY, JSON.stringify({ t: Date.now(), date: data.date, posts: data.posts }));
+                    log(`loaded ${data.posts.length} posts (OSM ${data.date})`);
+                    return data.posts;
+                })
+                .catch((e) => {
+                    postsPromise = null;
+                    if (cached) { warn('could not refresh posts, using old copy', e); return cached.posts; }
+                    throw e;
+                });
+            return postsPromise;
+        }
+
+        async function reverseGeocode(lat, lon) {
+            const url = `${CONFIG.NOMINATIM_URL}?format=jsonv2&zoom=18&addressdetails=1&accept-language=nl&lat=${lat}&lon=${lon}`;
+            const data = JSON.parse(await request(url));
+            const a = data.address || {};
+            const street = [a.road || a.pedestrian || a.footway || a.path, a.house_number].filter(Boolean).join(' ');
+            const place = a.city || a.town || a.village || a.hamlet || a.municipality || '';
+            return [street, place].filter(Boolean).join(', ') || data.display_name || '';
         }
 
         // Haversine distance in meters.
@@ -7480,86 +8292,177 @@ MKS.module({
             return 2 * R * Math.asin(Math.sqrt(a));
         }
 
-        // Which tag on an element best describes it, for display.
-        function describeElement(tags) {
-            const interesting = ['amenity', 'emergency', 'office', 'military', 'railway', 'aeroway', 'shop', 'healthcare', 'building'];
-            for (const key of interesting) {
-                if (tags[key] && tags[key] !== 'yes') return `${key}=${tags[key]}`;
+        function nearbyPosts(posts, lat, lon, cat) {
+            const rows = [];
+            for (const [plat, plon, pcat, name, osm] of posts) {
+                if (cat && pcat !== cat) continue;
+                const distance = distanceMeters(lat, lon, plat, plon);
+                if (distance > CONFIG.RADIUS_M) continue;
+                rows.push({ lat: plat, lon: plon, cat: pcat, name, osm, distance });
             }
-            if (tags.building === 'yes') return 'building';
+            rows.sort((a, b) => a.distance - b.distance);
+            return rows;
+        }
+
+        const fmtDist = (m) => (m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`);
+        const osmUrl = (id) => `https://www.openstreetmap.org/${{ n: 'node', w: 'way', r: 'relation' }[id[0]]}/${id.slice(1)}`;
+
+        /* ========================================================================
+         * GAME MARKER
+         * ====================================================================
+         * The game shows a draggable Leaflet marker while you place a building
+         * and writes its position into #building_latitude/#building_longitude.
+         * We find that marker on the map (the draggable one closest to the
+         * current field values), move it, and fire the drag events so the
+         * game's own handlers run as if you dragged it.
+         * ==================================================================== */
+        function gameMap() {
+            // The form can sit in a lightbox iframe; the map lives in the top window.
+            for (const w of [ctx.W, window.parent, window.top]) {
+                try {
+                    const W = w.wrappedJSObject || w;
+                    if (W.map && W.L && typeof W.map.eachLayer === 'function') return { map: W.map, L: W.L };
+                } catch (e) { /* cross-origin frame */ }
+            }
             return null;
         }
 
-        // Tag keys worth showing even without a name — genuinely institutional
-        // categories. Bare infrastructure (railway=rail/beacon, building=roof,
-        // plain highway geometry, ...) is real OSM data but just clutter for
-        // "is this a plausible real venue" — excluded unless it also has a name.
-        const NAMELESS_WORTHY_KEYS = new Set(['amenity', 'emergency', 'office', 'military', 'healthcare', 'aeroway']);
-        // NOTE: for a "way" (a long platform, a building outline, ...), Overpass's
-        // `out center` reports the centroid of the WHOLE way, which can sit well
-        // outside the query radius even though the way's geometry does pass
-        // through it (confirmed live: a train platform showed up "210m" away
-        // under a 25m query). Distances shown here are a good-enough estimate,
-        // not a guarantee every row is truly within RADIUS_METERS.
-        function relevantElements(elements, lat, lon) {
-            const rows = [];
-            for (const el of elements) {
-                const tags = el.tags || {};
-                const desc = describeElement(tags);
-                const descKey = desc ? desc.split('=')[0] : null;
-                if (!tags.name && !(descKey && NAMELESS_WORTHY_KEYS.has(descKey))) continue;
-                const elat = el.lat ?? (el.center && el.center.lat);
-                const elon = el.lon ?? (el.center && el.center.lon);
-                if (elat === undefined || elon === undefined) continue;
-                rows.push({
-                    name: tags.name || '(zonder naam)',
-                    desc: desc || '',
-                    distance: Math.round(distanceMeters(lat, lon, elat, elon)),
-                });
+        function findPlacementMarker(map, L, lat, lon) {
+            let best = null;
+            let bestD = Infinity;
+            map.eachLayer((layer) => {
+                if (!(layer instanceof L.Marker)) return;
+                const draggable = layer.options.draggable || (layer.dragging && layer.dragging.enabled());
+                if (!draggable) return;
+                const ll = layer.getLatLng();
+                const d = Math.abs(ll.lat - lat) + Math.abs(ll.lng - lon);
+                if (d < bestD) { bestD = d; best = layer; }
+            });
+            return best;
+        }
+
+        function setField(input, value) {
+            input.value = value;
+            const $ = ctx.W.jQuery || ctx.W.$;
+            if (typeof $ === 'function') $(input).trigger('change');
+            else input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function moveMarker(lat, lon) {
+            const fields = findLatLngInputs();
+            const g = gameMap();
+            let moved = false;
+            if (g) {
+                const curLat = fields ? Number(fields.lat.value) : lat;
+                const curLon = fields ? Number(fields.lon.value) : lon;
+                const marker = findPlacementMarker(g.map, g.L, curLat, curLon);
+                if (marker) {
+                    marker.setLatLng([lat, lon]);
+                    marker.fire('dragstart');
+                    marker.fire('drag');
+                    marker.fire('dragend', { target: marker, distance: 1 });
+                    g.map.panTo([lat, lon]);
+                    moved = true;
+                }
             }
-            rows.sort((a, b) => a.distance - b.distance);
-            return rows.slice(0, 15);
+            // Make sure the form has the new position even if the game's
+            // handler did not write it.
+            if (fields) {
+                setField(fields.lat, lat);
+                setField(fields.lon, lon);
+            }
+            if (!moved) warn('placement marker not found on the map; only the form fields were set');
+            log(`moved marker to ${lat}, ${lon}`);
         }
 
         /* ========================================================================
          * PANEL
          * ==================================================================== */
         let panelEl = null;
+        let dismissedKey = null; // coordinates the user closed the panel for
+        let shownRows = [];
+
         function ensurePanel() {
             if (panelEl && document.body.contains(panelEl)) return panelEl;
             panelEl = document.createElement('div');
             panelEl.id = 'pa-panel';
-            panelEl.style.cssText = 'position:fixed;top:70px;right:8px;z-index:99999;background:#111;color:#eee;font:12px/1.4 sans-serif;padding:10px 12px;border-radius:6px;opacity:0.95;max-width:340px;max-height:70vh;overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
+            panelEl.style.cssText = 'position:fixed;top:70px;right:8px;z-index:99999;background:#111;color:#eee;font:12px/1.4 sans-serif;padding:10px 12px;border-radius:6px;opacity:0.95;width:320px;max-height:70vh;overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
+            panelEl.addEventListener('click', (e) => {
+                if (e.target.closest('.pa-close')) { dismissedKey = lastKey; removePanel(); return; }
+                if (e.target.closest('.pa-retry')) { recheck(); return; }
+                if (e.target.closest('.pa-all')) { ctx.set('onlyType', !ctx.cfg.onlyType); recheck(); return; }
+                if (e.target.closest('a')) return; // OSM link
+                const row = e.target.closest('.pa-row');
+                if (row) {
+                    const r = shownRows[Number(row.dataset.i)];
+                    if (r) moveMarker(r.lat, r.lon);
+                }
+            });
             document.body.appendChild(panelEl);
             return panelEl;
         }
 
-        function renderIdle() {
-            const el = ensurePanel();
-            el.innerHTML = '<div style="font-weight:bold;margin-bottom:4px;">Placement Advisor</div><div style="color:#999;">Kies een gebouwtype en typ een adres of sleep de kaart-icoon om te controleren wat hier echt staat (OSM, straal 25m).</div>';
+        function removePanel() {
+            if (panelEl) panelEl.remove();
+            panelEl = null;
         }
 
-        function renderLoading(lat, lon) {
-            const el = ensurePanel();
-            el.innerHTML = `<div style="font-weight:bold;margin-bottom:4px;">Placement Advisor</div><div style="color:#999;">Zoeken rond ${lat.toFixed(5)}, ${lon.toFixed(5)} ...</div>`;
+        function show(bodyHtml) {
+            if (dismissedKey && dismissedKey === lastKey) return;
+            ensurePanel().innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
+                + '<b>📍 Plaatsingsadvies</b>'
+                + '<span class="pa-close" title="Sluiten" style="cursor:pointer;color:#999;font-size:16px;line-height:1;padding:0 2px;">×</span></div>'
+                + bodyHtml;
+        }
+
+        const muted = (s) => `<div style="color:#999;">${s}</div>`;
+        const link = (cls, text) => `<span class="${cls}" style="color:#7ad;cursor:pointer;text-decoration:underline;">${text}</span>`;
+
+        function renderIdle() {
+            show(muted(`Typ een adres of sleep de marker. Je ziet dan de echte hulpdienstposten binnen ${fmtDist(CONFIG.RADIUS_M)}.`));
+        }
+
+        function renderLoading() {
+            show(muted('Posten laden...'));
         }
 
         function renderError(msg) {
-            const el = ensurePanel();
-            el.innerHTML = `<div style="font-weight:bold;margin-bottom:4px;">Placement Advisor</div><div style="color:#e66;">${msg}</div>`;
+            show(`<div style="color:#e66;">${esc(msg)}</div><div style="margin-top:6px;">${link('pa-retry', 'Opnieuw proberen')}</div>`);
         }
 
-        function renderResults(lat, lon, rows, gebouwtypeLabel, hint) {
-            const el = ensurePanel();
-            const header = `<div style="font-weight:bold;margin-bottom:2px;">Placement Advisor</div>`
-                + `<div style="color:#999;margin-bottom:6px;">${lat.toFixed(5)}, ${lon.toFixed(5)} — straal ${CONFIG.RADIUS_METERS}m</div>`
-                + (gebouwtypeLabel ? `<div style="color:#7ad;margin-bottom:6px;">Gekozen type: ${gebouwtypeLabel}${hint ? ` <span style="color:#999;">(meestal: ${hint})</span>` : ''}</div>` : '');
-            if (!rows.length) {
-                el.innerHTML = header + '<div style="color:#e90;">Niets gevonden binnen ${CONFIG.RADIUS_METERS}m — dit is geen bekende naam/echt object volgens OpenStreetMap.</div>';
+        function renderResults(rows, typeLabel, cat, address) {
+            const radius = fmtDist(CONFIG.RADIUS_M);
+            let html = address ? `<div style="margin-bottom:2px;">🏠 ${esc(address)}</div>` : '';
+            if (typeLabel) {
+                html += `<div style="color:#7ad;">Gekozen type: ${esc(typeLabel)}</div>`;
+            }
+            if (cat) {
+                html += muted(ctx.cfg.onlyType
+                    ? `Alleen ${esc(CATS[cat].label.toLowerCase())} · ${link('pa-all', 'toon alle posten')}`
+                    : `Alle posten · ${link('pa-all', `alleen ${esc(CATS[cat].label.toLowerCase())}`)}`);
+            }
+            const onSpot = rows.find((r) => r.distance <= CONFIG.ON_SPOT_M && (!cat || r.cat === cat));
+            if (onSpot) html += `<div style="color:#5c5;margin-top:4px;">✔ Marker staat op ${esc(onSpot.name || CATS[onSpot.cat].label)}</div>`;
+            html += '<div style="margin-bottom:4px;"></div>';
+
+            shownRows = rows.slice(0, CONFIG.MAX_ROWS);
+            if (!shownRows.length) {
+                show(html + muted(`Geen echte ${cat && ctx.cfg.onlyType ? esc(CATS[cat].label.toLowerCase()) : 'hulpdienstpost'} binnen ${radius}.`));
                 return;
             }
-            const rowsHtml = rows.map((r) => `<div style="padding:3px 0;border-top:1px solid #333;"><b>${r.name}</b><br><span style="color:#999;">${r.desc} — ${r.distance}m</span></div>`).join('');
-            el.innerHTML = header + rowsHtml;
+            html += shownRows.map((r, i) => {
+                const c = CATS[r.cat];
+                const match = cat && r.cat === cat;
+                return `<div class="pa-row" data-i="${i}" title="Klik: marker hierheen" style="padding:4px 2px;border-top:1px solid #333;cursor:pointer;${match ? 'color:#5c5;' : ''}"`
+                    + ' onmouseover="this.style.background=\'#222\'" onmouseout="this.style.background=\'\'">'
+                    + `${c.icon} <b>${esc(r.name || '(zonder naam)')}</b><br>`
+                    + `<span style="color:#999;">${esc(c.label)} · ${fmtDist(r.distance)} · `
+                    + `<a href="${osmUrl(r.osm)}" target="_blank" rel="noopener" style="color:#999;">OSM</a></span></div>`;
+            }).join('');
+            if (rows.length > shownRows.length) html += muted(`+ ${rows.length - shownRows.length} verder weg`);
+            html += muted('<div style="margin-top:6px;">Klik op een post om de marker erheen te zetten.</div>'
+                + '<div style="font-size:10px;">Gegevens © OpenStreetMap-bijdragers (ODbL)</div>');
+            show(html);
         }
 
         /* ========================================================================
@@ -7575,65 +8478,99 @@ MKS.module({
         }
 
         let lastKey = null;
+        let lastRawFieldValue = null;
+        let lastAddress = { key: null, text: '' };
         let debounceTimer = null;
-        let seenLatLng = false;
+        let seq = 0;            // drops answers for coordinates that are no longer current
+        let formOpen = false;
 
-        function scheduleCheck(latVal, lonVal, gebouwtypeSelect) {
+        function recheck() {
+            lastKey = null;
+            lastRawFieldValue = null;
+        }
+
+        function scheduleCheck(latVal, lonVal, typeSelect) {
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(async () => {
                 const lat = Number(latVal);
                 const lon = Number(lonVal);
-                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-                const key = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+                if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
+                const typeValue = typeSelect ? typeSelect.value : '';
+                const key = `${lat.toFixed(6)},${lon.toFixed(6)},${typeValue},${CONFIG.RADIUS_M},${ctx.cfg.onlyType}`;
                 if (key === lastKey) return;
                 lastKey = key;
+                const mySeq = ++seq;
 
-                const gebouwtypeLabel = gebouwtypeSelect && gebouwtypeSelect.selectedOptions[0] ? gebouwtypeSelect.selectedOptions[0].textContent.trim() : '';
-                const hint = gebouwtypeSelect ? GEBOUWTYPE_HINTS[gebouwtypeSelect.value] : '';
+                const typeLabel = typeSelect?.selectedOptions[0]?.textContent.trim() || '';
+                const typeCat = TYPE_CAT[typeValue] || null;
+                const filterCat = ctx.cfg.onlyType ? typeCat : null;
 
-                renderLoading(lat, lon);
+                // Address only when the position changed, not on a type/filter change.
+                const posKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+                const addressP = !ctx.cfg.address ? Promise.resolve('')
+                    : lastAddress.key === posKey ? Promise.resolve(lastAddress.text)
+                        : reverseGeocode(lat, lon)
+                            .then((text) => { lastAddress = { key: posKey, text }; return text; })
+                            .catch((e) => { warn('Nominatim failed', e); return ''; });
+
+                if (!postsPromise) renderLoading();
                 try {
-                    const data = await queryOverpass(lat, lon, CONFIG.RADIUS_METERS);
-                    const rows = relevantElements(data.elements || [], lat, lon);
-                    renderResults(lat, lon, rows, gebouwtypeLabel, hint);
-                    log(`checked ${key} — ${rows.length} feature(s) within ${CONFIG.RADIUS_METERS}m`);
+                    const posts = await loadPosts();
+                    if (mySeq !== seq) return;
+                    const rows = nearbyPosts(posts, lat, lon, filterCat);
+                    renderResults(rows, typeLabel, typeCat, lastAddress.key === posKey ? lastAddress.text : '');
+                    log(`checked ${key}: ${rows.length} post(s)`);
+                    // The address is slower; add it when it arrives.
+                    const address = await addressP;
+                    if (mySeq === seq && address) renderResults(rows, typeLabel, typeCat, address);
                 } catch (e) {
-                    warn('Overpass query failed', e);
-                    renderError('Overpass-query mislukt — zie console (F12).');
+                    if (mySeq !== seq) return;
+                    warn('could not load posts', e);
+                    renderError(`Kon de lijst met posten niet laden (${e.message}).`);
                 }
             }, CONFIG.DEBOUNCE_MS);
         }
 
-        let lastRawFieldValue = null;
         function poll() {
             const fields = findLatLngInputs();
-            if (!fields) return; // not on a page with a placement map right now
-            if (!seenLatLng) { seenLatLng = true; renderIdle(); }
+            if (!fields) {
+                // Form closed: hide the panel and start fresh next time.
+                if (formOpen) {
+                    formOpen = false;
+                    clearTimeout(debounceTimer);
+                    seq++;
+                    lastKey = lastRawFieldValue = dismissedKey = null;
+                    removePanel();
+                }
+                return;
+            }
+            if (!formOpen) { formOpen = true; renderIdle(); loadPosts().catch(() => {}); }
             const latVal = fields.lat.value;
             const lonVal = fields.lon.value;
             if (!latVal || !lonVal) return;
-            // Only (re)schedule when the raw value actually changed since the
-            // last poll tick. POLL_MS (500ms) is shorter than DEBOUNCE_MS
-            // (900ms) on purpose — polling that often is what makes the panel
-            // feel responsive — but scheduleCheck() unconditionally resets its
-            // own debounce timer, so calling it every tick regardless of change
-            // meant the debounce could never elapse: it kept getting reset by
-            // the next poll tick before it ever fired. Confirmed live — the
-            // panel silently stayed on the idle message forever until this
-            // check was added.
-            const rawKey = `${latVal}|${lonVal}`;
+            const typeSelect = findGebouwtypeSelect();
+            // Only reschedule on a real change: scheduleCheck() resets its
+            // debounce timer, so calling it every tick would never let it fire.
+            const rawKey = `${latVal}|${lonVal}|${typeSelect ? typeSelect.value : ''}|${CONFIG.RADIUS_M}|${ctx.cfg.onlyType}`;
             if (rawKey === lastRawFieldValue) return;
             lastRawFieldValue = rawKey;
-            scheduleCheck(latVal, lonVal, findGebouwtypeSelect());
+            scheduleCheck(latVal, lonVal, typeSelect);
         }
 
-        function boot() {
-            log('watching for building placement fields...');
-            setInterval(poll, CONFIG.POLL_MS);
-        }
+        // Settings apply on the next check; no reload needed.
+        ctx.onSettings(recheck);
 
-        if (document.readyState === 'complete') boot();
-        else window.addEventListener('load', boot);
+        log('watching for building placement fields...');
+        const timer = setInterval(poll, CONFIG.POLL_MS);
+
+        return {
+            stop() {
+                clearInterval(timer);
+                clearTimeout(debounceTimer);
+                seq++;
+                removePanel();
+            },
+        };
     },
 });
 

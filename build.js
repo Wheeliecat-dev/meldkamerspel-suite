@@ -18,7 +18,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-let VERSION = '1.2.0';
+let VERSION = '1.3.0';
 const REPO = 'Wheeliecat-dev/meldkamerspel-suite'; // GitHub user/repo
 const BRANCH = 'main';
 
@@ -44,6 +44,9 @@ const MODULES = [
     'coverage-map',
     'placement-advisor',
 ];
+
+// Only in the beta build, still being tested. Stable leaves them out.
+const BETA_ONLY = ['mission-helper'];
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8').replace(/\r\n/g, '\n').trimEnd();
 
@@ -80,7 +83,7 @@ function build(channel) {
     const code = fill([
         `/* ${vars.NAME} v${version} — https://github.com/${REPO} */`,
         read('src/core/core.js'),
-        ...MODULES.map((m) => `/* ==== module: ${m} ${'='.repeat(Math.max(0, 60 - m.length))} */\n${read(`src/modules/${m}.js`)}`),
+        ...MODULES.filter((m) => beta || !BETA_ONLY.includes(m)).map((m) => `/* ==== module: ${m} ${'='.repeat(Math.max(0, 60 - m.length))} */\n${read(`src/modules/${m}.js`)}`),
         'MKS.boot();',
     ].join('\n\n')) + '\n';
     const hash = crypto.createHash('sha256').update(code, 'utf8').digest('hex');
