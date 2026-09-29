@@ -156,7 +156,6 @@ MKS.module({
             .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; min-width: 0; }
             .mks-mh-n { min-width: 2.4em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; flex: none; }
             .mks-mh-name { overflow: hidden; text-overflow: ellipsis; }
-            .mks-mh-row.maybe { opacity: .7; font-style: italic; }
             .mks-mh-pct { flex: none; font-size: 11px; font-weight: 600; padding: 0 5px; border-radius: 8px; background: rgba(0,0,0,.08); }
             .mks-mh-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; margin-top: 6px; padding-top: 5px;
                 border-top: 1px solid rgba(0,0,0,.1); }
@@ -179,7 +178,7 @@ MKS.module({
             if (!data) { box.innerHTML = '<span class="mks-mh-note">Meldinghelper laden…</span>'; return; }
             // Plain counts go in the grid. A chance on a vehicle that is also
             // in the list ("HOVD 50%") becomes a badge on that row: it is only
-            // needed that often. Other chances get their own faded row, except
+            // needed that often. Other chances get their own row with the badge, except
             // MMT, which goes with the patient info in the footer. Water, foam
             // and personnel rules also go in the footer.
             const litres = (x) => /water|schuim/i.test(x.name) && /^\d+$/.test(x.v.replace(/\./g, ''));
@@ -197,8 +196,8 @@ MKS.module({
             const rows = counts.map((x) => `<div class="mks-mh-row" title="${esc(`${x.v}× ${x.name}${badge[x.name] ? ` (${badge[x.name]}% kans dat dit nodig is)` : ''}`)}">`
                 + `<span class="mks-mh-n">${esc(x.v)}×</span><span class="mks-mh-name">${esc(cap(x.name))}</span>`
                 + `${badge[x.name] ? `<span class="mks-mh-pct">${esc(badge[x.name])}%</span>` : ''}</div>`)
-                .concat(chances.map((x) => `<div class="mks-mh-row maybe" title="${esc(`${x.v}% kans dat ${x.name} nodig is`)}">`
-                    + `<span class="mks-mh-n">${esc(x.v)}%</span><span class="mks-mh-name">${esc(cap(x.name))}</span></div>`));
+                .concat(chances.map((x) => `<div class="mks-mh-row" title="${esc(`${x.v}% kans dat ${x.name} nodig is`)}">`
+                    + `<span class="mks-mh-n"></span><span class="mks-mh-name">${esc(cap(x.name))}</span><span class="mks-mh-pct">${esc(x.v)}%</span></div>`));
             box.innerHTML = rows.length
                 // Top to bottom, 5 per column, then the next column.
                 ? `<div class="mks-mh-list" style="grid-template-rows:repeat(${Math.min(rows.length, 5)},auto)">${rows.join('')}</div>`
