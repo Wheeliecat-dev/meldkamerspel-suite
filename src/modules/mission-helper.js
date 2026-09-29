@@ -128,7 +128,7 @@ MKS.module({
 
         const style = document.createElement('style');
         style.textContent = `
-            .mks-mh { margin-top: 6px; font-size: 14px; line-height: 1.35; min-height: 44px; }
+            .mks-mh.alert { margin: 8px 0 0; padding: 8px 12px; font-size: 14px; line-height: 1.35; min-height: 44px; }
             .mks-mh-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; }
             .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -141,7 +141,8 @@ MKS.module({
         document.head.appendChild(style);
 
         const box = document.createElement('div');
-        box.className = 'mks-mh';
+        // Same Bootstrap alert as the game's red missing-vehicles box, in green.
+        box.className = 'mks-mh alert alert-success';
         right.appendChild(box);
 
         const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);

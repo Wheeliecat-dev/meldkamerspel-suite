@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.0.202609291709 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.3.0.202609291716 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.3.0.202609291709';
+    const VERSION = '1.3.0.202609291716';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1849,6 +1849,8 @@ MKS.module({
     settings: [
         { key: 'chances', label: 'Ook kansen op extra voertuigen tonen', type: 'bool', default: false,
             help: 'Bijvoorbeeld "Hoogwerker 80%". Die hoef je niet meteen te sturen.' },
+        { key: 'moveMissing', label: 'Ontbrekende voertuigen links ernaast', type: 'bool', default: true,
+            help: 'Zet het rode vak "Missende voertuigen" van het spel in de linkerhelft, naast het lijstje, in plaats van eronder.' },
     ],
 
     run(ctx) {
@@ -1961,7 +1963,7 @@ MKS.module({
 
         const style = document.createElement('style');
         style.textContent = `
-            .mks-mh { margin-top: 6px; font-size: 14px; line-height: 1.35; min-height: 44px; }
+            .mks-mh.alert { margin: 8px 0 0; padding: 8px 12px; font-size: 14px; line-height: 1.35; min-height: 44px; }
             .mks-mh-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; }
             .mks-mh-row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .mks-mh-n { min-width: 2.2em; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -1969,11 +1971,13 @@ MKS.module({
             .mks-mh-rest { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 3px; }
             .mks-mh-chance { opacity: .6; font-size: 12px; margin-top: 3px; }
             .mks-mh-note { opacity: .6; font-size: 12px; }
+            #mission_general_info > .alert-missing-vehicles { clear: both; margin: 8px 0 0; }
         `;
         document.head.appendChild(style);
 
         const box = document.createElement('div');
-        box.className = 'mks-mh';
+        // Same Bootstrap alert as the game's red missing-vehicles box, in green.
+        box.className = 'mks-mh alert alert-success';
         right.appendChild(box);
 
         const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -2000,6 +2004,18 @@ MKS.module({
             }
         }
 
+        // The game's "missing vehicles" alert, moved into the left half of the
+        // header so it sits next to the list. The game updates its contents in
+        // place, so moving the element itself is safe; stop() puts it back.
+        const missing = document.querySelector('.alert.alert-missing-vehicles');
+        const home = missing && { parent: missing.parentNode, next: missing.nextSibling };
+        function placeMissing() {
+            if (!missing) return;
+            if (ctx.cfg.moveMissing) info.appendChild(missing);
+            else if (missing.parentNode !== home.parent) home.parent.insertBefore(missing, home.next);
+        }
+        placeMissing();
+
         let data = cached(key);
         render(data);
         if (!data) {
@@ -2007,12 +2023,13 @@ MKS.module({
                 .then((d) => { data = d; render(d); })
                 .catch((e) => { ctx.warn('help page failed', e); box.innerHTML = '<span class="mks-mh-note">Meldinghelper: hulppagina niet geladen.</span>'; });
         }
-        ctx.onSettings(() => render(data));
+        ctx.onSettings(() => { render(data); placeMissing(); });
 
         return {
             stop() {
                 box.remove();
                 style.remove();
+                if (missing && missing.parentNode !== home.parent) home.parent.insertBefore(missing, home.next);
             },
         };
     },
@@ -2267,39 +2284,50 @@ MKS.module({
          * CANDIDATES
          * Hospitals: tables #own-hospitals and #alliance-hospitals, one row per
          * hospital, button a[href*="/patient/"]. Own hospitals have no cost column.
-         * Cells: buttons a[href*="/gefangener/"] with distance, free cells and
-         * cost in the button text; red = full, orange = not enough room.
+         * Cells: either table rows like hospitals (button a[href*="/gefangener/"])
+         * or loose buttons with distance, free cells and cost in the text.
+         * Red (btn-danger / row .danger / 0 free) = full, orange = not enough room.
          * ==================================================================== */
+        const DEST = 'a[href*="/patient/"], a[href*="/gefangener/"]';
+        const isRed = (el) => !!el && (el.classList.contains('btn-danger') || el.classList.contains('danger')
+            || el.classList.contains('label-danger'));
         function candidates() {
             const out = [];
+            const seen = new Set();
             for (const table of document.querySelectorAll('table')) {
                 const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
                 const iDist = heads.findIndex((h) => h.startsWith('afstand'));
                 if (iDist < 0) continue;
-                const iBeds = heads.findIndex((h) => h.startsWith('vrije'));
-                const iCost = heads.findIndex((h) => h.startsWith('kosten'));
+                const iFree = heads.findIndex((h) => h.startsWith('vrij'));
+                const iCost = heads.findIndex((h) => h.startsWith('kosten') || h.startsWith('belasting'));
                 const iDep = heads.findIndex((h) => h.startsWith('afdeling'));
                 for (const tr of table.querySelectorAll('tbody > tr')) {
-                    const a = tr.querySelector('a.btn[href*="/patient/"]');
+                    const a = tr.querySelector(DEST);
                     if (!a) continue;
-                    const beds = cell(tr, iBeds);
+                    seen.add(a);
+                    const kind = /\/gefangener\//.test(a.getAttribute('href')) ? 'cell' : 'hospital';
+                    const free = iFree >= 0 ? num(cell(tr, iFree).split('/')[0]) : Infinity;
+                    const red = isRed(a) || isRed(tr) || (iFree >= 0 && isRed(tr.cells[iFree] && tr.cells[iFree].querySelector('.label')));
                     out.push({
-                        el: tr, a, kind: 'hospital', own: table.id === 'own-hospitals',
+                        el: tr, a, kind, own: table.id === 'own-hospitals',
                         dist: num(cell(tr, iDist)),
-                        free: iBeds >= 0 ? num(beds.split('/')[0]) : Infinity,
+                        free: red ? 0 : (isNaN(free) ? Infinity : free),
+                        short: a.classList.contains('btn-warning') || tr.classList.contains('warning'),
                         cost: iCost >= 0 ? num(cell(tr, iCost)) || 0 : 0,
-                        dep: iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
+                        dep: kind === 'cell' || iDep < 0 || !!(tr.cells[iDep] && tr.cells[iDep].querySelector('.label-success')),
                     });
                 }
             }
-            for (const a of document.querySelectorAll('a.btn[href*="/gefangener/"]')) {
+            for (const a of document.querySelectorAll('a[href*="/gefangener/"]')) {
+                if (seen.has(a)) continue;
                 const t = a.textContent.replace(/\s+/g, ' ');
                 const km = t.match(/(\d+(?:[.,]\d+)?)\s*km/);
                 const pct = t.match(/(\d+)\s*%/);
+                const freeTxt = t.match(/vrij\w*\s*(?:cel\w*)?\s*:?\s*(\d+)/i);
                 out.push({
                     el: a, a, kind: 'cell',
                     dist: km ? parseFloat(km[1].replace(',', '.')) : NaN,
-                    free: a.classList.contains('btn-danger') ? 0 : Infinity,
+                    free: isRed(a) ? 0 : (freeTxt ? Number(freeTxt[1]) : Infinity),
                     short: a.classList.contains('btn-warning'),
                     cost: pct ? Number(pct[1]) : 0,
                     dep: true,
@@ -2314,7 +2342,7 @@ MKS.module({
             if (c.a.classList.contains('disabled')) return 'niet beschikbaar';
             if (cfg.full && c.free <= 0) return 'vol';
             if (c.kind === 'hospital' && c.free < Number(cfg.minBeds)) return 'te weinig bedden';
-            if (c.kind === 'cell' && cfg.cellsShort && c.short) return 'te weinig cellen';
+            if (c.kind === 'cell' && cfg.cellsShort && c.short && c.free !== 0) return 'te weinig cellen';
             if (c.kind === 'hospital' && cfg.department && !c.dep) return 'geen afdeling';
             if (c.cost > Number(cfg.maxCost)) return 'te duur';
             if (Number(cfg.maxKm) > 0 && c.dist > Number(cfg.maxKm)) return 'te ver';
@@ -2348,7 +2376,7 @@ MKS.module({
                 const tag = document.createElement('span');
                 tag.className = 'mks-dest-tag';
                 tag.textContent = ctx.cfg.enter ? 'Beste keuze · Enter' : 'Beste keuze';
-                (best.kind === 'hospital' ? best.el.cells[0] : best.a).appendChild(tag);
+                (best.el.tagName === 'TR' ? best.el.cells[0] : best.a).appendChild(tag);
             }
             const hidden = list.length - shown.length;
             const parts = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ');
