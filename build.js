@@ -16,7 +16,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-let VERSION = '1.0.1';
+let VERSION = '1.0.2';
 const REPO = 'Wheeliecat-dev/meldkamerspel-suite'; // GitHub user/repo
 const BRANCH = 'main';
 

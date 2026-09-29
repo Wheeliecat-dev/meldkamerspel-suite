@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts v1.0.1 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts v1.0.2 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -7,7 +7,7 @@
  * Every script is a module: MKS.module({ id, name, ..., run(ctx) }).
  * The core decides which modules run on this page, stores their on/off
  * state and settings (GM storage, key mks.suite.v1), and draws the
- * dashboard, the "Scripts" navbar menu and the status dock.
+ * dashboard, the "Wheeliecat's scripts" navbar menu and the status dock.
  *
  * Module definition:
  *   id, name, icon, category, description
@@ -29,7 +29,7 @@
  *   ctx.actions([...])      buttons in the dashboard: { label, run, kind: primary|danger, title, confirm }
  *   ctx.panel(render)       render(el) draws extra content in the dashboard detail view
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
- *   ctx.menu(item)          entry in the Scripts navbar menu: { icon, label, title, run }
+ *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
  *   ctx.set(key, value)     change one of the module's own settings
  *   ctx.open()              open the dashboard on this module
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.0.1';
+    const VERSION = '1.0.2';
     const CHANNEL = 'stable';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -405,16 +405,35 @@ const MKS = (() => {
      * ---------------------------------------------------------------------- */
     const nav = (() => {
         let li, menu;
+        // Far right of the navbar: the last item of Bootstrap's right-hand
+        // list, or a right-hand list of our own when the page has none.
+        function rightBar() {
+            const collapse = document.querySelector('#navbar-main-collapse') || document.querySelector('.navbar .navbar-collapse');
+            const scope = collapse || document.querySelector('.navbar');
+            if (!scope) return null;
+            const lists = scope.querySelectorAll('ul.nav.navbar-nav.navbar-right');
+            if (lists.length) return lists[lists.length - 1];
+            if (!scope.querySelector('ul.nav.navbar-nav')) return null;
+            const ul = document.createElement('ul');
+            ul.className = 'nav navbar-nav navbar-right';
+            ul.id = 'mks-nav-right';
+            scope.appendChild(ul);
+            return ul;
+        }
         function mount() {
             if (li && li.isConnected) return true;
-            const bar = document.querySelector('#navbar-main-collapse ul.nav.navbar-nav, .navbar ul.nav.navbar-nav');
+            const bar = rightBar();
             if (!bar) return false;
             li = document.createElement('li');
             li.className = 'dropdown';
             li.id = 'mks-nav';
-            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Wheeliecat&#39;s scripts: aan/uit en instellingen">⚙️ Scripts <span class="caret"></span></a><ul class="dropdown-menu"></ul>';
+            li.innerHTML = '<a href="#" class="dropdown-toggle" title="Aan/uit en instellingen">⚙️ Wheeliecat&#39;s scripts <span class="caret"></span></a><ul class="dropdown-menu dropdown-menu-right"></ul>';
             menu = li.querySelector('ul');
             bar.appendChild(li);
+            // Stay the last item when the game or another script adds one later.
+            new MutationObserver(() => {
+                if (li.parentNode === bar && bar.lastElementChild !== li) bar.appendChild(li);
+            }).observe(bar, { childList: true });
             li.firstChild.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -5112,7 +5131,7 @@ MKS.module({
     category: 'tools',
     description: 'Al je personeel uit alle gebouwen in één tabel. Sorteer op elke kolom, filter op opleiding, gebouw, status of naam. '
         + 'Met een statistiekentab en een gebouwentab die per gebouw laat zien welke uitbreidingen er zijn, in aanbouw (met aftelling) of uitgeschakeld.',
-    tagline: 'Openen via Scripts-menu',
+    tagline: "Openen via menu Wheeliecat's scripts",
     at: 'ready',
     frames: 'top',
     settings: [
@@ -5913,7 +5932,7 @@ MKS.module({
     frames: 'top',
     settings: [
         { key: 'navBadge', label: 'Tempo in navigatiebalk', type: 'bool', default: true,
-            help: 'Toont credits per uur als los item in de navigatiebalk. Uit = alleen in het Scripts-menu.' },
+            help: 'Toont credits per uur als los item in de navigatiebalk. Uit = alleen in het menu Wheeliecat\'s scripts.' },
         { key: 'sampleMin', label: 'Meten elke', type: 'number', default: 5, min: 1, max: 60, step: 1, unit: 'min' },
         { key: 'rateHours', label: 'Tempo over de laatste', type: 'number', default: 3, min: 1, max: 24, step: 1, unit: 'uur' },
     ],
