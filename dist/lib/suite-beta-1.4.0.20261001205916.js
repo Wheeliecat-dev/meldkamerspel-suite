@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.4.0.20260929193928 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.4.0.20261001205916 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.4.0.20260929193928';
+    const VERSION = '1.4.0.20261001205916';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -1705,7 +1705,7 @@ MKS.module({
     category: 'missions',
     description: 'Zoekbalk boven de AAO\'s in het alarmeervenster. Zoekt door alle categorieën tegelijk. '
         + 'Meerdere woorden = allemaal. <kbd>Enter</kbd> klikt de eerste AAO (vinkt voertuigen aan, alarmeert niet), '
-        + '<kbd>Esc</kbd> wist.',
+        + '<kbd>Esc</kbd> wist. De rode knop links vinkt alle geselecteerde voertuigen uit.',
     at: 'ready',
     frames: 'all',
     pages: /^\/missions\//,
@@ -1779,6 +1779,9 @@ MKS.module({
             bar.id = BAR_ID;
             bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:6px 0;';
             bar.innerHTML = `
+                <button type="button" class="btn btn-danger btn-sm mks-ps-reset" title="Alle aangevinkte voertuigen uitvinken">
+                    <span class="glyphicon glyphicon-remove"></span>
+                </button>
                 <div class="input-group input-group-sm" style="flex:1;max-width:360px">
                     <span class="input-group-addon"><span class="glyphicon glyphicon-search"></span></span>
                     <input type="search" class="form-control" placeholder="Zoek AAO…" autocomplete="off">
@@ -1788,6 +1791,11 @@ MKS.module({
 
             input = bar.querySelector('input');
             counter = bar.querySelector('.mks-ps-count');
+            // click() instead of setting .checked, so the game updates its
+            // own counters and the selected-vehicle summary.
+            bar.querySelector('.mks-ps-reset').addEventListener('click', () => {
+                document.querySelectorAll('input.vehicle_checkbox:checked').forEach((cb) => cb.click());
+            });
             input.addEventListener('input', applyFilter);
             input.addEventListener('keydown', (e) => {
                 // Keep the game's preset hotkeys from firing while typing.
@@ -3808,12 +3816,14 @@ MKS.module({
         // in order, via a per-building counter — so multiple heli's at the same
         // police-aviation building each get a distinct real tail number instead of
         // all sharing the single "PH-PXD - ZULU" placeholder used before.
+        // Picked by vehicle type (28 = Politiehelikopter), never by the base's name,
+        // and shared across the whole fleet so no two heli's get the same one.
+        const POLICE_HELI_TYPE_ID = 28;
         const POLICE_HELI_LIST = [
-            'Zulu 80.11 - PH-PXA', 'Zulu 80.12 - PH-PXB', 'Zulu 80.13 - PH-PXC',
-            'Zulu 80.14 - PH-PXD', 'Zulu 80.15 - PH-PXE', 'Zulu 80.16 - PH-PXF',
-            'Zulu 80.24 - PH-PXX', 'Zulu 80.25 - PH-PXY', 'Zulu 80.26 - PH-PXZ',
+            'ZULU 80.11 - PH-PXA', 'ZULU 80.12 - PH-PXB', 'ZULU 80.13 - PH-PXC',
+            'ZULU 80.14 - PH-PXD', 'ZULU 80.15 - PH-PXE', 'ZULU 80.16 - PH-PXF',
+            'ZULU 80.24 - PH-PXX', 'ZULU 80.25 - PH-PXY', 'ZULU 80.26 - PH-PXZ',
         ];
-        const POLICE_HELI_BUILDING_MATCH = /luchtvaartpolitie|politiehelikopter/i;
 
         /* ========================================================================
          * REFERENCE DATA — building_type -> discipline
@@ -4052,13 +4062,6 @@ MKS.module({
             for (const ac of KNOWN_AIRCRAFT) {
                 if (ac.match.test(building.caption)) return { name: ac.name, seqKey: null, exact: true, aviation: true };
             }
-            if (POLICE_HELI_BUILDING_MATCH.test(building.caption)) {
-                const seqKey = `heli:${building.id}`;
-                const idx = nextSeq(seqKey) - 1;
-                if (idx < POLICE_HELI_LIST.length) {
-                    return { name: POLICE_HELI_LIST[idx], seqKey: null, exact: true, aviation: true };
-                }
-            }
             // Checked before LIFELINER_MAIN since a Wadden base's caption can also
             // contain "traumacentrum" (e.g. "Vliegbasis Traumacentrum Zuidwest").
             if (LIFELINER_WADDEN_BUILDING_MATCH.test(building.caption)) {
@@ -4099,10 +4102,23 @@ MKS.module({
             return { name: `${code}-${seq}${label ? ' ' + label : ''}`, seqKey, exact: false, fits: fitsBy(re) };
         }
 
+        // A heli already wearing a list name keeps it; otherwise it gets the first
+        // list name no other vehicle has or is assigned. Past the end of the list
+        // it is left untouched (null) rather than invent a callsign.
+        function policeHeliTarget(vehicle) {
+            const fits = (caption) => (POLICE_HELI_LIST.includes(caption) ? { seq: 0, exact: true } : null);
+            const taken = new Set(Object.entries(assignments).filter(([id]) => Number(id) !== vehicle.id).map(([, a]) => a.name));
+            for (const [id, caption] of captionById) if (id !== vehicle.id) taken.add(caption);
+            const name = POLICE_HELI_LIST.find((n) => !taken.has(n));
+            if (!name) return fits(vehicle.caption) ? { name: vehicle.caption, seqKey: null, exact: true } : null;
+            return { name, seqKey: null, exact: true, fits };
+        }
+
         function computeTarget(building, vehicle, vehiclesAtBuilding) {
             if (MANUAL_VEHICLE_OVERRIDES[vehicle.id]) {
                 return { name: MANUAL_VEHICLE_OVERRIDES[vehicle.id], seqKey: null, exact: true, manual: true };
             }
+            if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID) return policeHeliTarget(vehicle);
             const discipline = classifyDiscipline(building.building_type);
             if (discipline === 'fire') {
                 const exactData = findFireStationData(building);
@@ -4423,6 +4439,13 @@ MKS.module({
             // that's genuinely unrecoverable (no manual override, no usable type
             // text) will show up in the unclassified log so you know it needs
             // attention rather than silently staying wrong forever.
+            // Police heli's named by an older version (base name, lowercase "Zulu")
+            // get their stored name dropped so they pick up a ZULU list name.
+            for (const vehicle of vehicles) {
+                const a = assignments[vehicle.id];
+                if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID && a && !POLICE_HELI_LIST.includes(a.name)) delete assignments[vehicle.id];
+            }
+
             let ovrNamedFound = 0;
             for (const vehicle of vehicles) {
                 if (/\bOVR(-\d+)?$/i.test(vehicle.caption || '')) {
@@ -6202,7 +6225,8 @@ MKS.module({
     icon: '👥',
     category: 'tools',
     description: 'Al je personeel uit alle gebouwen in één tabel. Sorteer op elke kolom, filter op opleiding, gebouw, status of naam. '
-        + 'Met een statistiekentab en een gebouwentab die per gebouw laat zien welke uitbreidingen er zijn, in aanbouw (met aftelling) of uitgeschakeld.',
+        + 'Met een statistiekentab, een gebouwentab die per gebouw laat zien welke uitbreidingen er zijn, in aanbouw (met aftelling) of uitgeschakeld, '
+        + 'en een meldingentab die laat zien welke nieuwe meldingen je vrijspeelt met nog een paar gebouwen of uitbreidingen.',
     tagline: "Openen via menu Wheeliecat's scripts",
     at: 'ready',
     frames: 'top',
@@ -6436,6 +6460,18 @@ MKS.module({
         #po-bld .po-table td { padding: 5px 8px; border-bottom: 1px solid #2a2e35; vertical-align: top; }
         #po-bld .po-table tr:hover td { background: #252930; }
         #po-bld a { color: #6fb3ff; }
+        #po-mis { flex: 1; overflow: auto; padding: 14px 18px; flex-direction: column; gap: 14px; }
+        #po-mis a { color: #6fb3ff; }
+        #po-mis .po-table { width: 100%; border-collapse: collapse; }
+        #po-mis .po-table th { text-align: left; padding: 6px 8px; background: #262a30; border-bottom: 1px solid #3d434d; white-space: nowrap; }
+        #po-mis .po-table td { padding: 6px 8px; border-bottom: 1px solid #2a2e35; vertical-align: top; }
+        #po-mis .po-table tr:hover td { background: #252930; }
+        .po-gap { display: inline-block; background: #5a3e12; color: #ffdca3; border-radius: 10px; padding: 1px 8px; margin: 1px 3px 1px 0; font-size: 12px; white-space: nowrap; }
+        .po-gap.unk { background: #3a3f47; color: #c9cdd3; }
+        .po-mis-n { font-size: 18px; font-weight: 600; color: #7fe0a8; font-variant-numeric: tabular-nums; }
+        .po-mis-list a { display: inline-block; margin: 1px 10px 1px 0; }
+        .po-mis-list summary { cursor: pointer; color: #9aa1ab; }
+        .po-mis-ev { color: #ffdca3; font-size: 11px; }
         `;
 
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -6450,11 +6486,14 @@ MKS.module({
             search: '',
             building: '',
             status: '',
-            tab: 'table',  // 'table' | 'stats' | 'buildings'
+            tab: 'table',  // 'table' | 'stats' | 'buildings' | 'missions'
             bld: null,     // { buildings, loadedAt } — always fetched live, never cached
             bldSearch: '',
             bldType: '',
             bldShow: 'all', // 'all' | 'building' | 'off'
+            mis: null,      // { missions, buildings, loadedAt } — fetched when the tab opens
+            misSearch: '',
+            misMax: 2,      // show missions missing at most this many buildings/extensions
         };
 
         let tick;
@@ -6478,6 +6517,7 @@ MKS.module({
                   <button data-tab="table">Tabel</button>
                   <button data-tab="stats">📊 Statistieken</button>
                   <button data-tab="buildings">🏗️ Gebouwen</button>
+                  <button data-tab="missions">🔓 Meldingen</button>
                 </div>
                 <input id="po-search" type="search" placeholder="Zoek naam / voertuig…" size="24">
                 <select id="po-building"><option value="">Alle gebouwen</option></select>
@@ -6509,6 +6549,17 @@ MKS.module({
                   </div>
                   <div id="po-bld-body"><div id="po-msg">Laden…</div></div>
                 </div>
+                <div id="po-mis" style="display:none">
+                  <div class="po-bld-ctl">
+                    <input id="po-mis-search" type="search" placeholder="Zoek melding / gebouw / uitbreiding…" size="32">
+                    <label>Nog nodig: <select id="po-mis-max">
+                      <option value="1">1 stap</option><option value="2">max. 2 stappen</option>
+                      <option value="3">max. 3 stappen</option><option value="5">max. 5 stappen</option>
+                      <option value="10">max. 10 stappen</option><option value="999">alles</option>
+                    </select></label>
+                  </div>
+                  <div id="po-mis-body"><div id="po-msg">Laden…</div></div>
+                </div>
               </div>
               <div id="po-foot"><span id="po-count"></span><span id="po-age"></span></div>
             </div>`;
@@ -6517,7 +6568,8 @@ MKS.module({
             overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
             document.addEventListener('keydown', onKey);
             overlay.querySelector('#po-close').onclick = close;
-            overlay.querySelector('#po-refresh').onclick = () => (state.tab === 'buildings' ? loadBuildingsTab(true) : refresh());
+            overlay.querySelector('#po-refresh').onclick = () => (state.tab === 'buildings' ? loadBuildingsTab(true)
+                : state.tab === 'missions' ? loadMissionsTab(true) : refresh());
             overlay.querySelector('#po-csv').onclick = exportCsv;
             overlay.querySelector('#po-reset').onclick = () => {
                 Object.assign(state, { search: '', building: '', status: '', eduMode: 'any' });
@@ -6534,6 +6586,9 @@ MKS.module({
             overlay.querySelector('#po-bld-search').oninput = e => { state.bldSearch = e.target.value.toLowerCase(); renderBuildings(); };
             overlay.querySelector('#po-bld-type').onchange = e => { state.bldType = e.target.value; renderBuildings(); };
             overlay.querySelectorAll('input[name=po-bld-show]').forEach(r => r.onchange = e => { state.bldShow = e.target.value; renderBuildings(); });
+            overlay.querySelector('#po-mis-search').oninput = e => { state.misSearch = e.target.value.toLowerCase(); renderMissions(); };
+            overlay.querySelector('#po-mis-max').value = String(state.misMax);
+            overlay.querySelector('#po-mis-max').onchange = e => { state.misMax = Number(e.target.value); renderMissions(); };
             overlay.querySelectorAll('.po-tabs button').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
             tick = setInterval(() => { if (state.tab === 'buildings') renderBuildings(); }, CONFIG.TICK_MS);
 
@@ -6547,6 +6602,7 @@ MKS.module({
             state.tab = tab;
             GM_setValue(CONFIG.TAB_KEY, tab);
             if (tab === 'buildings') { showTab(tab); loadBuildingsTab(false); return; }
+            if (tab === 'missions') { showTab(tab); loadMissionsTab(false); return; }
             if (state.data) render(); else refresh();
         }
 
@@ -6654,7 +6710,7 @@ MKS.module({
                 render();
             });
 
-            if (state.tab === 'buildings') return;  // personnel finished loading after a tab switch
+            if (state.tab === 'buildings' || state.tab === 'missions') return;  // personnel finished loading after a tab switch
             overlay.querySelector('#po-count').textContent = `${rows.length} van ${state.data.people.length} personeelsleden`
                 + (state.data.failed ? ` · ${state.data.failed} gebouwen mislukt` : '');
             overlay.querySelector('#po-age').textContent = `Geladen: ${new Date(state.data.loadedAt).toLocaleString('nl-NL')}`;
@@ -6666,8 +6722,9 @@ MKS.module({
             overlay.querySelector('#po-tablewrap').style.display = tab === 'table' ? '' : 'none';
             overlay.querySelector('#po-stats').style.display = tab === 'stats' ? '' : 'none';
             overlay.querySelector('#po-bld').style.display = tab === 'buildings' ? 'flex' : 'none';
-            // Personnel filters mean nothing on the buildings tab.
-            const personnel = tab !== 'buildings';
+            overlay.querySelector('#po-mis').style.display = tab === 'missions' ? 'flex' : 'none';
+            // Personnel filters mean nothing on the buildings and missions tabs.
+            const personnel = tab !== 'buildings' && tab !== 'missions';
             overlay.querySelector('#po-side').style.display = personnel ? '' : 'none';
             ['#po-search', '#po-building', '#po-status', '#po-reset', '#po-csv']
                 .forEach(sel => { overlay.querySelector(sel).style.display = personnel ? '' : 'none'; });
@@ -6965,6 +7022,231 @@ MKS.module({
 
             overlay.querySelector('#po-count').textContent = `${rows.length} van ${all.length} gebouwen`;
             overlay.querySelector('#po-age').textContent = `Geladen: ${new Date(state.bld.loadedAt).toLocaleString('nl-NL')}`;
+        }
+
+        /* ========================================================================
+         * MISSIONS TAB — which missions are closest to being unlocked.
+         * The game's public /einsaetze.json lists per mission its
+         * "prerequisites": how many buildings, extensions and trained staff
+         * you need before it can spawn. We count the same things from
+         * /api/buildings and show the gap.
+         * ==================================================================== */
+        // types: building types counted; ext: extension captions counted.
+        // Labels follow the game's own help pages (/einsaetze/{id}).
+        const PREREQ = {
+            fire_stations: { label: 'Brandweerkazerne', types: [0, 17] },
+            rescue_stations: { label: 'Ambulancestandplaats', types: [3, 13] },
+            police_stations: { label: 'Politiebureau', types: [5, 18] },
+            bereitschaftspolizei: { label: 'Politie hoofdbureau', types: [11] },
+            police_helicopter_stations: { label: 'Politiehelikopter standplaats', types: [9] },
+            water_rescue_2: { label: 'Waterreddingspost', types: [16] },
+            coastal_rescue_count: { label: 'Kustwacht haven', types: [19] },
+            coastal_helicopter_count: { label: 'SAR Helikopter platform', types: [21] },
+            // A Berger-K extension counts as a tow station too: checked live, a
+            // player without Berger standplaatsen gets the "tow_trucks: 2" missions.
+            tow_trucks: { label: 'Berger standplaats / Berger-K', types: [24], ext: /^Berger-K/i },
+            railway: { label: 'Standplaats Incidentenbestrijding spoor', types: [27] },
+            military_police: { label: 'Kazerne defensie', types: [25] },
+            fire_aviation_count: { label: 'Militaire hangar', types: [23] },
+            technical_aid: { label: 'RWS-steunpunt / Signalisatie', types: [22], ext: /^Signalisatie/i },
+            tow_trucks_large: { label: 'Berger-G', ext: /^Berger-G/i },
+            fire_support_count: { label: 'Schuimblussing', ext: /^Schuimblus/i },
+            brush_extension: { label: 'Natuurbrandbestrijding', ext: /^Natuurbrandbestrijding/i },
+            thatched_fire: { label: 'Rietkapbrandbestrijding', ext: /^Rietkap/i },
+            livestock_fire: { label: 'Veetakels', ext: /^Veetakel/i },
+            industrial_response_fire: { label: 'Industriële Brandbestrijding', ext: /^Industri.le Brandbestrijding/i },
+            hazard_response_fire: { label: 'Incidentbestrijding Gevaarlijke Stoffen', ext: /^Incidentbestrijding Gevaarlijke Stoffen/i },
+            wasserrettung: { label: 'Waterongevallenbestrijding', ext: /^Waterongevallenbestrijding/i },
+            airport: { label: 'Vliegtuigbrandbestrijding', ext: /^Vliegtuigbrandbestrijding/i },
+            railway_fire: { label: 'Incidentenbestrijding spoor (uitbreiding)', ext: /^Incidentenbestrijding spoor/i },
+            mass_casualty_count: { label: 'Grootschalige Geneeskundige Bijstand', ext: /^Grootschalige Geneeskundige Bijstand/i },
+            disaster_response_count: { label: 'Specialisme Technische Hulpverlening', ext: /^Specialisme Technische Hulpverlening/i },
+            search_and_rescue: { label: 'Urban Search and Rescue', ext: /^Urban Search and Rescue/i },
+            care_service: { label: 'Verzorgingseenheid', ext: /^Verzorgingseenheid/i },
+            clean_service: { label: 'Arbeidshygiëne', ext: /^Arbeidshygi/i },
+            drone_fire: { label: 'Team Digitale Verkenning', ext: /^Team Digitale Verkenning/i },
+            drone_police: { label: 'Drone Team Politie', ext: /^Drone Team Politie/i },
+            traffic_police: { label: 'LE - Dienst Infrastructuur', ext: /^LE - Dienst Infrastructuur/i },
+            hondengeleider: { label: 'Hondenbrigade', ext: /^Hondenbrigade/i },
+            police_horse: { label: 'Bereden Brigade', ext: /^Bereden Brigade/i },
+            riot_unit_count: { label: 'Mobiele Eenheid, Sectie', ext: /^Mobiele Eenheid, (2e )?Sectie/i },
+            detention_unit_count: { label: 'Mobiele Eenheid, Aanhoudingseenheid', ext: /Aanhoudingseenheid/i },
+            prisoner_transport_count: { label: 'Arrestantenvervoer', ext: /^Arrestantenvervoer/i },
+            water_cannon: { label: 'Waterwerper', ext: /^Waterwerper/i },
+            at: { label: 'Arrestatieteam', ext: /^Arrestatieteam/i },
+            bomb_disposal_count: { label: 'Explosieven Opruimingsdienst', ext: /^Explosieven Opruimingsdienst/i },
+            bomb_disposal_diver: { label: 'Defensie Duikgroep', ext: /^Defensie Duikgroep/i },
+            bomb_disposal_patrol: { label: 'TEV', ext: /\bTEV\b|Technische Explosieven/i },
+            coastal_rescue_small_count: { label: 'Boten', ext: /^Boten|\bboot/i },
+        };
+        // The building type a mission comes from must exist (main_building -1: none).
+        const MAIN_BUILDING = { 0: 'fire_stations', 3: 'rescue_stations', 5: 'police_stations', 11: 'bereitschaftspolizei',
+            16: 'water_rescue_2', 19: 'coastal_rescue_count', 24: 'tow_trucks', 25: 'military_police', 27: 'railway' };
+        // Trained staff, counted from the (cached) personnel table.
+        const EDU = {
+            police_motorcycle: { label: 'Motoragent', re: /motoragent/i },
+            wildfire: { label: 'Handcrew', re: /handcrew/i },
+        };
+        const SKIP_KEYS = new Set(['main_building', 'max_police_stations', 'personnel_educations']);
+
+        // Extensions still under construction do not count yet.
+        function countPrereqs(buildings) {
+            const have = {};
+            for (const [key, def] of Object.entries(PREREQ)) {
+                let n = 0;
+                for (const b of buildings) {
+                    if (def.types && def.types.includes(b.building_type)) n++;
+                    if (def.ext) n += (b.extensions || []).filter(x => x.available !== false && def.ext.test(x.caption || '')).length;
+                }
+                have[key] = n;
+            }
+            return have;
+        }
+
+        function countEducations() {
+            const people = state.data && state.data.people;
+            if (!people) return null;
+            const have = {};
+            for (const [key, def] of Object.entries(EDU)) have[key] = people.filter(p => p.educations.some(e => def.re.test(e))).length;
+            return have;
+        }
+
+        async function loadMissionsTab(force) {
+            if (state.mis && !force) { renderMissions(); return; }
+            overlay.querySelector('#po-mis-body').innerHTML = '<div id="po-msg">Meldingen en gebouwen ophalen…</div>';
+            try {
+                // The mission list (~3 MB) only changes with game updates: fetched once per page.
+                const missions = state.mis ? state.mis.missions : await fetchWithTimeout('/einsaetze.json', { headers: { Accept: 'application/json' } })
+                    .then(r => { if (!r.ok) throw new Error(`GET /einsaetze.json failed: ${r.status}`); return r.json(); });
+                const buildings = await getBuildings();
+                state.mis = { missions, buildings, loadedAt: Date.now() };
+                const unknown = new Set();
+                missions.forEach(m => Object.keys(m.prerequisites || {}).forEach(k => { if (!PREREQ[k] && !SKIP_KEYS.has(k)) unknown.add(k); }));
+                if (unknown.size) log('unknown mission prerequisites:', [...unknown]);
+            } catch (e) {
+                warn(e);
+                if (overlay) overlay.querySelector('#po-mis-body').innerHTML = `<div id="po-msg">Laden mislukt: ${esc(e.message)}</div>`;
+                return;
+            }
+            renderMissions();
+        }
+
+        // Gaps of one mission: [{ key, label, need, have }], have null = unknown.
+        function missionGaps(m, have, edu) {
+            const pre = m.prerequisites || {};
+            const need = {};
+            for (const [k, v] of Object.entries(pre)) if (typeof v === 'number' && !SKIP_KEYS.has(k)) need[k] = v;
+            const main = MAIN_BUILDING[pre.main_building];
+            if (main) need[main] = Math.max(need[main] || 0, 1);
+            const gaps = [];
+            for (const [k, v] of Object.entries(need)) {
+                if (!PREREQ[k]) gaps.push({ key: k, label: k, need: v, have: null });
+                else if (have[k] < v) gaps.push({ key: k, label: PREREQ[k].label, need: v, have: have[k] });
+            }
+            for (const [k, v] of Object.entries(pre.personnel_educations || {})) {
+                const h = edu && typeof edu[k] === 'number' ? edu[k] : null;
+                if (h === null || h < v) gaps.push({ key: `edu:${k}`, label: `personeel met ${EDU[k] ? EDU[k].label : k}`, need: v, have: h });
+            }
+            return gaps;
+        }
+
+        function renderMissions() {
+            if (!overlay || !state.mis) return;
+            const { missions, buildings } = state.mis;
+            const have = countPrereqs(buildings);
+            const edu = countEducations();
+            const now = Date.now();
+
+            // Event missions only count while their event runs.
+            const live = missions.filter(m => {
+                const a = m.additional || {};
+                const start = Date.parse(a.date_start), end = Date.parse(a.date_end);
+                return !(start > now) && !(end < now);
+            });
+            // One entry per mission name: the easiest variant decides when it shows up.
+            const byName = new Map();
+            const gone = new Set();
+            for (const m of live) {
+                const max = (m.prerequisites || {}).max_police_stations;
+                if (typeof max === 'number' && have.police_stations > max) { gone.add(m.name); continue; }
+                const gaps = missionGaps(m, have, edu);
+                // Unknown counts (personnel not loaded) count as fully missing.
+                const steps = gaps.reduce((s, g) => s + g.need - (g.have || 0), 0);
+                const cur = byName.get(m.name);
+                if (!cur || (cur.gaps.length && (!gaps.length || steps < cur.steps))) {
+                    byName.set(m.name, { m, gaps, steps, event: !!(m.additional || {}).date_end });
+                }
+            }
+            byName.forEach((x, name) => gone.delete(name));
+            const all = [...byName.values()];
+            const open = all.filter(x => !x.gaps.length);
+            const locked = all.filter(x => x.gaps.length);
+
+            // Group locked missions by exactly what is missing.
+            const groups = new Map();
+            for (const x of locked) {
+                const k = x.gaps.map(g => `${g.key}:${g.need}`).sort().join('|');
+                if (!groups.has(k)) groups.set(k, { gaps: x.gaps, steps: x.steps, list: [] });
+                groups.get(k).list.push(x);
+            }
+            const gapText = (g) => (g.have === null ? `${g.need}× ${g.label} (?)` : `+${g.need - g.have} ${g.label}`);
+            const q = state.misSearch;
+            const rows = [...groups.values()]
+                .filter(g => g.steps <= state.misMax)
+                .filter(g => !q || `${g.gaps.map(gapText).join(' ')} ${g.list.map(x => x.m.name).join(' ')}`.toLowerCase().includes(q))
+                .sort((a, b) => a.steps - b.steps || b.list.length - a.list.length);
+
+            // What exactly one more building or extension unlocks.
+            const single = new Map();
+            for (const x of locked) {
+                const g = x.gaps[0];
+                if (x.gaps.length === 1 && g.have !== null && g.need - g.have === 1) single.set(g.label, (single.get(g.label) || 0) + 1);
+            }
+            const best = [...single.entries()].sort((a, b) => b[1] - a[1]);
+            const oneMore = best.reduce((s, [, n]) => s + n, 0);
+
+            const helpUrl = (m) => {
+                const p = new URLSearchParams();
+                if (m.additive_overlays) p.set('additive_overlays', m.additive_overlays);
+                if (m.overlay_index !== null && m.overlay_index !== undefined) p.set('overlay_index', m.overlay_index);
+                const qs = p.toString();
+                return `/einsaetze/${m.base_mission_id ?? m.id}${qs ? `?${qs}` : ''}`;
+            };
+            const missionLink = (x) => `<a href="${helpUrl(x.m)}" target="_blank" title="± ${nl(x.m.average_credits || 0)} credits">${esc(x.m.name)}</a>`
+                + (x.event ? '<span class="po-mis-ev" title="Tijdelijke evenementmelding"> 📅</span>' : '');
+            const listHtml = (list) => {
+                const sorted = list.slice().sort((a, b) => (b.m.average_credits || 0) - (a.m.average_credits || 0));
+                const more = sorted.length > 8
+                    ? `<details><summary>+ ${sorted.length - 8} meer</summary>${sorted.slice(8).map(missionLink).join('')}</details>` : '';
+                return `<div class="po-mis-list">${sorted.slice(0, 8).map(missionLink).join('')}${more}</div>`;
+            };
+            const tile = (v, l) => `<div class="po-tile"><div class="v">${v}</div><div class="l">${l}</div></div>`;
+            const shown = rows.reduce((s, g) => s + g.list.length, 0);
+
+            overlay.querySelector('#po-mis-body').innerHTML = `
+                <div class="po-tiles">
+                  ${tile(nl(open.length), `meldingen vrijgespeeld (van ${nl(all.length)})`)}
+                  ${tile(nl(locked.length), 'nog op slot')}
+                  ${tile(nl(oneMore), 'vrij met 1 extra gebouw of uitbreiding')}
+                </div>
+                ${best.length ? `<div class="po-card"><h4>Bouw er nog één bij</h4>
+                  <table class="po-table"><thead><tr><th>Nog 1 extra</th><th>Nieuwe meldingen</th></tr></thead><tbody>
+                  ${best.map(([l, n]) => `<tr><td>${esc(l)}</td><td class="po-mis-n">+${nl(n)}</td></tr>`).join('')}
+                  </tbody></table></div>` : ''}
+                ${edu ? '' : '<div class="po-none">Personeel nog niet geladen: eisen voor opgeleid personeel (zoals Handcrew) zijn onbekend (?). Open de tab Tabel om het te laden.</div>'}
+                <div class="po-card"><h4>Dichtst bij vrijspelen (${nl(shown)} meldingen)</h4>
+                  ${rows.length ? `<table class="po-table"><thead><tr><th>Nog nodig</th><th>Meldingen</th><th>Welke</th></tr></thead><tbody>
+                  ${rows.map(g => `<tr>
+                      <td style="min-width:220px">${g.gaps.map(x => `<span class="po-gap${x.have === null ? ' unk' : ''}" title="${esc(x.label)}: je hebt ${x.have === null ? '?' : x.have}, nodig ${x.need}">${esc(gapText(x))}</span>`).join('')}</td>
+                      <td class="po-mis-n">${nl(g.list.length)}</td>
+                      <td>${listHtml(g.list)}</td></tr>`).join('')}
+                  </tbody></table>` : '<span class="po-none">Geen meldingen binnen deze filter.</span>'}
+                </div>
+                <div class="po-none">Volgens de voorwaarden van het spel (/einsaetze.json). Uitbreidingen in aanbouw tellen nog niet mee.
+                  ${gone.size ? `${nl(gone.size)} meldingen komen niet meer, omdat je meer politiebureaus hebt dan het maximum.` : ''}</div>`;
+
+            overlay.querySelector('#po-count').textContent = `${nl(open.length)} van ${nl(all.length)} meldingen vrijgespeeld`;
+            overlay.querySelector('#po-age').textContent = `Geladen: ${new Date(state.mis.loadedAt).toLocaleString('nl-NL')}`;
         }
 
         function exportCsv() {
