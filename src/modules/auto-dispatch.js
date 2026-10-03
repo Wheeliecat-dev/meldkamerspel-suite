@@ -771,6 +771,9 @@ MKS.module({
                     await transports();
                     const req = await loadMissions();
                     for (const entry of candidates()) {
+                        // A round over many missions takes minutes: answer new
+                        // transport requests in between, not only at the start.
+                        await transports();
                         if (!running || stopped) break;
                         const hourAgo = Date.now() - 3600000;
                         while (sent.length && sent[0] < hourAgo) sent.shift();

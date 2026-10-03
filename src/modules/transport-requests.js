@@ -27,6 +27,8 @@ MKS.module({
         const W = ctx.W;
         const path = location.pathname;
         const IN_FRAME = window.top !== window.self;
+        // Hidden windows of Automatisch alarmeren: jumping away there breaks its job.
+        if (IN_FRAME && window.name.startsWith('mks-auto-worker:')) return;
 
         /* ========================================================================
          * MISSION WINDOW — jump to the vehicle that asks for a transport.
