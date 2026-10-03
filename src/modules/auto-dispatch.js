@@ -30,12 +30,18 @@ MKS.module({
             help: 'Lifeliner, Politiehelikopter, SAR-heli en FBO-Heli vliegen en mogen van verder komen.' },
         { key: 'needAll', label: 'Alleen als alles beschikbaar is', type: 'bool', default: true,
             help: 'Uit: stuurt ook als het spel meldt dat er voertuigen tekort zijn (stuurt dan wat er wel is).' },
+        { key: 'ignoreShort', label: 'Tekort negeren bij', type: 'text', default: 'Incidentenbestrijder',
+            help: 'Namen met komma\'s ertussen, zoals het spel ze noemt ("te weinig: 1 Incidentenbestrijder"). '
+                + 'Is alleen hiervan te weinig, dan gaat de rest toch. Telt nog wel mee in de tekortlijst.' },
         { key: 'topUp', label: 'Bijsturen bij rode melding', type: 'bool', default: true,
             help: 'Ook inzetten waar al voertuigen zijn, maar het spel "Missende voertuigen" meldt: stuurt alleen wat daar staat. '
                 + 'Wacht tot er niets meer onderweg is, zodat er niets dubbel gaat.' },
         { key: 'patients', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
             help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance en MMT per patiënt, '
                 + 'en hooguit één OvD-G per inzet. Ook bij inzetten waar al voertuigen staan.' },
+        { key: 'bigPatients', label: 'Grote inzet: meer dan zoveel patiënten', type: 'number', default: 30, min: 0, max: 500, step: 5,
+            help: 'Daar mogen ambulances in delen: te weinig of te ver weg houdt de rest niet tegen. De patiënten vragen daarna zelf '
+                + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
@@ -569,19 +575,42 @@ MKS.module({
                 // A vehicle can have two rows (helicopters: 22.95 and 36.94 km for one
                 // Lifeliner). Count it once, at its shortest distance.
                 const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
-                const byId = new Map();
-                document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => {
-                    const prev = byId.get(c.value);
-                    if (!prev || dist(c) < dist(prev)) byId.set(c.value, c);
-                });
-                const picked = [...byId.values()];
+                const selection = () => {
+                    const byId = new Map();
+                    document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => {
+                        const prev = byId.get(c.value);
+                        if (!prev || dist(c) < dist(prev)) byId.set(c.value, c);
+                    });
+                    return [...byId.values()];
+                };
+                let picked = selection();
                 const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { picked.forEach((c) => c.checked && c.click()); } };
                 if (!picked.length) { report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : 'geen voertuigen beschikbaar', shortText: shortage }); return; }
-                if (shortage && job.needAll) { reset(); report('skip', { reason: `te weinig: ${fewer(shortage)} (de rest is er wel)`, shortText: shortage }); return; }
-                const far = Math.max(...picked.map(dist));
+                // Shortages on the ignore list (setting) do not stop the rest from going. On a
+                // big patient mission ("24 Patiënten - 5 onbehandelde") ambulances may come in
+                // parts: the patient lines ask for the rest once these have arrived.
+                const totalPatients = Number(((document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+Pati/i) || [])[1] || 0);
+                const big = job.bigPatients > 0 && totalPatients > job.bigPatients;
+                const ignored = (job.ignoreShort || []).map((n) => n.toLowerCase());
+                const blocking = [...String(shortage).matchAll(/beschikbaar:\s*\d+\s+([^.\n]+)/gi)]
+                    .map((m) => m[1].trim()).filter((n) => !ignored.includes(n.toLowerCase()) && !(big && /ambulance/i.test(n)));
+                if (shortage && job.needAll && (blocking.length || !/beschikbaar:/i.test(shortage))) {
+                    reset();
+                    report('skip', { reason: `te weinig: ${fewer(shortage)} (de rest is er wel)`, shortText: shortage });
+                    return;
+                }
                 // Helicopters fly: they get their own, larger limit.
                 const AIR = ['23', '28', '80', '85'];
                 const tooFar = (c) => dist(c) > (AIR.includes(c.getAttribute('vehicle_type_id')) ? job.airKm : job.maxKm);
+                if (big) {
+                    // Big patient mission: leave the far ambulances home instead of skipping it all.
+                    picked.filter((c) => tooFar(c) && c.getAttribute('rtw') === '1').forEach((c) => {
+                        document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click());
+                    });
+                    picked = selection();
+                    if (!picked.length) { report('skip', { reason: 'alle ambulances te ver', shortText: shortage }); return; }
+                }
+                const far = Math.max(...picked.map(dist));
                 if (picked.some(tooFar)) {
                     // Which types had to come from too far: those are the ones to buy closer by.
                     const farTypes = {};
@@ -597,7 +626,7 @@ MKS.module({
                 const btn = document.getElementById('alert_btn');
                 if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
                 try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-                report('sending', { mode, n: picked.length, km: far, short: shortage ? clean(shortage) : '', shortText: shortage });
+                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage });
                 btn.click();
             } catch (e) {
                 ctx.err(e);
@@ -1005,7 +1034,9 @@ MKS.module({
 
                         status(`Bezig: ${name}`, 'busy');
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp });
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
+                            ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0 });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         if (res.result === 'sent' || res.result === 'unconfirmed') {
@@ -1013,7 +1044,7 @@ MKS.module({
                             errorStreak = 0;
                             sent.push(Date.now());
                             const verb = res.mode === 'full' ? 'gealarmeerd' : 'bijgestuurd';
-                            addLog(name, `${res.result === 'sent' ? verb : `${verb} (niet bevestigd)`}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.short ? `, tekort: ${res.short}` : ''}`, 'ok');
+                            addLog(name, `${res.result === 'sent' ? verb : `${verb} (niet bevestigd)`}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.short ? `, te weinig: ${res.short}` : ''}`, 'ok');
                         } else if (res.result === 'wait') {
                             // Vehicles still driving: look again in a minute, not after retryMin.
                             tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
