@@ -18,7 +18,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-let VERSION = '1.5.0';
+let VERSION = '1.6.0';
 const REPO = 'Wheeliecat-dev/meldkamerspel-suite'; // GitHub user/repo
 const BRANCH = 'main';
 
@@ -46,7 +46,7 @@ const MODULES = [
 ];
 
 // Only in the beta build, still being tested. Stable leaves them out.
-const BETA_ONLY = ['mission-helper'];
+const BETA_ONLY = [];
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8').replace(/\r\n/g, '\n').trimEnd();
 
