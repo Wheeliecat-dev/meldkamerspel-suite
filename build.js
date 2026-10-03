@@ -42,6 +42,7 @@ const MODULES = [
     'personnel-overview',
     'income-tracker',
     'daily-summary',
+    'vehicle-status-bar',
     'coverage-map',
     'placement-advisor',
     'building-price',
@@ -52,7 +53,7 @@ const MODULES = [
 ];
 
 // Only in the beta build, still being tested. Stable leaves them out.
-const BETA_ONLY = ['auto-dispatch', 'building-price', 'building-share', 'vehicle-scrap', 'personnel-assign'];
+const BETA_ONLY = ['auto-dispatch', 'vehicle-status-bar', 'building-price', 'building-share', 'vehicle-scrap', 'personnel-assign'];
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8').replace(/\r\n/g, '\n').trimEnd();
 
