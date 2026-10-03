@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.6.0.20261003161443 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.6.0.20261003164501 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.6.0.20261003161443';
+    const VERSION = '1.6.0.20261003164501';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10308,8 +10308,53 @@ MKS.module({
             'gm-icb': 'railway_material', 'ts-usar': 'search_and_rescue_engine', 'hsh-icb of vw-hs': 'railway_fire_equipment_container',
             'eod eenheid': 'bomb_disposal', 'rc-explosievenrobot': 'bomb_disposal_robot', 'db-explosievenduikers': 'bomb_disposal_diver', 'ba-ddg': 'bomb_disposal_boat',
             // Seen only in the red box.
-            'verzorgingseenheden': 'care_service',
+            'verzorgingseenheden': 'care_service', 'officier van dienst brandweer': 'battalion_chief_vehicles',
+            'hoofd officier van dienst': 'mobile_command_vehicles', 'ab': 'mobile_air_vehicles',
+            'slangenwagen, watertankwagen of gelijkwaardige haakarmbak': 'water_tankers',
         };
+        // Every vehicle type by its full name, for red boxes that name the type
+        // itself ("Officier van Dienst - Politie", "Dienstbus Arrestantenvervoer").
+        // Last resort after LABELS: those cover more vehicles per name.
+        const VT_NAMES = {
+            "SI-2": 0, "TS 8/9": 1, "Autoladder": 2, "DA - Officier van Dienst": 3, "Hulpverleningsvoertuig": 4,
+            "Adembeschermingsvoertuig": 5, "TST 8/9": 6, "TST 6/7": 7, "TST 4/5": 8, "TS 4/5": 9, "Slangenwagen": 10,
+            "Verkenningseenheid Brandweer": 11, "TST-NB 8/9": 12, "TST-NB 6/7": 14, "TST-NB 4/5": 15, "Ambulance": 16,
+            "TS 6/7": 17, "Hoogwerker": 18, "DA - Hoofdofficier van Dienst": 19, "DA": 20, "DB Klein": 21, "DA Noodhulp": 22,
+            "Lifeliner": 23, "DA - Adviseur Gevaarlijke stoffen": 24, "DB Noodhulp": 25, "Haakarmvoertuig": 26,
+            "Adembeschermingshaakarmbak": 27, "Politiehelikopter": 28, "Watertankhaakarmbak": 29, "Zorgambulance": 30,
+            "Commandovoertuig": 31, "Commandohaakarmbak": 32, "Waterongevallenvoertuig": 33, "Watertankwagen": 34,
+            "Officier van Dienst - Politie": 35, "Waterongevallenaanhanger": 36, "MMT-Auto": 37,
+            "Officier van Dienst - Geneeskunde": 38, "ME Commandovoertuig": 39, "ME Flexbus": 40, "Crashtender (8x8)": 41,
+            "Crashtender (6x6)": 42, "Crashtender (4x4)": 43, "Airport Fire Officer / On Scene Commander": 44,
+            "Dompelpomphaakarmbak": 45, "DM-Politie": 46, "DA Hondengeleider": 47, "DB Hondengeleider": 48, "PM-OR": 49,
+            "Materieelvoertuig - Oppervlakteredding": 49, "TS-OR": 50, "Tankautospuit - Oppervlakteredding": 50,
+            "HulpverleningsHaakarmbak": 51, "Rapid Responder": 52, "AT-Commandant": 53, "AT-Operator": 54, "AT-Materiaalwagen": 55,
+            "DA Voorlichter": 56, "DA Officier van Dienst - Geneeskundig / Rapid Responder": 57, "DB Arrestantenvervoer": 58,
+            "Noodhulp - Onopvallend": 59, "DB Biketeam": 60, "Slangenhaakarmbak": 61, "TS-HV": 62,
+            "Tankautospuit-Hulpverlening": 62, "DM - Rapid Responder": 63, "ME Aanhoudingseenheid": 64,
+            "DA Terreinwaardig - Reddingsbrigade": 65, "Kusthulpverleningsvoertuig": 66, "Bootaanhanger Reddingsbrigade": 67,
+            "SB": 68, "SBH": 69, "SBA": 70, "MSA": 71, "DPA": 72, "Vrachtwagen - Bereden Brigade": 73,
+            "Bereden Brigade Aanhanger": 74, "Dienstauto terreinvaardig - Noodhulp": 75, "Quad": 76, "KW-boot": 77, "RB-K": 78,
+            "RB-G": 79, "SAR-heli": 80, "DA-RWS": 81, "Dienstvoertuig weginspecteur Rijkswaterstaat": 81, "DM-RWS": 82,
+            "Dienstmotor weginspecteur Rijkswaterstaat": 82, "DA-SIG": 83, "Signalisatievoertuig": 83, "Waterwerper": 84,
+            "FBO-Heli": 85, "DB-Handcrew": 86, "DA-LA-NB": 87, "VW-NB": 88, "NBH": 89, "TS-STH": 90, "HVH-STH": 91, "DB-USAR": 92,
+            "TS-USAR": 93, "VW-USAR": 94, "DM-USAR": 95, "Quad-USAR": 96, "DB–Speurhonden": 97, "SIV-P": 98, "DB-VOA": 99,
+            "GGB": 100, "NHT": 101, "MC-Ambulance": 102, "MICU": 103, "Berger-K": 104, "Berger-G": 105, "Berger-K (RWS)": 106,
+            "Berger-G (RWS)": 107, "Berger-K (Politie)": 108, "Berger-G (Politie)": 109, "DAT-KMAR": 110, "DB-KMAR": 111,
+            "DM-KMAR": 112, "DAT-EOD": 113, "DB-EOD": 114, "VW-EOD": 115, "DB-Explosievenhonden": 116,
+            "DB-Explosievenduikers": 117, "BA-DDG": 118, "DB-TEV": 119, "DB-VZ": 120, "VZH": 121, "DB-AH": 122, "VZH-AH": 123,
+            "DB-PC-LOG": 124, "DB-LOG": 125, "VW-LOG": 126, "BMH-LOG": 127, "DB-DRONE": 128, "DB-TDV": 129, "SB-BA": 130,
+            "SB-IB": 131, "AS": 132, "TS-IB": 133, "GSH": 134, "DB-GS": 135, "GPH": 136, "DB-GP": 137, "BOH-DC": 138, "TS-BO": 139,
+            "DB-BO": 140, "GOH-DC": 141, "TS-GO": 142, "DB-GO": 143, "DB-ICB": 144, "OvD-ICB": 145, "VW-VZ-ICB": 146,
+            "HA-ICB": 147, "GM-ICB": 148, "HSH-ICB": 149, "VW-HS": 150, "BM-VTHS": 151, "TS-Spoor": 152, "DB-RI": 153, "RIA": 154,
+            "DB-VI": 155, "VIA": 156
+        };
+
+        // Lower case, no " - ", and the long words the game abbreviates in type names.
+        const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').trim()
+            .replace(/^dienstbus\b/, 'db').replace(/^dienstauto\b/, 'da').replace(/^dienstmotor\b/, 'dm');
+        const VT_BY_NAME = new Map(Object.entries(VT_NAMES).map(([n, id]) => [normName(n), id]));
+
         // Singular and plural of the same Dutch name, word by word: "Noodhulpeenheid" /
         // "noodhulpeenheden", "ME Flexbus" / "me flexbussen", "Slangenwagen" / "slangenwagens",
         // "Officier van Dienst Politie" / "officiers van dienst politie".
@@ -10322,14 +10367,16 @@ MKS.module({
 
         // One name from the red box -> requirement key. Tries the exact name, a name
         // with extra words after it ("Berger-K om het slepen te beginnen"),
-        // singular/plural, and finally a vehicle type caption from the page.
+        // singular/plural, a vehicle type by its full name, and finally a vehicle
+        // type caption from the page.
         function keyForName(name, typeIds) {
-            const n = name.toLowerCase().replace(/\.$/, '').replace(/\s+/g, ' ').trim();
+            const n = normName(name.replace(/\.$/, ''));
             if (LABELS[n]) return LABELS[n];
             const prefix = Object.keys(LABELS).filter((l) => n.startsWith(`${l} `)).sort((a, b) => b.length - a.length)[0];
             if (prefix) return LABELS[prefix];
             const loose = Object.keys(LABELS).find((l) => sameName(n, l));
             if (loose) return LABELS[loose];
+            if (VT_BY_NAME.has(n)) return `vt:${VT_BY_NAME.get(n)}`;
             if (typeIds && typeIds[n]) return `vt:${typeIds[n]}`;
             return null;
         }
@@ -10553,15 +10600,18 @@ MKS.module({
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
                 // anything is still driving there.
+                // "Shown" is the box's own display, not offsetParent: in our hidden
+                // frame layout-based checks are not reliable.
+                const shown = (el) => !!el && el.style.display !== 'none' && getComputedStyle(el).display !== 'none';
                 const box = document.getElementById('missing_text');
-                const missingText = box && box.offsetParent !== null ? box.textContent.replace(/\s+/g, ' ').trim() : '';
+                const missingText = shown(box) ? box.textContent.replace(/\s+/g, ' ').trim() : '';
                 const driving = !!document.querySelector('#mission_vehicle_driving tbody tr');
                 const present = !!document.querySelector('#mission_vehicle_at_mission tbody tr');
                 // What the patients still need ("5x We benodigen: OvD-G"): the box in
                 // this window, or the per-patient lines the controller read in the list.
                 const pBox = document.getElementById('patient_missing_requirements');
                 const pText = !job.patients ? ''
-                    : (pBox && pBox.offsetParent !== null && pBox.textContent.trim()) || job.patientText || '';
+                    : (shown(pBox) && pBox.textContent.replace(/\s+/g, ' ').trim()) || job.patientText || '';
                 const pNeed = patientNeeds(pText);
                 const mode = missingText ? 'missing' : present && pText ? 'patients' : 'full';
                 if (driving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
@@ -10590,8 +10640,13 @@ MKS.module({
                     // any other kind of line is unknown, not ignored.
                     parts.filter((p) => p.getAttribute('data-requirement-type') !== 'vehicles').forEach((p) => {
                         const t = p.textContent.replace(/\s+/g, ' ').trim();
+                        // "We missen: 34000 L. water"
+                        const amount = t.match(/([\d.]+)\s*l\.?\s*(water|svm|schuim)/i);
                         if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
-                        else plan.unknown.push(t);
+                        else if (amount) {
+                            const k = /water/i.test(amount[2]) ? 'wasser_amount' : 'foam_amount';
+                            plan.slots[k] = (plan.slots[k] || 0) + Number(amount[1].replace(/\./g, ''));
+                        } else plan.unknown.push(t);
                     });
                     if (plan.unknown.length) {
                         report('skip', { reason: `rode melding, kan niet sturen: ${plan.unknown.join(', ')}`, unknownNeeds: plan.unknown });
@@ -10603,44 +10658,72 @@ MKS.module({
                 if (job.patients) {
                     const m = (document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+onbehandelde/i);
                     const untreated = m ? Number(m[1]) : 0;
-                    const amb = Math.max(Number(attrs.rtw) || 0, untreated, pNeed.amb);
+                    // A new mission: one ambulance per untreated patient (the patient lines
+                    // do not always say "ambulance"). With vehicles there, only what the
+                    // lines ask for: "1x We benodigen: OvD-G, ambulance" with 7 untreated = 1.
+                    const amb = Math.max(Number(attrs.rtw) || 0, pNeed.amb, mode === 'full' ? untreated : 0);
                     if (amb) attrs.rtw = amb;
-                    // OvD-G and DA OVDG-RR both count (kdow_orgl_any); MMT-Auto and Lifeliner are "nef".
+                    // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
+                    // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
                     // Never more than one OvD-G per mission.
-                    if (pNeed.ovdg) attrs.kdow_orgl_any = 1;
+                    if (pNeed.ovdg) attrs.kdow_orgl = 1;
                     if (pNeed.mmt) attrs.nef = (Number(attrs.nef) || 0) + pNeed.mmt;
                 }
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
-                const el = document.createElement('a');
-                el.id = 'aao_mks_auto';
-                el.className = 'aao_btn';
-                el.style.display = 'none';
-                el.setAttribute('aao_id', 'mks_auto');
-                el.setAttribute('reset', 'true');
-                el.setAttribute('building_ids', '');
-                el.setAttribute('equipment_mode', '0');
-                el.setAttribute('custom', '{}');
-                for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-                if (Object.keys(plan.vt).length) {
-                    el.setAttribute('vehicle_type_ids', JSON.stringify(plan.vt));
-                    el.setAttribute('vehicle_type_captions', JSON.stringify(plan.vtCaptions));
-                }
-                document.body.appendChild(el);
-
-                // On a shortage the game calls alert(): catch the text instead of a popup.
+                // The game's own selection, in three passes. In one pass the game fills its
+                // slots in a fixed order: water first, and the big fields ("fire",
+                // "fustw") long before specialist ones, so a nearby DB-RI or KMAR gets
+                // used up as a plain tankautospuit or noodhulp. So: specialist slots and
+                // vehicle types first, then the big fields, then the water, foam and pump
+                // capacity still short after the tanks of the vehicles already chosen
+                // (the game's water slot ignores those and would add a full load).
+                const GENERIC = ['fire', 'fustw', 'gwl2wasser', 'rw', 'rtw'];
+                const AMOUNTS = ['wasser_amount', 'foam_amount', 'water_damage_pump_value'];
+                const only = (keep) => Object.fromEntries(Object.entries(attrs).filter(([k]) => keep(k)));
+                const chosen = () => [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()];
                 let shortage = '';
-                const realAlert = W.alert;
-                W.alert = (t) => { shortage += String(t); };
-                try {
-                    W.aaoClickHandler(el);
-                } catch (e) {
-                    // aao_update_after_click() does not know our fake preset; the selection is already made.
-                    ctx.warn('aaoClickHandler', e);
-                } finally {
-                    W.alert = realAlert;
-                    el.remove();
+                let firstPass = true;
+                function pass(slots, vt = {}) {
+                    if (!Object.keys(slots).length && !Object.keys(vt).length) return;
+                    const el = document.createElement('a');
+                    el.id = 'aao_mks_auto';
+                    el.className = 'aao_btn';
+                    el.style.display = 'none';
+                    el.setAttribute('aao_id', 'mks_auto');
+                    el.setAttribute('reset', firstPass ? 'true' : 'false');
+                    firstPass = false;
+                    el.setAttribute('building_ids', '');
+                    el.setAttribute('equipment_mode', '0');
+                    el.setAttribute('custom', '{}');
+                    for (const [k, v] of Object.entries(slots)) el.setAttribute(k, String(v));
+                    if (Object.keys(vt).length) {
+                        el.setAttribute('vehicle_type_ids', JSON.stringify(vt));
+                        el.setAttribute('vehicle_type_captions', JSON.stringify(plan.vtCaptions));
+                    }
+                    document.body.appendChild(el);
+                    // On a shortage the game calls alert(): catch the text instead of a popup.
+                    const realAlert = W.alert;
+                    W.alert = (t) => { shortage += String(t); };
+                    try {
+                        W.aaoClickHandler(el);
+                    } catch (e) {
+                        // aao_update_after_click() does not know our fake preset; the selection is already made.
+                        ctx.warn('aaoClickHandler', e);
+                    } finally {
+                        W.alert = realAlert;
+                        el.remove();
+                    }
                 }
+                pass(only((k) => !GENERIC.includes(k) && !AMOUNTS.includes(k)), plan.vt);
+                pass(only((k) => GENERIC.includes(k)));
+                const rest = {};
+                for (const k of AMOUNTS) {
+                    if (!attrs[k]) continue;
+                    const have = chosen().reduce((sum, c) => sum + (Number(c.getAttribute(k)) || 0), 0);
+                    if (Number(attrs[k]) > have) rest[k] = Number(attrs[k]) - have;
+                }
+                pass(rest);
                 await sleep(400);
 
                 // A vehicle can have two rows (helicopters: 22.95 and 36.94 km for one
@@ -10704,7 +10787,8 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v1';
+            const DATA_KEY = 'mks.autoDispatch.missions.v2';
+            try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
             let running = false;
@@ -10865,7 +10949,15 @@ MKS.module({
                 const res = await fetch('/einsaetze.json', { credentials: 'same-origin' });
                 if (!res.ok) throw new Error(`/einsaetze.json: ${res.status}`);
                 const m = {};
-                for (const e of await res.json()) m[e.id] = e.requirements || {};
+                for (const e of await res.json()) {
+                    // Towing missions have no requirements: the cars to tow are in
+                    // "additional" (cars = Berger-K, trucks = Berger-G).
+                    const r = { ...(e.requirements || {}) };
+                    const add = e.additional || {};
+                    if (add.possible_crashed_car_max) r.car_carrier = Math.max(r.car_carrier || 0, add.possible_crashed_car_max);
+                    if (add.possible_crashed_car_large_max) r.car_carrier_large = Math.max(r.car_carrier_large || 0, add.possible_crashed_car_large_max);
+                    m[e.id] = r;
+                }
                 GM_setValue(DATA_KEY, JSON.stringify({ at: Date.now(), m }));
                 return (missions = m);
             }
@@ -10906,8 +10998,9 @@ MKS.module({
             // The red "Missende voertuigen" box the game also shows in the mission list.
             const sidebarMissing = (e) => (document.getElementById(`mission_missing_${e.getAttribute('mission_id')}`)?.textContent || '').replace(/\s+/g, ' ').trim();
 
-            // Per-patient "We benodigen: ..." lines under the mission in the list.
-            const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} [id^="patients_missing_"]`)]
+            // "We benodigen: ..." under the mission in the list: one red line per patient,
+            // or with many patients one summary line ("8x We benodigen: OvD-G").
+            const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} .alert-danger`)]
                 .filter((x) => x.style.display !== 'none').map((x) => x.textContent).join(' ').replace(/\s+/g, ' ').trim();
 
             function candidates() {

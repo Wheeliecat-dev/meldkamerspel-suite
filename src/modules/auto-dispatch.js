@@ -440,15 +440,18 @@ MKS.module({
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
                 // anything is still driving there.
+                // "Shown" is the box's own display, not offsetParent: in our hidden
+                // frame layout-based checks are not reliable.
+                const shown = (el) => !!el && el.style.display !== 'none' && getComputedStyle(el).display !== 'none';
                 const box = document.getElementById('missing_text');
-                const missingText = box && box.offsetParent !== null ? box.textContent.replace(/\s+/g, ' ').trim() : '';
+                const missingText = shown(box) ? box.textContent.replace(/\s+/g, ' ').trim() : '';
                 const driving = !!document.querySelector('#mission_vehicle_driving tbody tr');
                 const present = !!document.querySelector('#mission_vehicle_at_mission tbody tr');
                 // What the patients still need ("5x We benodigen: OvD-G"): the box in
                 // this window, or the per-patient lines the controller read in the list.
                 const pBox = document.getElementById('patient_missing_requirements');
                 const pText = !job.patients ? ''
-                    : (pBox && pBox.offsetParent !== null && pBox.textContent.trim()) || job.patientText || '';
+                    : (shown(pBox) && pBox.textContent.replace(/\s+/g, ' ').trim()) || job.patientText || '';
                 const pNeed = patientNeeds(pText);
                 const mode = missingText ? 'missing' : present && pText ? 'patients' : 'full';
                 if (driving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
@@ -495,7 +498,10 @@ MKS.module({
                 if (job.patients) {
                     const m = (document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+onbehandelde/i);
                     const untreated = m ? Number(m[1]) : 0;
-                    const amb = Math.max(Number(attrs.rtw) || 0, untreated, pNeed.amb);
+                    // A new mission: one ambulance per untreated patient (the patient lines
+                    // do not always say "ambulance"). With vehicles there, only what the
+                    // lines ask for: "1x We benodigen: OvD-G, ambulance" with 7 untreated = 1.
+                    const amb = Math.max(Number(attrs.rtw) || 0, pNeed.amb, mode === 'full' ? untreated : 0);
                     if (amb) attrs.rtw = amb;
                     // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
                     // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
@@ -832,8 +838,9 @@ MKS.module({
             // The red "Missende voertuigen" box the game also shows in the mission list.
             const sidebarMissing = (e) => (document.getElementById(`mission_missing_${e.getAttribute('mission_id')}`)?.textContent || '').replace(/\s+/g, ' ').trim();
 
-            // Per-patient "We benodigen: ..." lines under the mission in the list.
-            const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} [id^="patients_missing_"]`)]
+            // "We benodigen: ..." under the mission in the list: one red line per patient,
+            // or with many patients one summary line ("8x We benodigen: OvD-G").
+            const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} .alert-danger`)]
                 .filter((x) => x.style.display !== 'none').map((x) => x.textContent).join(' ').replace(/\s+/g, ' ').trim();
 
             function candidates() {
