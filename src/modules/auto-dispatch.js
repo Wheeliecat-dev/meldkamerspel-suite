@@ -148,7 +148,9 @@ MKS.module({
             'gm-icb': 'railway_material', 'ts-usar': 'search_and_rescue_engine', 'hsh-icb of vw-hs': 'railway_fire_equipment_container',
             'eod eenheid': 'bomb_disposal', 'rc-explosievenrobot': 'bomb_disposal_robot', 'db-explosievenduikers': 'bomb_disposal_diver', 'ba-ddg': 'bomb_disposal_boat',
             // Seen only in the red box.
-            'verzorgingseenheden': 'care_service',
+            'verzorgingseenheden': 'care_service', 'officier van dienst brandweer': 'battalion_chief_vehicles',
+            'hoofd officier van dienst': 'mobile_command_vehicles', 'ab': 'mobile_air_vehicles',
+            'slangenwagen, watertankwagen of gelijkwaardige haakarmbak': 'water_tankers',
         };
         // Every vehicle type by its full name, for red boxes that name the type
         // itself ("Officier van Dienst - Politie", "Dienstbus Arrestantenvervoer").
@@ -475,8 +477,13 @@ MKS.module({
                     // any other kind of line is unknown, not ignored.
                     parts.filter((p) => p.getAttribute('data-requirement-type') !== 'vehicles').forEach((p) => {
                         const t = p.textContent.replace(/\s+/g, ' ').trim();
+                        // "We missen: 34000 L. water"
+                        const amount = t.match(/([\d.]+)\s*l\.?\s*(water|svm|schuim)/i);
                         if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
-                        else plan.unknown.push(t);
+                        else if (amount) {
+                            const k = /water/i.test(amount[2]) ? 'wasser_amount' : 'foam_amount';
+                            plan.slots[k] = (plan.slots[k] || 0) + Number(amount[1].replace(/\./g, ''));
+                        } else plan.unknown.push(t);
                     });
                     if (plan.unknown.length) {
                         report('skip', { reason: `rode melding, kan niet sturen: ${plan.unknown.join(', ')}`, unknownNeeds: plan.unknown });
@@ -490,42 +497,67 @@ MKS.module({
                     const untreated = m ? Number(m[1]) : 0;
                     const amb = Math.max(Number(attrs.rtw) || 0, untreated, pNeed.amb);
                     if (amb) attrs.rtw = amb;
-                    // OvD-G and DA OVDG-RR both count (kdow_orgl_any); MMT-Auto and Lifeliner are "nef".
+                    // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
+                    // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
                     // Never more than one OvD-G per mission.
-                    if (pNeed.ovdg) attrs.kdow_orgl_any = 1;
+                    if (pNeed.ovdg) attrs.kdow_orgl = 1;
                     if (pNeed.mmt) attrs.nef = (Number(attrs.nef) || 0) + pNeed.mmt;
                 }
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
-                const el = document.createElement('a');
-                el.id = 'aao_mks_auto';
-                el.className = 'aao_btn';
-                el.style.display = 'none';
-                el.setAttribute('aao_id', 'mks_auto');
-                el.setAttribute('reset', 'true');
-                el.setAttribute('building_ids', '');
-                el.setAttribute('equipment_mode', '0');
-                el.setAttribute('custom', '{}');
-                for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-                if (Object.keys(plan.vt).length) {
-                    el.setAttribute('vehicle_type_ids', JSON.stringify(plan.vt));
-                    el.setAttribute('vehicle_type_captions', JSON.stringify(plan.vtCaptions));
-                }
-                document.body.appendChild(el);
-
-                // On a shortage the game calls alert(): catch the text instead of a popup.
+                // The game's own selection, in three passes. In one pass the game fills its
+                // slots in a fixed order: water first, and the big fields ("fire",
+                // "fustw") long before specialist ones, so a nearby DB-RI or KMAR gets
+                // used up as a plain tankautospuit or noodhulp. So: specialist slots and
+                // vehicle types first, then the big fields, then the water, foam and pump
+                // capacity still short after the tanks of the vehicles already chosen
+                // (the game's water slot ignores those and would add a full load).
+                const GENERIC = ['fire', 'fustw', 'gwl2wasser', 'rw', 'rtw'];
+                const AMOUNTS = ['wasser_amount', 'foam_amount', 'water_damage_pump_value'];
+                const only = (keep) => Object.fromEntries(Object.entries(attrs).filter(([k]) => keep(k)));
+                const chosen = () => [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()];
                 let shortage = '';
-                const realAlert = W.alert;
-                W.alert = (t) => { shortage += String(t); };
-                try {
-                    W.aaoClickHandler(el);
-                } catch (e) {
-                    // aao_update_after_click() does not know our fake preset; the selection is already made.
-                    ctx.warn('aaoClickHandler', e);
-                } finally {
-                    W.alert = realAlert;
-                    el.remove();
+                let firstPass = true;
+                function pass(slots, vt = {}) {
+                    if (!Object.keys(slots).length && !Object.keys(vt).length) return;
+                    const el = document.createElement('a');
+                    el.id = 'aao_mks_auto';
+                    el.className = 'aao_btn';
+                    el.style.display = 'none';
+                    el.setAttribute('aao_id', 'mks_auto');
+                    el.setAttribute('reset', firstPass ? 'true' : 'false');
+                    firstPass = false;
+                    el.setAttribute('building_ids', '');
+                    el.setAttribute('equipment_mode', '0');
+                    el.setAttribute('custom', '{}');
+                    for (const [k, v] of Object.entries(slots)) el.setAttribute(k, String(v));
+                    if (Object.keys(vt).length) {
+                        el.setAttribute('vehicle_type_ids', JSON.stringify(vt));
+                        el.setAttribute('vehicle_type_captions', JSON.stringify(plan.vtCaptions));
+                    }
+                    document.body.appendChild(el);
+                    // On a shortage the game calls alert(): catch the text instead of a popup.
+                    const realAlert = W.alert;
+                    W.alert = (t) => { shortage += String(t); };
+                    try {
+                        W.aaoClickHandler(el);
+                    } catch (e) {
+                        // aao_update_after_click() does not know our fake preset; the selection is already made.
+                        ctx.warn('aaoClickHandler', e);
+                    } finally {
+                        W.alert = realAlert;
+                        el.remove();
+                    }
                 }
+                pass(only((k) => !GENERIC.includes(k) && !AMOUNTS.includes(k)), plan.vt);
+                pass(only((k) => GENERIC.includes(k)));
+                const rest = {};
+                for (const k of AMOUNTS) {
+                    if (!attrs[k]) continue;
+                    const have = chosen().reduce((sum, c) => sum + (Number(c.getAttribute(k)) || 0), 0);
+                    if (Number(attrs[k]) > have) rest[k] = Number(attrs[k]) - have;
+                }
+                pass(rest);
                 await sleep(400);
 
                 // A vehicle can have two rows (helicopters: 22.95 and 36.94 km for one
@@ -589,7 +621,8 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v1';
+            const DATA_KEY = 'mks.autoDispatch.missions.v2';
+            try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
             let running = false;
@@ -750,7 +783,15 @@ MKS.module({
                 const res = await fetch('/einsaetze.json', { credentials: 'same-origin' });
                 if (!res.ok) throw new Error(`/einsaetze.json: ${res.status}`);
                 const m = {};
-                for (const e of await res.json()) m[e.id] = e.requirements || {};
+                for (const e of await res.json()) {
+                    // Towing missions have no requirements: the cars to tow are in
+                    // "additional" (cars = Berger-K, trucks = Berger-G).
+                    const r = { ...(e.requirements || {}) };
+                    const add = e.additional || {};
+                    if (add.possible_crashed_car_max) r.car_carrier = Math.max(r.car_carrier || 0, add.possible_crashed_car_max);
+                    if (add.possible_crashed_car_large_max) r.car_carrier_large = Math.max(r.car_carrier_large || 0, add.possible_crashed_car_large_max);
+                    m[e.id] = r;
+                }
                 GM_setValue(DATA_KEY, JSON.stringify({ at: Date.now(), m }));
                 return (missions = m);
             }
