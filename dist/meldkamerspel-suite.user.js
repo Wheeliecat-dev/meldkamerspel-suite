@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wheeliecat's Meldkamerspel Scripts
 // @namespace    https://meldkamerspel.com/suite
-// @version      1.6.0
+// @version      1.7.0
 // @description  Wheeliecat's Meldkamerspel scripts, all in one. Open "Wheeliecat's scripts" in the navbar to turn each one on or off and change its settings. Work in progress.
 // @author       Wheeliecat-dev
 // @match        https://meldkamerspel.com/*
@@ -21,7 +21,7 @@
 // @connect      overpass.openstreetmap.ru
 // @connect      overpass.private.coffee
 // @connect      raw.githubusercontent.com
-// @require      https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/lib/suite-1.6.0.js#sha256=925ed539df3157093400270b159926e7584a9034be8597819f124adb73de21a6
+// @require      https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/lib/suite-1.7.0.js#sha256=7ed81b57d8502087d49e6a91061c82e7864d56506048b26fdafff69f0de7e2dc
 // @run-at       document-start
 // ==/UserScript==
 
