@@ -99,10 +99,25 @@ MKS.module({
             // like care_service = Verzorger): send the exact vehicle type.
             care_service_command: 'vt:124', coastal_guard_boat: 'vt:77', coastal_helicopter: 'vt:80', drone_fire: 'vt:129',
             wasserwerfer: 'vt:84', detention_unit: 'vt:64', fire_aviation: 'vt:85', search_and_rescue_engine: 'vt:93', search_and_rescue_equipment: 'vt:94', rescue_dog_units: 'vt:97',
+            // Only named in the red box ("Verzorgingseenheid"), not a requirement key: the DB-VZ.
+            care_service: 'care_service',
         };
+
+        // Trained personnel -> the vehicle whose whole crew has that training, and
+        // its minimum crew. "2x Verzorger" = 1 DB-VZ (2 to 4 Verzorgers on board).
+        // Keyed by the name in "Missende personeel" and by the einsaetze.json key.
+        const PERSONNEL = [
+            { names: ['verzorger', 'care_service'], to: 'care_service', crew: 2 },
+            { names: ['hygiënemedewerker', 'clean_service'], to: 'vt:122', crew: 2 },
+            { names: ['handcrew', 'wildfire'], to: 'vt:86', crew: 7 },
+            { names: ['gevaarlijke stoffen eenheid', 'hazard_material_response'], to: 'vt:135', crew: 4 },
+            { names: ['ontsmettings eenheid', 'hazard_suits_response'], to: 'vt:140', crew: 6 },
+            { names: ['teamlid usar', 'search_and_rescue'], to: 'search_and_rescue', crew: 5 },
+        ];
+        const personnelFor = (name) => PERSONNEL.find((p) => p.names.includes(String(name).toLowerCase().trim()));
         const VT_CAPTION = { 64: 'ME Aanhoudingseenheid', 77: 'KW-boot', 80: 'SAR-heli', 84: 'Waterwerper', 85: 'FBO-Heli', 124: 'DB-PC-LOG', 129: 'DB-TDV', 87: 'DA-LA-NB', 90: 'TS-STH', 91: 'HVH-STH', 93: 'TS-USAR', 94: 'VW-USAR', 97: 'DB–Speurhonden', 99: 'DB-VOA',
             100: 'GGB', 101: 'NHT', 116: 'DB-Explosievenhonden', 117: 'DB-Explosievenduikers', 118: 'BA-DDG', 119: 'DB-TEV', 128: 'DB-DRONE',
-            145: 'OvD-ICB', 146: 'VW-VZ-ICB', 148: 'GM-ICB' };
+            145: 'OvD-ICB', 146: 'VW-VZ-ICB', 148: 'GM-ICB', 86: 'DB-Handcrew', 122: 'DB-AH', 135: 'DB-GS', 140: 'DB-BO' };
 
         // Names the game uses in "Benodigde X" and in the red "Missende voertuigen"
         // box -> requirement key. Solved from 229 help pages against /einsaetze.json.
@@ -132,8 +147,18 @@ MKS.module({
             'db-explosievenhonden': 'bomb_disposal_dogs', 'vw-vz-icb': 'railway_recovery', 'bm-vths of bu-vths': 'railway_electric_response',
             'gm-icb': 'railway_material', 'ts-usar': 'search_and_rescue_engine', 'hsh-icb of vw-hs': 'railway_fire_equipment_container',
             'eod eenheid': 'bomb_disposal', 'rc-explosievenrobot': 'bomb_disposal_robot', 'db-explosievenduikers': 'bomb_disposal_diver', 'ba-ddg': 'bomb_disposal_boat',
+            // Seen only in the red box.
+            'verzorgingseenheden': 'care_service',
         };
-        const plural = (s) => s.replace(/['’]s\b/g, '').replace(/(en|s)$/, '').trim();
+        // Singular and plural of the same Dutch name, word by word: "Noodhulpeenheid" /
+        // "noodhulpeenheden", "ME Flexbus" / "me flexbussen", "Slangenwagen" / "slangenwagens",
+        // "Officier van Dienst Politie" / "officiers van dienst politie".
+        const pluralsOf = (w) => [w, `${w}s`, `${w}en`, `${w}'s`, `${w}’s`, `${w}${w.slice(-1)}en`, w.replace(/heid$/, 'heden')];
+        const sameWord = (a, b) => pluralsOf(a).includes(b) || pluralsOf(b).includes(a);
+        function sameName(x, y) {
+            const a = x.split(' '), b = y.split(' ');
+            return a.length === b.length && a.every((w, i) => sameWord(w, b[i]));
+        }
 
         // One name from the red box -> requirement key. Tries the exact name, a name
         // with extra words after it ("Berger-K om het slepen te beginnen"),
@@ -143,8 +168,7 @@ MKS.module({
             if (LABELS[n]) return LABELS[n];
             const prefix = Object.keys(LABELS).filter((l) => n.startsWith(`${l} `)).sort((a, b) => b.length - a.length)[0];
             if (prefix) return LABELS[prefix];
-            const p = plural(n);
-            const loose = Object.keys(LABELS).find((l) => plural(l) === p);
+            const loose = Object.keys(LABELS).find((l) => sameName(n, l));
             if (loose) return LABELS[loose];
             if (typeIds && typeIds[n]) return `vt:${typeIds[n]}`;
             return null;
@@ -170,6 +194,25 @@ MKS.module({
                 } else out.slots[to] = (out.slots[to] || 0) + count;
             }
             return out;
+        }
+
+        // "Missende personeel: 2x Verzorger, 7x Handcrew" -> [[name, count]].
+        const personnelItems = (text) => [...String(text).replace(/\s+/g, ' ').replace(/^[^:]*:\s*/, '')
+            .matchAll(/(\d+)\s*x\s*([^,]+)/gi)].map((m) => [m[2].trim().replace(/\.$/, ''), Number(m[1])]);
+
+        // Trained personnel -> vehicles, merged into a plan with max, not sum: a
+        // DB-VZ the red box already asks for brings its Verzorgers along.
+        function addPersonnel(plan, items, label = (n) => `Personeel: ${n}`) {
+            for (const [name, n] of items) {
+                const p = personnelFor(name);
+                if (!p) { plan.unknown.push(label(name, n)); continue; }
+                const need = Math.ceil(n / p.crew);
+                if (p.to.startsWith('vt:')) {
+                    const id = p.to.slice(3);
+                    plan.vt[id] = Math.max(plan.vt[id] || 0, need);
+                    plan.vtCaptions[id] = VT_CAPTION[id] || name;
+                } else plan.slots[p.to] = Math.max(plan.slots[p.to] || 0, need);
+            }
         }
 
         // Patient needs: "We benodigen: MMT-Arts, OvD-G" per patient (mission list)
@@ -383,8 +426,13 @@ MKS.module({
                     const parts = [...box.querySelectorAll('[data-requirement-type]')];
                     const vehText = parts.length ? parts.filter((p) => p.getAttribute('data-requirement-type') === 'vehicles').map((p) => p.textContent).join(', ') : missingText;
                     plan = fromMissing(vehText, typeIds);
-                    parts.filter((p) => p.getAttribute('data-requirement-type') !== 'vehicles')
-                        .forEach((p) => plan.unknown.push(p.textContent.replace(/\s+/g, ' ').trim()));
+                    // "Missende personeel: 2x Verzorger" becomes vehicles with that crew;
+                    // any other kind of line is unknown, not ignored.
+                    parts.filter((p) => p.getAttribute('data-requirement-type') !== 'vehicles').forEach((p) => {
+                        const t = p.textContent.replace(/\s+/g, ' ').trim();
+                        if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
+                        else plan.unknown.push(t);
+                    });
                     if (plan.unknown.length) {
                         report('skip', { reason: `rode melding, kan niet sturen: ${plan.unknown.join(', ')}`, unknownNeeds: plan.unknown });
                         return;
@@ -676,11 +724,9 @@ MKS.module({
             // Requirements -> { slots, vt } plus readable names of what cannot be sent.
             function plan(req) {
                 const slots = {}, vt = {}, vtCaptions = {}, unknown = [];
+                let trained = [];
                 for (const [k, v] of Object.entries(req)) {
-                    if (k === 'personnel_educations' && v && typeof v === 'object') {
-                        for (const [e, n] of Object.entries(v)) unknown.push(`Opleiding ${EDUCATION[e] || e} (${n} pers.)`);
-                        continue;
-                    }
+                    if (k === 'personnel_educations' && v && typeof v === 'object') { trained = Object.entries(v); continue; }
                     if (typeof v !== 'number') { unknown.push(UNKNOWN_LABEL[k] || k); continue; }
                     if (v <= 0) continue;
                     const to = MAP[k];
@@ -691,7 +737,10 @@ MKS.module({
                         vtCaptions[id] = VT_CAPTION[id] || id;
                     } else slots[to] = (slots[to] || 0) + v;
                 }
-                return { slots, vt, vtCaptions, unknown };
+                const out = { slots, vt, vtCaptions, unknown };
+                // Trained personnel last, so a vehicle already required counts toward it.
+                addPersonnel(out, trained, (e, n) => `Opleiding ${EDUCATION[e] || e} (${n} pers.)`);
+                return out;
             }
 
             // The red "Missende voertuigen" box the game also shows in the mission list.
