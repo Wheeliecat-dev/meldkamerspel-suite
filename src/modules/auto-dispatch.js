@@ -26,13 +26,16 @@ MKS.module({
     settings: [
         { key: 'maxKm', label: 'Maximale afstand', type: 'number', default: 25, min: 1, max: 500, step: 1, unit: 'km',
             help: 'Hemelsbreed. Is één van de gekozen voertuigen verder weg, dan wordt de inzet overgeslagen.' },
+        { key: 'airKm', label: 'Maximale afstand helikopters', type: 'number', default: 100, min: 1, max: 500, step: 5, unit: 'km',
+            help: 'Lifeliner, Politiehelikopter, SAR-heli en FBO-Heli vliegen en mogen van verder komen.' },
         { key: 'needAll', label: 'Alleen als alles beschikbaar is', type: 'bool', default: true,
             help: 'Uit: stuurt ook als het spel meldt dat er voertuigen tekort zijn (stuurt dan wat er wel is).' },
         { key: 'topUp', label: 'Bijsturen bij rode melding', type: 'bool', default: true,
             help: 'Ook inzetten waar al voertuigen zijn, maar het spel "Missende voertuigen" meldt: stuurt alleen wat daar staat. '
                 + 'Wacht tot er niets meer onderweg is, zodat er niets dubbel gaat.' },
-        { key: 'patients', label: 'Ambulances voor patiënten', type: 'bool', default: true,
-            help: 'Eén ambulance per onbehandelde patiënt die al bij de inzet staat.' },
+        { key: 'patients', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
+            help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance en MMT per patiënt, '
+                + 'en hooguit één OvD-G per inzet. Ook bij inzetten waar al voertuigen staan.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
@@ -165,6 +168,27 @@ MKS.module({
                     out.vt[id] = (out.vt[id] || 0) + count;
                     out.vtCaptions[id] = VT_CAPTION[id] || m[2].trim();
                 } else out.slots[to] = (out.slots[to] || 0) + count;
+            }
+            return out;
+        }
+
+        // Patient needs: "We benodigen: MMT-Arts, OvD-G" per patient (mission list)
+        // or "5x We benodigen: OvD-G" for five patients (mission window).
+        // One OvD-G leads all patients; MMT and ambulance are one per patient.
+        const PATIENT_NEED = { 'ovd-g': 'ovdg', 'mmt-arts': 'mmt', 'mmt': 'mmt', 'ambulance': 'amb', 'ambulances': 'amb' };
+        function patientNeeds(text) {
+            const out = { ovdg: false, mmt: 0, amb: 0, unknown: [] };
+            const re = /(?:(\d+)\s*x\s*)?We benodigen:\s*(.+?)(?=(?:\d+\s*x\s*)?We benodigen:|$)/gi;
+            for (const m of String(text).replace(/\s+/g, ' ').matchAll(re)) {
+                const n = Number(m[1] || 1);
+                for (const raw of m[2].split(',')) {
+                    const name = raw.trim().replace(/\.$/, '');
+                    if (!name) continue;
+                    const k = PATIENT_NEED[name.toLowerCase()];
+                    if (k === 'ovdg') out.ovdg = true;
+                    else if (k) out[k] += n;
+                    else if (!out.unknown.includes(name)) out.unknown.push(name);
+                }
             }
             return out;
         }
@@ -330,13 +354,24 @@ MKS.module({
                 const missingText = box && box.offsetParent !== null ? box.textContent.replace(/\s+/g, ' ').trim() : '';
                 const driving = !!document.querySelector('#mission_vehicle_driving tbody tr');
                 const present = !!document.querySelector('#mission_vehicle_at_mission tbody tr');
-                const mode = missingText ? 'missing' : 'full';
+                // What the patients still need ("5x We benodigen: OvD-G"): the box in
+                // this window, or the per-patient lines the controller read in the list.
+                const pBox = document.getElementById('patient_missing_requirements');
+                const pText = !job.patients ? ''
+                    : (pBox && pBox.offsetParent !== null && pBox.textContent.trim()) || job.patientText || '';
+                const pNeed = patientNeeds(pText);
+                const mode = missingText ? 'missing' : present && pText ? 'patients' : 'full';
                 if (driving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
                 if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding' }); return; }
-                if (mode === 'missing' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
+                if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
+                if (pNeed.unknown.length) {
+                    report('skip', { reason: `patiënten, kan niet sturen: ${pNeed.unknown.join(', ')}`, unknownNeeds: pNeed.unknown.map((u) => `Patiënt: ${u}`) });
+                    return;
+                }
                 await loadAllVehicles();
 
-                let plan = { slots: job.slots || {}, vt: job.vt || {}, vtCaptions: job.vtCaptions || {} };
+                let plan = mode === 'patients' ? { slots: {}, vt: {}, vtCaptions: {} }
+                    : { slots: job.slots || {}, vt: job.vt || {}, vtCaptions: job.vtCaptions || {} };
                 if (mode === 'missing') {
                     // Vehicle type captions in this window, for names that are a type ("DB-PC-LOG").
                     const typeIds = {};
@@ -359,8 +394,13 @@ MKS.module({
                 const attrs = { ...plan.slots };
                 if (job.patients) {
                     const m = (document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+onbehandelde/i);
-                    const n = m ? Number(m[1]) : 0;
-                    if (n > (Number(attrs.rtw) || 0)) attrs.rtw = n;
+                    const untreated = m ? Number(m[1]) : 0;
+                    const amb = Math.max(Number(attrs.rtw) || 0, untreated, pNeed.amb);
+                    if (amb) attrs.rtw = amb;
+                    // OvD-G and DA OVDG-RR both count (kdow_orgl_any); MMT-Auto and Lifeliner are "nef".
+                    // Never more than one OvD-G per mission.
+                    if (pNeed.ovdg) attrs.kdow_orgl_any = 1;
+                    if (pNeed.mmt) attrs.nef = (Number(attrs.nef) || 0) + pNeed.mmt;
                 }
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
@@ -395,16 +435,26 @@ MKS.module({
                 }
                 await sleep(400);
 
-                const picked = [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()];
+                // A vehicle can have two rows (helicopters: 22.95 and 36.94 km for one
+                // Lifeliner). Count it once, at its shortest distance.
+                const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
+                const byId = new Map();
+                document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => {
+                    const prev = byId.get(c.value);
+                    if (!prev || dist(c) < dist(prev)) byId.set(c.value, c);
+                });
+                const picked = [...byId.values()];
                 const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { picked.forEach((c) => c.checked && c.click()); } };
                 if (!picked.length) { report('skip', { reason: shortage ? `tekort: ${clean(shortage)}` : 'geen voertuigen beschikbaar', shortText: shortage }); return; }
                 if (shortage && job.needAll) { reset(); report('skip', { reason: `tekort: ${clean(shortage)}`, shortText: shortage }); return; }
-                const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
                 const far = Math.max(...picked.map(dist));
-                if (far > job.maxKm) {
+                // Helicopters fly: they get their own, larger limit.
+                const AIR = ['23', '28', '80', '85'];
+                const tooFar = (c) => dist(c) > (AIR.includes(c.getAttribute('vehicle_type_id')) ? job.airKm : job.maxKm);
+                if (picked.some(tooFar)) {
                     // Which types had to come from too far: those are the ones to buy closer by.
                     const farTypes = {};
-                    picked.filter((c) => dist(c) > job.maxKm).forEach((c) => {
+                    picked.filter(tooFar).forEach((c) => {
                         const t = c.closest('tr')?.getAttribute('vehicle_type') || `type ${c.getAttribute('vehicle_type_id')}`;
                         farTypes[t] = (farTypes[t] || 0) + 1;
                     });
@@ -647,10 +697,14 @@ MKS.module({
             // The red "Missende voertuigen" box the game also shows in the mission list.
             const sidebarMissing = (e) => (document.getElementById(`mission_missing_${e.getAttribute('mission_id')}`)?.textContent || '').replace(/\s+/g, ' ').trim();
 
+            // Per-patient "We benodigen: ..." lines under the mission in the list.
+            const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} [id^="patients_missing_"]`)]
+                .filter((x) => x.style.display !== 'none').map((x) => x.textContent).join(' ').replace(/\s+/g, ' ').trim();
+
             function candidates() {
                 const now = Date.now();
                 return [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
-                    const red = ctx.cfg.topUp && sidebarMissing(e);
+                    const red = ctx.cfg.topUp && (sidebarMissing(e) || (ctx.cfg.patients && sidebarPatients(e)));
                     if (e.getAttribute('data-mission-state-filter') !== 'unattended' && !red) return false;
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
                     const t = tried.get(e.getAttribute('mission_id'));
@@ -694,7 +748,7 @@ MKS.module({
                         finish = setTimeout(() => cleanup({ ...result, result: 'unconfirmed' }), 20000);
                         poll = setInterval(() => {
                             if (transport) { if (!talk.has(String(job.id))) cleanup({ ...result, result: 'sent' }); return; }
-                            if (result.mode === 'missing') return;
+                            if (result.mode !== 'full') return;
                             const entry = document.getElementById(`mission_${job.id}`);
                             if (!entry || entry.getAttribute('data-mission-state-filter') !== 'unattended') cleanup({ ...result, result: 'sent' });
                         }, 500);
@@ -782,7 +836,8 @@ MKS.module({
                         const id = entry.getAttribute('mission_id');
                         const name = titleOf(entry);
                         tried.set(id, Date.now());
-                        const red = ctx.cfg.topUp && sidebarMissing(entry);
+                        const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
+                        const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
                         const r = req[keyOf(entry)];
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         // With a red box the worker sends only what that box lists, so
@@ -804,14 +859,14 @@ MKS.module({
 
                         status(`Bezig: ${name}`, 'busy');
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                            maxKm: ctx.cfg.maxKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, topUp: ctx.cfg.topUp });
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         if (res.result === 'sent' || res.result === 'unconfirmed') {
                             stats.sent++;
                             errorStreak = 0;
                             sent.push(Date.now());
-                            const verb = res.mode === 'missing' ? 'bijgestuurd' : 'gealarmeerd';
+                            const verb = res.mode === 'full' ? 'gealarmeerd' : 'bijgestuurd';
                             addLog(name, `${res.result === 'sent' ? verb : `${verb} (niet bevestigd)`}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.short ? `, tekort: ${res.short}` : ''}`, 'ok');
                         } else if (res.result === 'wait') {
                             // Vehicles still driving: look again in a minute, not after retryMin.
@@ -947,7 +1002,7 @@ MKS.module({
                     </div>
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
-                        <b>Niet beschikbaar</b>: het spel had er geen vrij. <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km.
+                        <b>Niet beschikbaar</b>: het spel had er geen vrij. <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
                         Bovenaan staat wat je het vaakst mist: daar heb je er meer van nodig (of dichterbij).</p>
                     ${types.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Inzetten</th>
                         <th>Niet beschikbaar</th><th>Te ver</th><th>Eenheden</th><th>Laatst</th></tr></thead><tbody>
