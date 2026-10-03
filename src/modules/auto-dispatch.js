@@ -150,6 +150,49 @@ MKS.module({
             // Seen only in the red box.
             'verzorgingseenheden': 'care_service',
         };
+        // Every vehicle type by its full name, for red boxes that name the type
+        // itself ("Officier van Dienst - Politie", "Dienstbus Arrestantenvervoer").
+        // Last resort after LABELS: those cover more vehicles per name.
+        const VT_NAMES = {
+            "SI-2": 0, "TS 8/9": 1, "Autoladder": 2, "DA - Officier van Dienst": 3, "Hulpverleningsvoertuig": 4,
+            "Adembeschermingsvoertuig": 5, "TST 8/9": 6, "TST 6/7": 7, "TST 4/5": 8, "TS 4/5": 9, "Slangenwagen": 10,
+            "Verkenningseenheid Brandweer": 11, "TST-NB 8/9": 12, "TST-NB 6/7": 14, "TST-NB 4/5": 15, "Ambulance": 16,
+            "TS 6/7": 17, "Hoogwerker": 18, "DA - Hoofdofficier van Dienst": 19, "DA": 20, "DB Klein": 21, "DA Noodhulp": 22,
+            "Lifeliner": 23, "DA - Adviseur Gevaarlijke stoffen": 24, "DB Noodhulp": 25, "Haakarmvoertuig": 26,
+            "Adembeschermingshaakarmbak": 27, "Politiehelikopter": 28, "Watertankhaakarmbak": 29, "Zorgambulance": 30,
+            "Commandovoertuig": 31, "Commandohaakarmbak": 32, "Waterongevallenvoertuig": 33, "Watertankwagen": 34,
+            "Officier van Dienst - Politie": 35, "Waterongevallenaanhanger": 36, "MMT-Auto": 37,
+            "Officier van Dienst - Geneeskunde": 38, "ME Commandovoertuig": 39, "ME Flexbus": 40, "Crashtender (8x8)": 41,
+            "Crashtender (6x6)": 42, "Crashtender (4x4)": 43, "Airport Fire Officer / On Scene Commander": 44,
+            "Dompelpomphaakarmbak": 45, "DM-Politie": 46, "DA Hondengeleider": 47, "DB Hondengeleider": 48, "PM-OR": 49,
+            "Materieelvoertuig - Oppervlakteredding": 49, "TS-OR": 50, "Tankautospuit - Oppervlakteredding": 50,
+            "HulpverleningsHaakarmbak": 51, "Rapid Responder": 52, "AT-Commandant": 53, "AT-Operator": 54, "AT-Materiaalwagen": 55,
+            "DA Voorlichter": 56, "DA Officier van Dienst - Geneeskundig / Rapid Responder": 57, "DB Arrestantenvervoer": 58,
+            "Noodhulp - Onopvallend": 59, "DB Biketeam": 60, "Slangenhaakarmbak": 61, "TS-HV": 62,
+            "Tankautospuit-Hulpverlening": 62, "DM - Rapid Responder": 63, "ME Aanhoudingseenheid": 64,
+            "DA Terreinwaardig - Reddingsbrigade": 65, "Kusthulpverleningsvoertuig": 66, "Bootaanhanger Reddingsbrigade": 67,
+            "SB": 68, "SBH": 69, "SBA": 70, "MSA": 71, "DPA": 72, "Vrachtwagen - Bereden Brigade": 73,
+            "Bereden Brigade Aanhanger": 74, "Dienstauto terreinvaardig - Noodhulp": 75, "Quad": 76, "KW-boot": 77, "RB-K": 78,
+            "RB-G": 79, "SAR-heli": 80, "DA-RWS": 81, "Dienstvoertuig weginspecteur Rijkswaterstaat": 81, "DM-RWS": 82,
+            "Dienstmotor weginspecteur Rijkswaterstaat": 82, "DA-SIG": 83, "Signalisatievoertuig": 83, "Waterwerper": 84,
+            "FBO-Heli": 85, "DB-Handcrew": 86, "DA-LA-NB": 87, "VW-NB": 88, "NBH": 89, "TS-STH": 90, "HVH-STH": 91, "DB-USAR": 92,
+            "TS-USAR": 93, "VW-USAR": 94, "DM-USAR": 95, "Quad-USAR": 96, "DB–Speurhonden": 97, "SIV-P": 98, "DB-VOA": 99,
+            "GGB": 100, "NHT": 101, "MC-Ambulance": 102, "MICU": 103, "Berger-K": 104, "Berger-G": 105, "Berger-K (RWS)": 106,
+            "Berger-G (RWS)": 107, "Berger-K (Politie)": 108, "Berger-G (Politie)": 109, "DAT-KMAR": 110, "DB-KMAR": 111,
+            "DM-KMAR": 112, "DAT-EOD": 113, "DB-EOD": 114, "VW-EOD": 115, "DB-Explosievenhonden": 116,
+            "DB-Explosievenduikers": 117, "BA-DDG": 118, "DB-TEV": 119, "DB-VZ": 120, "VZH": 121, "DB-AH": 122, "VZH-AH": 123,
+            "DB-PC-LOG": 124, "DB-LOG": 125, "VW-LOG": 126, "BMH-LOG": 127, "DB-DRONE": 128, "DB-TDV": 129, "SB-BA": 130,
+            "SB-IB": 131, "AS": 132, "TS-IB": 133, "GSH": 134, "DB-GS": 135, "GPH": 136, "DB-GP": 137, "BOH-DC": 138, "TS-BO": 139,
+            "DB-BO": 140, "GOH-DC": 141, "TS-GO": 142, "DB-GO": 143, "DB-ICB": 144, "OvD-ICB": 145, "VW-VZ-ICB": 146,
+            "HA-ICB": 147, "GM-ICB": 148, "HSH-ICB": 149, "VW-HS": 150, "BM-VTHS": 151, "TS-Spoor": 152, "DB-RI": 153, "RIA": 154,
+            "DB-VI": 155, "VIA": 156
+        };
+
+        // Lower case, no " - ", and the long words the game abbreviates in type names.
+        const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').trim()
+            .replace(/^dienstbus\b/, 'db').replace(/^dienstauto\b/, 'da').replace(/^dienstmotor\b/, 'dm');
+        const VT_BY_NAME = new Map(Object.entries(VT_NAMES).map(([n, id]) => [normName(n), id]));
+
         // Singular and plural of the same Dutch name, word by word: "Noodhulpeenheid" /
         // "noodhulpeenheden", "ME Flexbus" / "me flexbussen", "Slangenwagen" / "slangenwagens",
         // "Officier van Dienst Politie" / "officiers van dienst politie".
@@ -162,14 +205,16 @@ MKS.module({
 
         // One name from the red box -> requirement key. Tries the exact name, a name
         // with extra words after it ("Berger-K om het slepen te beginnen"),
-        // singular/plural, and finally a vehicle type caption from the page.
+        // singular/plural, a vehicle type by its full name, and finally a vehicle
+        // type caption from the page.
         function keyForName(name, typeIds) {
-            const n = name.toLowerCase().replace(/\.$/, '').replace(/\s+/g, ' ').trim();
+            const n = normName(name.replace(/\.$/, ''));
             if (LABELS[n]) return LABELS[n];
             const prefix = Object.keys(LABELS).filter((l) => n.startsWith(`${l} `)).sort((a, b) => b.length - a.length)[0];
             if (prefix) return LABELS[prefix];
             const loose = Object.keys(LABELS).find((l) => sameName(n, l));
             if (loose) return LABELS[loose];
+            if (VT_BY_NAME.has(n)) return `vt:${VT_BY_NAME.get(n)}`;
             if (typeIds && typeIds[n]) return `vt:${typeIds[n]}`;
             return null;
         }
