@@ -638,7 +638,10 @@ MKS.module({
 
         // The game's "Niet beschikbaar: 1 SIV-P of DM-P." counts what is missing, not
         // what it found: "1 SIV-P of DM-P, 1 BA-DDG" reads less like "none at all".
-        const fewer = (t) => clean(String(t).replace(/Niet beschikbaar:\s*/gi, '').replace(/\.\s*(?=\S)/g, ', ').replace(/\.\s*$/, ''));
+        // A function declaration: the workers run before this line is reached.
+        function fewer(t) {
+            return clean(String(t).replace(/Niet beschikbaar:\s*/gi, '').replace(/\.\s*(?=\S)/g, ', ').replace(/\.\s*$/, ''));
+        }
 
         // Same as the "load missing vehicles" module: click until the list stops growing.
         async function loadAllVehicles() {
