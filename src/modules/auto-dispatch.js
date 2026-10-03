@@ -576,8 +576,8 @@ MKS.module({
                 });
                 const picked = [...byId.values()];
                 const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { picked.forEach((c) => c.checked && c.click()); } };
-                if (!picked.length) { report('skip', { reason: shortage ? `tekort: ${clean(shortage)}` : 'geen voertuigen beschikbaar', shortText: shortage }); return; }
-                if (shortage && job.needAll) { reset(); report('skip', { reason: `tekort: ${clean(shortage)}`, shortText: shortage }); return; }
+                if (!picked.length) { report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : 'geen voertuigen beschikbaar', shortText: shortage }); return; }
+                if (shortage && job.needAll) { reset(); report('skip', { reason: `te weinig: ${fewer(shortage)} (de rest is er wel)`, shortText: shortage }); return; }
                 const far = Math.max(...picked.map(dist));
                 // Helicopters fly: they get their own, larger limit.
                 const AIR = ['23', '28', '80', '85'];
@@ -606,6 +606,10 @@ MKS.module({
         }
 
         function clean(t) { return String(t).replace(/\s+/g, ' ').trim().slice(0, 160); }
+
+        // The game's "Niet beschikbaar: 1 SIV-P of DM-P." counts what is missing, not
+        // what it found: "1 SIV-P of DM-P, 1 BA-DDG" reads less like "none at all".
+        const fewer = (t) => clean(String(t).replace(/Niet beschikbaar:\s*/gi, '').replace(/\.\s*(?=\S)/g, ', ').replace(/\.\s*$/, ''));
 
         // Same as the "load missing vehicles" module: click until the list stops growing.
         async function loadAllVehicles() {
@@ -1144,7 +1148,7 @@ MKS.module({
                     </div>
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
-                        <b>Niet beschikbaar</b>: het spel had er geen vrij. <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
+                        <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
                         Bovenaan staat wat je het vaakst mist: daar heb je er meer van nodig (of dichterbij).</p>
                     ${types.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Inzetten</th>
                         <th>Niet beschikbaar</th><th>Te ver</th><th>Eenheden</th><th>Laatst</th></tr></thead><tbody>
