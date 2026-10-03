@@ -30,6 +30,9 @@ MKS.module({
             help: 'Lifeliner, Politiehelikopter, SAR-heli en FBO-Heli vliegen en mogen van verder komen.' },
         { key: 'needAll', label: 'Alleen als alles beschikbaar is', type: 'bool', default: true,
             help: 'Uit: stuurt ook als het spel meldt dat er voertuigen tekort zijn (stuurt dan wat er wel is).' },
+        { key: 'ownJobOnly', label: 'Niet als gewone voertuigen', type: 'text', default: 'TS-BO, TS-GO',
+            help: 'Voertuigsoorten met komma\'s ertussen die alleen gaan als een inzet ze zelf vraagt, niet als gewone tankautospuit, '
+                + 'slangenwagen of voor water. Bijvoorbeeld: TS-BO, TS-GO, TS-IB, TS-Spoor, DB-RI.' },
         { key: 'ignoreShort', label: 'Tekort negeren bij', type: 'text', default: 'Incidentenbestrijder',
             help: 'Namen met komma\'s ertussen, zoals het spel ze noemt ("te weinig: 1 Incidentenbestrijder"). '
                 + 'Is alleen hiervan te weinig, dan gaat de rest toch. Telt nog wel mee in de tekortlijst.' },
@@ -528,7 +531,7 @@ MKS.module({
                 const AMOUNT_KEYS = ['wasser_amount', 'foam_amount', 'water_damage_pump_value'];
                 const needKeys = [...Object.keys(attrs).filter((k) => !AMOUNT_KEYS.includes(k)), ...Object.keys(plan.vt).map((id) => `vt:${id}`)];
                 const caption = (k) => (k.startsWith('vt:') ? plan.vtCaptions[k.slice(3)] || k
-                    : ((W.aao_types || []).find((t) => t[0] === k) || [])[1] || k);
+                    : untranslated(((W.aao_types || []).find((t) => t[0] === k) || [])[1] || k));
                 // How many of each needed kind are free right now, and how many this
                 // mission wants. A (big) mission that has to wait reports these so the
                 // controller can hold the rare ones for it.
@@ -591,16 +594,33 @@ MKS.module({
                         el.remove();
                     }
                 }
+                // Vehicle types that only go for their own job (setting, e.g. TS-BO, TS-GO):
+                // hide them from the big fields and water/foam by setting those attributes
+                // to 0 on their unticked checkboxes for the pass, then put them back.
+                const own = new Set((job.ownJobOnly || []).map(String));
+                function hidingOwnJob(fn) {
+                    const stash = [];
+                    if (own.size) {
+                        document.querySelectorAll('input.vehicle_checkbox:not(:checked)').forEach((c) => {
+                            if (!own.has(c.getAttribute('vehicle_type_id'))) return;
+                            for (const k of [...GENERIC, ...AMOUNTS]) {
+                                if (c.hasAttribute(k)) { stash.push([c, k, c.getAttribute(k)]); c.setAttribute(k, '0'); }
+                            }
+                        });
+                    }
+                    try { fn(); } finally { stash.forEach(([c, k, v]) => c.setAttribute(k, v)); }
+                }
                 pass(only((k) => !GENERIC.includes(k) && !AMOUNTS.includes(k)), plan.vt);
-                pass(only((k) => GENERIC.includes(k)));
+                hidingOwnJob(() => pass(only((k) => GENERIC.includes(k))));
                 const rest = {};
                 for (const k of AMOUNTS) {
                     if (!attrs[k]) continue;
                     const have = chosen().reduce((sum, c) => sum + (Number(c.getAttribute(k)) || 0), 0);
                     if (Number(attrs[k]) > have) rest[k] = Number(attrs[k]) - have;
                 }
-                pass(rest);
+                hidingOwnJob(() => pass(rest));
                 await sleep(400);
+                shortage = untranslated(shortage);
 
                 // A vehicle can have two rows (helicopters: 22.95 and 36.94 km for one
                 // Lifeliner). Count it once, at its shortest distance.
@@ -668,7 +688,13 @@ MKS.module({
 
         // The game's "Niet beschikbaar: 1 SIV-P of DM-P." counts what is missing, not
         // what it found: "1 SIV-P of DM-P, 1 BA-DDG" reads less like "none at all".
-        // A function declaration: the workers run before this line is reached.
+        // The game has no Dutch name for some preset fields and writes
+        // '[missing "nl_NL.intervention_order.vehicles.<field>" translation]' instead.
+        // Function declarations: the workers run before these lines are reached.
+        function untranslated(t) {
+            const NAMES = { hazard_response_disinfection_large: 'DB-GO, TS-GO of GOH-DC', hazard_response_disinfection: 'DB-BO, TS-BO of BOH-DC' };
+            return String(t).replace(/\[missing\s+"[^"]*?\.vehicles\.(\w+)"\s+translation\]/g, (m, k) => NAMES[k] || k);
+        }
         function fewer(t) {
             return clean(String(t).replace(/Niet beschikbaar:\s*/gi, '').replace(/\.\s*(?=\S)/g, ', ').replace(/\.\s*$/, ''));
         }
@@ -923,6 +949,8 @@ MKS.module({
             const titleOf = (e) => {
                 try { return JSON.parse(e.getAttribute('data-sortable-by')).caption; } catch (x) { return e.getAttribute('search_attribute') || e.getAttribute('mission_id'); }
             };
+            // "TS-BO, TS-GO" (setting) -> vehicle type ids, via the full type names.
+            const ownJobOnly = () => String(ctx.cfg.ownJobOnly || '').split(',').map((n) => VT_BY_NAME.get(normName(n))).filter((id) => id != null);
             const creditsOf = (e) => {
                 try { return Number(JSON.parse(e.getAttribute('data-sortable-by')).average_credits) || 0; } catch (x) { return 0; }
             };
@@ -1109,7 +1137,7 @@ MKS.module({
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
-                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits) });
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly() });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         updateHold(id, name, credits, res);

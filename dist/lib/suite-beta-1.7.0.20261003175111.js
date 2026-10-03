@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.6.0.20261003172419 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261003175111 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.6.0.20261003172419';
+    const VERSION = '1.7.0.20261003175111';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10190,6 +10190,9 @@ MKS.module({
             help: 'Lifeliner, Politiehelikopter, SAR-heli en FBO-Heli vliegen en mogen van verder komen.' },
         { key: 'needAll', label: 'Alleen als alles beschikbaar is', type: 'bool', default: true,
             help: 'Uit: stuurt ook als het spel meldt dat er voertuigen tekort zijn (stuurt dan wat er wel is).' },
+        { key: 'ownJobOnly', label: 'Niet als gewone voertuigen', type: 'text', default: 'TS-BO, TS-GO',
+            help: 'Voertuigsoorten met komma\'s ertussen die alleen gaan als een inzet ze zelf vraagt, niet als gewone tankautospuit, '
+                + 'slangenwagen of voor water. Bijvoorbeeld: TS-BO, TS-GO, TS-IB, TS-Spoor, DB-RI.' },
         { key: 'ignoreShort', label: 'Tekort negeren bij', type: 'text', default: 'Incidentenbestrijder',
             help: 'Namen met komma\'s ertussen, zoals het spel ze noemt ("te weinig: 1 Incidentenbestrijder"). '
                 + 'Is alleen hiervan te weinig, dan gaat de rest toch. Telt nog wel mee in de tekortlijst.' },
@@ -10199,6 +10202,13 @@ MKS.module({
         { key: 'patients', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
             help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance en MMT per patiënt, '
                 + 'en hooguit één OvD-G per inzet. Ook bij inzetten waar al voertuigen staan.' },
+        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
+            help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
+                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
+        { key: 'rareMax', label: 'Zeldzaam: hooguit zoveel vrij', type: 'number', default: 2, min: 0, max: 20, step: 1,
+            help: 'Een voertuigsoort die de grote inzet nodig heeft en waarvan er zoveel of minder vrij zijn (of geen), wordt voor die inzet bewaard.' },
+        { key: 'holdMin', label: 'Bewaren voor grote inzet', type: 'number', default: 20, min: 1, max: 120, step: 1, unit: 'min',
+            help: 'Daarna mogen kleinere inzetten ze weer gebruiken, zodat niets voorgoed vastloopt. De grote inzet wordt ondertussen elke minuut opnieuw bekeken.' },
         { key: 'bigPatients', label: 'Grote inzet: meer dan zoveel patiënten', type: 'number', default: 30, min: 0, max: 500, step: 5,
             help: 'Daar mogen ambulances in delen: te weinig of te ver weg houdt de rest niet tegen. De patiënten vragen daarna zelf '
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
@@ -10677,6 +10687,29 @@ MKS.module({
                 }
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
+                // Vehicles held for a bigger mission that is waiting (key: slot or vt:<id>).
+                const AMOUNT_KEYS = ['wasser_amount', 'foam_amount', 'water_damage_pump_value'];
+                const needKeys = [...Object.keys(attrs).filter((k) => !AMOUNT_KEYS.includes(k)), ...Object.keys(plan.vt).map((id) => `vt:${id}`)];
+                const caption = (k) => (k.startsWith('vt:') ? plan.vtCaptions[k.slice(3)] || k
+                    : untranslated(((W.aao_types || []).find((t) => t[0] === k) || [])[1] || k));
+                // How many of each needed kind are free right now, and how many this
+                // mission wants. A (big) mission that has to wait reports these so the
+                // controller can hold the rare ones for it.
+                const avail = {};
+                const caps = Object.fromEntries(needKeys.map((k) => [k, caption(k)]));
+                const want = Object.fromEntries(needKeys.map((k) => [k, Number(k.startsWith('vt:') ? plan.vt[k.slice(3)] : attrs[k]) || 0]));
+                for (const k of needKeys) {
+                    const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]` : `input.vehicle_checkbox[${CSS.escape(k)}="1"]`;
+                    avail[k] = new Set([...document.querySelectorAll(sel)].map((c) => c.value)).size;
+                }
+                // Held for a bigger mission: only if taking ours would leave too few for it.
+                // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
+                const held = needKeys.filter((k) => job.reserved && job.reserved[k] && avail[k] - want[k] < job.reserved[k].need);
+                if (held.length) {
+                    report('skip', { held: true, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
+                    return;
+                }
+
                 // The game's own selection, in three passes. In one pass the game fills its
                 // slots in a fixed order: water first, and the big fields ("fire",
                 // "fustw") long before specialist ones, so a nearby DB-RI or KMAR gets
@@ -10721,16 +10754,33 @@ MKS.module({
                         el.remove();
                     }
                 }
+                // Vehicle types that only go for their own job (setting, e.g. TS-BO, TS-GO):
+                // hide them from the big fields and water/foam by setting those attributes
+                // to 0 on their unticked checkboxes for the pass, then put them back.
+                const own = new Set((job.ownJobOnly || []).map(String));
+                function hidingOwnJob(fn) {
+                    const stash = [];
+                    if (own.size) {
+                        document.querySelectorAll('input.vehicle_checkbox:not(:checked)').forEach((c) => {
+                            if (!own.has(c.getAttribute('vehicle_type_id'))) return;
+                            for (const k of [...GENERIC, ...AMOUNTS]) {
+                                if (c.hasAttribute(k)) { stash.push([c, k, c.getAttribute(k)]); c.setAttribute(k, '0'); }
+                            }
+                        });
+                    }
+                    try { fn(); } finally { stash.forEach(([c, k, v]) => c.setAttribute(k, v)); }
+                }
                 pass(only((k) => !GENERIC.includes(k) && !AMOUNTS.includes(k)), plan.vt);
-                pass(only((k) => GENERIC.includes(k)));
+                hidingOwnJob(() => pass(only((k) => GENERIC.includes(k))));
                 const rest = {};
                 for (const k of AMOUNTS) {
                     if (!attrs[k]) continue;
                     const have = chosen().reduce((sum, c) => sum + (Number(c.getAttribute(k)) || 0), 0);
                     if (Number(attrs[k]) > have) rest[k] = Number(attrs[k]) - have;
                 }
-                pass(rest);
+                hidingOwnJob(() => pass(rest));
                 await sleep(400);
+                shortage = untranslated(shortage);
 
                 // A vehicle can have two rows (helicopters: 22.95 and 36.94 km for one
                 // Lifeliner). Count it once, at its shortest distance.
@@ -10756,7 +10806,7 @@ MKS.module({
                     .map((m) => m[1].trim()).filter((n) => !ignored.includes(n.toLowerCase()) && !(big && /ambulance/i.test(n)));
                 if (shortage && job.needAll && (blocking.length || !/beschikbaar:/i.test(shortage))) {
                     reset();
-                    report('skip', { reason: `te weinig: ${fewer(shortage)} (de rest is er wel)`, shortText: shortage });
+                    report('skip', { reason: `te weinig: ${fewer(shortage)} (de rest is er wel)`, shortText: shortage, avail, caps, want });
                     return;
                 }
                 // Helicopters fly: they get their own, larger limit.
@@ -10779,7 +10829,7 @@ MKS.module({
                         farTypes[t] = (farTypes[t] || 0) + 1;
                     });
                     reset();
-                    report('skip', { reason: `voertuig op ${far.toFixed(1)} km`, farTypes, shortText: shortage });
+                    report('skip', { reason: `voertuig op ${far.toFixed(1)} km`, farTypes, shortText: shortage, avail, caps, want });
                     return;
                 }
 
@@ -10798,7 +10848,13 @@ MKS.module({
 
         // The game's "Niet beschikbaar: 1 SIV-P of DM-P." counts what is missing, not
         // what it found: "1 SIV-P of DM-P, 1 BA-DDG" reads less like "none at all".
-        // A function declaration: the workers run before this line is reached.
+        // The game has no Dutch name for some preset fields and writes
+        // '[missing "nl_NL.intervention_order.vehicles.<field>" translation]' instead.
+        // Function declarations: the workers run before these lines are reached.
+        function untranslated(t) {
+            const NAMES = { hazard_response_disinfection_large: 'DB-GO, TS-GO of GOH-DC', hazard_response_disinfection: 'DB-BO, TS-BO of BOH-DC' };
+            return String(t).replace(/\[missing\s+"[^"]*?\.vehicles\.(\w+)"\s+translation\]/g, (m, k) => NAMES[k] || k);
+        }
         function fewer(t) {
             return clean(String(t).replace(/Niet beschikbaar:\s*/gi, '').replace(/\.\s*(?=\S)/g, ', ').replace(/\.\s*$/, ''));
         }
@@ -11047,12 +11103,53 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                });
+                }).sort((a, b) => creditsOf(b) - creditsOf(a)); // big missions choose first
             }
 
             const titleOf = (e) => {
                 try { return JSON.parse(e.getAttribute('data-sortable-by')).caption; } catch (x) { return e.getAttribute('search_attribute') || e.getAttribute('mission_id'); }
             };
+            // "TS-BO, TS-GO" (setting) -> vehicle type ids, via the full type names.
+            const ownJobOnly = () => String(ctx.cfg.ownJobOnly || '').split(',').map((n) => VT_BY_NAME.get(normName(n))).filter((id) => id != null);
+            const creditsOf = (e) => {
+                try { return Number(JSON.parse(e.getAttribute('data-sortable-by')).average_credits) || 0; } catch (x) { return 0; }
+            };
+
+            /* --------------------------------------------------------------------
+             * HOLDS — a big mission that has to wait (something short) holds its
+             * rare vehicles (rareMax or fewer free, missing ones too), so smaller
+             * missions do not take them in the meantime. A hold ends when the
+             * mission is sent or gone, or after holdMin, so nothing stays stuck.
+             * ------------------------------------------------------------------ */
+            const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
+            // What bigger waiting missions hold: { key: { by, need } }, needs added up.
+            function reservedFor(id, credits) {
+                const now = Date.now();
+                const out = {};
+                for (const [hid, h] of holds) {
+                    if (h.until < now || !document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
+                    if (hid === id || h.credits <= credits) continue;
+                    for (const [k, v] of Object.entries(h.keys)) {
+                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
+                        out[k].need += v.need;
+                    }
+                }
+                return out;
+            }
+            function updateHold(id, name, credits, res) {
+                if (res.result === 'sent' || res.result === 'unconfirmed') { holds.delete(id); return; }
+                if (res.result !== 'skip' || !res.avail || !(ctx.cfg.bigCredits > 0) || credits < ctx.cfg.bigCredits) return;
+                const keys = {};
+                for (const [k, n] of Object.entries(res.avail)) {
+                    if (n <= ctx.cfg.rareMax) keys[k] = { cap: (res.caps && res.caps[k]) || k, need: (res.want && res.want[k]) || 1 };
+                }
+                if (!Object.keys(keys).length) return;
+                // The end time is set once: retries do not keep a hold alive forever.
+                const known = holds.get(id);
+                holds.set(id, { until: known ? known.until : Date.now() + ctx.cfg.holdMin * 60000, name, credits, keys });
+                // Look again in a minute, to catch a held vehicle as soon as it is back.
+                tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+            }
 
             // One mission in a hidden iframe. Resolves with the worker's report.
             function runJob(job) {
@@ -11173,6 +11270,7 @@ MKS.module({
 
                         const id = entry.getAttribute('mission_id');
                         const name = titleOf(entry);
+                        const credits = creditsOf(entry);
                         tried.set(id, Date.now());
                         const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
                         const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
@@ -11199,10 +11297,15 @@ MKS.module({
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
-                            bigPatients: Number(ctx.cfg.bigPatients) || 0 });
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly() });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
-                        if (res.result === 'sent' || res.result === 'unconfirmed') {
+                        updateHold(id, name, credits, res);
+                        if (res.result === 'skip' && res.held) {
+                            // Not a shortage: the vehicle is there, but kept for a bigger mission.
+                            errorStreak = 0;
+                            addLog(name, res.reason, 'idle');
+                        } else if (res.result === 'sent' || res.result === 'unconfirmed') {
                             stats.sent++;
                             errorStreak = 0;
                             sent.push(Date.now());
@@ -11334,12 +11437,19 @@ MKS.module({
                 const tone = { ok: 't-ok', warn: 't-warn', error: 't-error', idle: '' };
                 const types = sorted(needs.types);
                 const other = sorted(needs.other);
+                const now = Date.now();
+                const live = [...holds].filter(([, h]) => h.until > now).sort((a, b) => b[1].credits - a[1].credits);
+                const holdHtml = live.length ? `<h4 class="mks-h">Bewaard voor grote inzetten</h4>
+                    <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Inzet</th><th>Credits</th><th>Bewaard</th><th>Nog</th></tr></thead><tbody>
+                    ${live.map(([, h]) => `<tr><td>${esc(h.name)}</td><td class="mono">${ctx.nl(h.credits)}</td><td>${esc(Object.values(h.keys).map((v) => `${v.need}× ${v.cap}`).join(', '))}</td>
+                        <td class="mono mks-dim">${Math.ceil((h.until - now) / 60000)} min</td></tr>`).join('')}</tbody></table></div>` : '';
                 el.innerHTML = `<div class="mks-tiles">
                         <div class="mks-tile"><div class="v">${stats.sent}</div><div class="k">gealarmeerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.transports}</div><div class="k">vervoerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.skipped}</div><div class="k">overgeslagen</div></div>
                         <div class="mks-tile ${stats.errors ? 't-error' : ''}"><div class="v">${stats.errors}</div><div class="k">fouten</div></div>
                     </div>
+                    ${holdHtml}
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
