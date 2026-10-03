@@ -237,12 +237,20 @@ MKS.module({
             return null;
         }
 
+        // "Arrestanten moeten vervoerd worden." has no count: arrestants are waiting and
+        // no vehicle on scene can take them. One more Noodhulp each round; once it is
+        // there it asks for a cell, and if the box is still red the next round sends another.
+        const PRISONERS = /,?\s*arrestanten moeten (?:worden )?vervoerd(?: worden)?\.?/i;
+        const addPrisonerCar = (plan) => { plan.slots.fustw = Math.max(plan.slots.fustw || 0, 1); };
+
         // Text of the red box -> { slots, vt, vtCaptions, unknown }.
         // "Missende voertuigen: 1 DB-PC-LOG, 2 SB-BA, SB-IB of AS, 2.000 Water"
         // Items start with a number; names can contain commas themselves.
         function fromMissing(text, typeIds) {
             const out = { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
-            const body = String(text).replace(/\s+/g, ' ').replace(/^[^:]*:\s*/, '').trim();
+            let body = String(text).replace(/\s+/g, ' ');
+            if (PRISONERS.test(body)) { body = body.replace(PRISONERS, ''); addPrisonerCar(out); }
+            body = body.replace(/^[^:]*:\s*/, '').replace(/^[\s,]+|[\s,]+$/g, '').trim();
             for (const item of body.split(/,\s*(?=[\d.]+\s)/)) {
                 const m = item.trim().match(/^([\d.]+)\s+(.+?)\.?$/);
                 if (!m) { if (item.trim()) out.unknown.push(item.trim()); continue; }
@@ -498,7 +506,8 @@ MKS.module({
                         const t = p.textContent.replace(/\s+/g, ' ').trim();
                         // "We missen: 34000 L. water"
                         const amount = t.match(/([\d.]+)\s*l\.?\s*(water|svm|schuim)/i);
-                        if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
+                        if (PRISONERS.test(t)) addPrisonerCar(plan);
+                        else if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
                         else if (amount) {
                             const k = /water/i.test(amount[2]) ? 'wasser_amount' : 'foam_amount';
                             plan.slots[k] = (plan.slots[k] || 0) + Number(amount[1].replace(/\./g, ''));
