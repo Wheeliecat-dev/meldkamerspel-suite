@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261003175111 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261005212504 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261003175111';
+    const VERSION = '1.7.0.20261005212504';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -8460,6 +8460,168 @@ MKS.module({
     },
 });
 
+/* ==== module: vehicle-status-bar ========================================== */
+MKS.module({
+    id: 'vehicle-status-bar',
+    name: 'Voertuigstatusbalk',
+    icon: '🚦',
+    category: 'tools',
+    description: 'Een balk onder de kaart met hoeveel voertuigen er per status zijn: beschikbaar, aanrijdend, ter plaatse, '
+        + 'spraakaanvraag, transport en buiten dienst. Plus hoeveel procent van je inzetbare voertuigen bezig is. Werkt live mee.',
+    at: 'ready',
+    frames: 'top',
+    pages: /^\/$/,
+    pageNote: 'Alleen op de hoofdpagina met de kaart.',
+    live: true,
+    settings: [
+        { key: 'place', label: 'Plaats', type: 'select', default: 'below',
+            options: [['below', 'Onder de kaart'], ['above', 'Boven de kaart'], ['overlay', 'Op de kaart (linksonder)']] },
+        { key: 'busy', label: 'Percentage bezig tonen', type: 'bool', default: true,
+            help: 'Aanrijdend, ter plaatse, spraakaanvraag en transport, gedeeld door alles behalve buiten dienst.' },
+        { key: 'hideZero', label: 'Statussen met 0 verbergen', type: 'bool', default: false },
+    ],
+
+    run(ctx) {
+        const W = ctx.W;
+        if (!W.map || typeof W.map.getContainer !== 'function') return;
+
+        // Game FMS codes. Order = order in the bar.
+        const STATUS = [
+            { fms: 2, label: 'Op post', color: '#2e8b57', title: 'Beschikbaar op post' },
+            { fms: 1, label: 'Vrij', color: '#3cb371', title: 'Beschikbaar via portofoon (vrij onderweg)' },
+            { fms: 3, label: 'Aanrijdend', color: '#e08a00', title: 'Aanrijdend naar een inzet' },
+            { fms: 4, label: 'Ter plaatse', color: '#c0392b', title: 'Ter plaatse' },
+            { fms: 5, label: 'Spraak', color: '#d4ac0d', title: 'Spraakaanvraag' },
+            { fms: 7, label: 'Transport', color: '#2874a6', title: 'Met patiënt of gevangene onderweg' },
+            { fms: 8, label: 'Bij bestemming', color: '#7d3c98', title: 'Bij ziekenhuis of cel' },
+            { fms: 6, label: 'Buiten dienst', color: '#7f8c8d', title: 'Buiten dienst' },
+        ];
+        const BUSY = [3, 4, 5, 7, 8];
+        const RESYNC_MS = 5 * 60 * 1000;
+
+        const state = new Map(); // vehicleId -> fms
+        let stopped = false;
+
+        const bar = document.createElement('div');
+        bar.className = 'mks-vsb';
+        const style = document.createElement('style');
+        style.textContent = `
+            .mks-vsb { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 4px 6px;
+                font-size: 12px; line-height: 1.4; background: rgba(0,0,0,.06); border-radius: 4px; margin: 4px 0; }
+            .mks-vsb.mks-vsb-overlay { background: rgba(255,255,255,.88); color: #222; margin: 0;
+                box-shadow: 0 1px 4px rgba(0,0,0,.3); max-width: 70vw; }
+            .mks-vsb-chip { display: inline-flex; gap: 4px; align-items: center; padding: 1px 7px; border-radius: 10px;
+                color: #fff; white-space: nowrap; cursor: default; }
+            .mks-vsb-chip b { font-variant-numeric: tabular-nums; }
+            .mks-vsb-busy { margin-left: auto; white-space: nowrap; font-weight: bold; padding: 0 4px; }
+            .mks-vsb-meter { display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: rgba(128,128,128,.35);
+                vertical-align: middle; margin-left: 4px; overflow: hidden; }
+            .mks-vsb-meter > span { display: block; height: 100%; }
+        `;
+        document.head.appendChild(style);
+
+        let control = null;
+        function place() {
+            if (control) { control.remove(); control = null; }
+            bar.remove();
+            bar.classList.toggle('mks-vsb-overlay', ctx.cfg.place === 'overlay');
+            const mapEl = W.map.getContainer();
+            if (ctx.cfg.place === 'overlay' && W.L && W.L.Control) {
+                const C = W.L.Control.extend({ onAdd: () => bar });
+                control = new C({ position: 'bottomleft' }).addTo(W.map);
+                W.L.DomEvent.disableClickPropagation(bar);
+                return;
+            }
+            // #map_outer wraps the map (and its resize handle) on the main page.
+            const anchor = document.getElementById('map_outer') || mapEl;
+            anchor.insertAdjacentElement(ctx.cfg.place === 'above' ? 'beforebegin' : 'afterend', bar);
+        }
+
+        function render() {
+            const count = {};
+            for (const f of state.values()) count[f] = (count[f] || 0) + 1;
+            const known = new Set(STATUS.map((s) => s.fms));
+            const rows = STATUS.map((s) => ({ ...s, n: count[s.fms] || 0 }));
+            for (const f of Object.keys(count)) {
+                if (!known.has(Number(f))) rows.push({ fms: Number(f), label: `Status ${f}`, color: '#555', title: `Status ${f}`, n: count[f] });
+            }
+            const total = state.size;
+            const usable = total - (count[6] || 0);
+            const busy = BUSY.reduce((sum, f) => sum + (count[f] || 0), 0);
+            const pct = usable ? Math.round((busy / usable) * 100) : 0;
+            const meterColor = pct >= 75 ? '#c0392b' : pct >= 40 ? '#e08a00' : '#2e8b57';
+
+            bar.innerHTML = rows
+                .filter((r) => !ctx.cfg.hideZero || r.n)
+                .map((r) => `<span class="mks-vsb-chip" style="background:${r.color}" title="${r.title} (status ${r.fms})">${r.label} <b>${r.n}</b></span>`)
+                .join('')
+                + (ctx.cfg.busy
+                    ? `<span class="mks-vsb-busy" title="${busy} van ${usable} inzetbare voertuigen bezig (${total} totaal)">`
+                        + `Bezig ${pct}%<span class="mks-vsb-meter"><span style="width:${pct}%;background:${meterColor}"></span></span></span>`
+                    : '');
+            ctx.status(`${busy}/${usable} bezig (${pct}%)`, { tone: 'ok' });
+        }
+
+        // Batch bursts of radio messages into one redraw.
+        let timer = null;
+        const schedule = () => {
+            if (timer) return;
+            timer = setTimeout(() => { timer = null; render(); }, 250);
+        };
+
+        async function load() {
+            try {
+                const list = await fetch('/api/vehicles', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null));
+                if (stopped || !Array.isArray(list)) return;
+                state.clear();
+                for (const v of list) state.set(Number(v.id), Number(v.fms_real));
+                render();
+            } catch (e) { ctx.warn('could not load vehicles', e); }
+        }
+
+        // The game defines radioMessage in its own scripts; wait for it.
+        let tries = 0;
+        let hookTimer = null;
+        (function hook() {
+            const orig = W.radioMessage;
+            if (typeof orig !== 'function') {
+                if (++tries <= 30) hookTimer = setTimeout(hook, 1000);
+                else ctx.warn('radioMessage not found; bar only updates every 5 minutes');
+                return;
+            }
+            W.radioMessage = function (msg) {
+                try {
+                    if (!stopped && msg && msg.type === 'vehicle_fms' && (msg.user_id == null || msg.user_id === W.user_id)) {
+                        state.set(Number(msg.id), Number(msg.fms_real));
+                        schedule();
+                    }
+                } catch (e) { ctx.warn('radio hook failed', e); }
+                return orig.apply(this, arguments);
+            };
+        })();
+
+        place();
+        bar.textContent = 'Voertuigen laden...';
+        load();
+        // Bought, sold or scrapped vehicles do not come in over the radio.
+        const resync = setInterval(load, RESYNC_MS);
+
+        ctx.onSettings(() => { place(); render(); });
+
+        return {
+            stop() {
+                stopped = true;
+                clearInterval(resync);
+                clearTimeout(timer);
+                clearTimeout(hookTimer);
+                if (control) control.remove();
+                bar.remove();
+                style.remove();
+            },
+        };
+    },
+});
+
 /* ==== module: coverage-map ================================================ */
 MKS.module({
     id: 'coverage-map',
@@ -10200,8 +10362,9 @@ MKS.module({
             help: 'Ook inzetten waar al voertuigen zijn, maar het spel "Missende voertuigen" meldt: stuurt alleen wat daar staat. '
                 + 'Wacht tot er niets meer onderweg is, zodat er niets dubbel gaat.' },
         { key: 'patients', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
-            help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance en MMT per patiënt, '
-                + 'en hooguit één OvD-G per inzet. Ook bij inzetten waar al voertuigen staan.' },
+            help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance per patiënt, '
+                + 'één MMT tegelijk (de volgende in een latere ronde als het nog nodig is) en hooguit één OvD-G per inzet. '
+                + 'Ook bij inzetten waar al voertuigen staan.' },
         { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
                 + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
@@ -10251,7 +10414,9 @@ MKS.module({
             diver_units: 'gw_taucher', water_rescue: 'gw_wasserrettung',
             police_cars: 'fustw', police_motorcycle: 'police_motorcycle', police_helicopters: 'polizeihubschrauber',
             ovdp: 'ovd_p', hondengeleider: 'hondengeleider', lebefkw: 'lebefkw', grukw: 'grukw', gefkw: 'gefkw',
-            bike_police: 'bike_police', police_horse: 'police_horse', military_police: 'military_police',
+            // police_horse counts horses: the game's police_horse_count field adds up the
+            // horses per truck (its riders), the police_horse field would count trucks.
+            bike_police: 'bike_police', police_horse: 'police_horse_count', military_police: 'military_police',
             bomb_disposal: 'bomb_disposal', bomb_disposal_robot: 'bomb_disposal_robot', traffic_patrol: 'traffic_patrol',
             traffic_unit: 'any_traffic_unit', car_carrier: 'car_carrier', car_carrier_large: 'car_carrier_large',
             coastal_boat: 'coastal_boat',
@@ -10397,12 +10562,20 @@ MKS.module({
             return null;
         }
 
+        // "Arrestanten moeten vervoerd worden." has no count: arrestants are waiting and
+        // no vehicle on scene can take them. One more Noodhulp each round; once it is
+        // there it asks for a cell, and if the box is still red the next round sends another.
+        const PRISONERS = /,?\s*arrestanten moeten (?:worden )?vervoerd(?: worden)?\.?/i;
+        const addPrisonerCar = (plan) => { plan.slots.fustw = Math.max(plan.slots.fustw || 0, 1); };
+
         // Text of the red box -> { slots, vt, vtCaptions, unknown }.
         // "Missende voertuigen: 1 DB-PC-LOG, 2 SB-BA, SB-IB of AS, 2.000 Water"
         // Items start with a number; names can contain commas themselves.
         function fromMissing(text, typeIds) {
             const out = { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
-            const body = String(text).replace(/\s+/g, ' ').replace(/^[^:]*:\s*/, '').trim();
+            let body = String(text).replace(/\s+/g, ' ');
+            if (PRISONERS.test(body)) { body = body.replace(PRISONERS, ''); addPrisonerCar(out); }
+            body = body.replace(/^[^:]*:\s*/, '').replace(/^[\s,]+|[\s,]+$/g, '').trim();
             for (const item of body.split(/,\s*(?=[\d.]+\s)/)) {
                 const m = item.trim().match(/^([\d.]+)\s+(.+?)\.?$/);
                 if (!m) { if (item.trim()) out.unknown.push(item.trim()); continue; }
@@ -10494,7 +10667,15 @@ MKS.module({
             try {
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
-                if (!document.getElementById('h2_sprechwunsch')) { report('skip', { reason: 'geen spraakaanvraag (meer)', gone: true }); return; }
+                // A request page has the "Spraakaanvraag" heading or destination buttons
+                // (cells may come without that heading). Neither: already answered.
+                const asking = document.getElementById('h2_sprechwunsch')
+                    || document.querySelector('a[href*="/patient/"], a[href*="/gefangener/"]');
+                if (!asking) {
+                    const h = [...document.querySelectorAll('h1, h2, h3')].map((x) => x.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 3).join(' | ');
+                    report('skip', { reason: `geen spraakaanvraag op de voertuigpagina (${h || 'geen kopjes'})`, gone: true });
+                    return;
+                }
 
                 const all = destinations();
                 const why = {};
@@ -10658,7 +10839,8 @@ MKS.module({
                         const t = p.textContent.replace(/\s+/g, ' ').trim();
                         // "We missen: 34000 L. water"
                         const amount = t.match(/([\d.]+)\s*l\.?\s*(water|svm|schuim)/i);
-                        if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
+                        if (PRISONERS.test(t)) addPrisonerCar(plan);
+                        else if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
                         else if (amount) {
                             const k = /water/i.test(amount[2]) ? 'wasser_amount' : 'foam_amount';
                             plan.slots[k] = (plan.slots[k] || 0) + Number(amount[1].replace(/\./g, ''));
@@ -10683,7 +10865,9 @@ MKS.module({
                     // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
                     // Never more than one OvD-G per mission.
                     if (pNeed.ovdg) attrs.kdow_orgl = 1;
-                    if (pNeed.mmt) attrs.nef = (Number(attrs.nef) || 0) + pNeed.mmt;
+                    // "8x We benodigen: MMT-Arts" does not mean 8 helicopters: send one, and
+                    // another in a later round while the patients still ask for it.
+                    if (pNeed.mmt) attrs.nef = Math.max(Number(attrs.nef) || 0, 1);
                 }
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
@@ -10699,7 +10883,9 @@ MKS.module({
                 const caps = Object.fromEntries(needKeys.map((k) => [k, caption(k)]));
                 const want = Object.fromEntries(needKeys.map((k) => [k, Number(k.startsWith('vt:') ? plan.vt[k.slice(3)] : attrs[k]) || 0]));
                 for (const k of needKeys) {
-                    const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]` : `input.vehicle_checkbox[${CSS.escape(k)}="1"]`;
+                    // Most fields are "1", some carry a number (police_horse_count = horses on board).
+                    const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]`
+                        : `input.vehicle_checkbox[${CSS.escape(k)}]:not([${CSS.escape(k)}="0"])`;
                     avail[k] = new Set([...document.querySelectorAll(sel)].map((c) => c.value)).size;
                 }
                 // Held for a bigger mission: only if taking ours would leave too few for it.
@@ -11226,7 +11412,9 @@ MKS.module({
                             : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
                         addLog(v.caption, `${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.mode === 'release' ? 'warn' : 'ok');
                     } else if (res.result === 'skip' && res.gone) {
+                        // Logged, not silent: a page we cannot read looked like this before.
                         talk.delete(vid);
+                        addLog(v.caption, res.reason, 'idle');
                     } else if (res.result === 'skip') {
                         stats.skipped++;
                         errorStreak = 0;

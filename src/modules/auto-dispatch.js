@@ -40,8 +40,9 @@ MKS.module({
             help: 'Ook inzetten waar al voertuigen zijn, maar het spel "Missende voertuigen" meldt: stuurt alleen wat daar staat. '
                 + 'Wacht tot er niets meer onderweg is, zodat er niets dubbel gaat.' },
         { key: 'patients', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
-            help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance en MMT per patiënt, '
-                + 'en hooguit één OvD-G per inzet. Ook bij inzetten waar al voertuigen staan.' },
+            help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance per patiënt, '
+                + 'één MMT tegelijk (de volgende in een latere ronde als het nog nodig is) en hooguit één OvD-G per inzet. '
+                + 'Ook bij inzetten waar al voertuigen staan.' },
         { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
                 + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
@@ -91,7 +92,9 @@ MKS.module({
             diver_units: 'gw_taucher', water_rescue: 'gw_wasserrettung',
             police_cars: 'fustw', police_motorcycle: 'police_motorcycle', police_helicopters: 'polizeihubschrauber',
             ovdp: 'ovd_p', hondengeleider: 'hondengeleider', lebefkw: 'lebefkw', grukw: 'grukw', gefkw: 'gefkw',
-            bike_police: 'bike_police', police_horse: 'police_horse', military_police: 'military_police',
+            // police_horse counts horses: the game's police_horse_count field adds up the
+            // horses per truck (its riders), the police_horse field would count trucks.
+            bike_police: 'bike_police', police_horse: 'police_horse_count', military_police: 'military_police',
             bomb_disposal: 'bomb_disposal', bomb_disposal_robot: 'bomb_disposal_robot', traffic_patrol: 'traffic_patrol',
             traffic_unit: 'any_traffic_unit', car_carrier: 'car_carrier', car_carrier_large: 'car_carrier_large',
             coastal_boat: 'coastal_boat',
@@ -342,7 +345,15 @@ MKS.module({
             try {
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
-                if (!document.getElementById('h2_sprechwunsch')) { report('skip', { reason: 'geen spraakaanvraag (meer)', gone: true }); return; }
+                // A request page has the "Spraakaanvraag" heading or destination buttons
+                // (cells may come without that heading). Neither: already answered.
+                const asking = document.getElementById('h2_sprechwunsch')
+                    || document.querySelector('a[href*="/patient/"], a[href*="/gefangener/"]');
+                if (!asking) {
+                    const h = [...document.querySelectorAll('h1, h2, h3')].map((x) => x.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 3).join(' | ');
+                    report('skip', { reason: `geen spraakaanvraag op de voertuigpagina (${h || 'geen kopjes'})`, gone: true });
+                    return;
+                }
 
                 const all = destinations();
                 const why = {};
@@ -532,7 +543,9 @@ MKS.module({
                     // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
                     // Never more than one OvD-G per mission.
                     if (pNeed.ovdg) attrs.kdow_orgl = 1;
-                    if (pNeed.mmt) attrs.nef = (Number(attrs.nef) || 0) + pNeed.mmt;
+                    // "8x We benodigen: MMT-Arts" does not mean 8 helicopters: send one, and
+                    // another in a later round while the patients still ask for it.
+                    if (pNeed.mmt) attrs.nef = Math.max(Number(attrs.nef) || 0, 1);
                 }
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
@@ -548,7 +561,9 @@ MKS.module({
                 const caps = Object.fromEntries(needKeys.map((k) => [k, caption(k)]));
                 const want = Object.fromEntries(needKeys.map((k) => [k, Number(k.startsWith('vt:') ? plan.vt[k.slice(3)] : attrs[k]) || 0]));
                 for (const k of needKeys) {
-                    const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]` : `input.vehicle_checkbox[${CSS.escape(k)}="1"]`;
+                    // Most fields are "1", some carry a number (police_horse_count = horses on board).
+                    const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]`
+                        : `input.vehicle_checkbox[${CSS.escape(k)}]:not([${CSS.escape(k)}="0"])`;
                     avail[k] = new Set([...document.querySelectorAll(sel)].map((c) => c.value)).size;
                 }
                 // Held for a bigger mission: only if taking ours would leave too few for it.
@@ -1075,7 +1090,9 @@ MKS.module({
                             : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
                         addLog(v.caption, `${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.mode === 'release' ? 'warn' : 'ok');
                     } else if (res.result === 'skip' && res.gone) {
+                        // Logged, not silent: a page we cannot read looked like this before.
                         talk.delete(vid);
+                        addLog(v.caption, res.reason, 'idle');
                     } else if (res.result === 'skip') {
                         stats.skipped++;
                         errorStreak = 0;
