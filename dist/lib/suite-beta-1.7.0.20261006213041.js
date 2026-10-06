@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261006134503 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261006213041 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261006134503';
+    const VERSION = '1.7.0.20261006213041';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10365,8 +10365,9 @@ MKS.module({
             help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance per patiënt, '
                 + 'één MMT tegelijk (de volgende in een latere ronde als het nog nodig is) en hooguit één OvD-G per inzet. '
                 + 'Ook bij inzetten waar al voertuigen staan.' },
-        { key: 'ovdgFrom', label: 'OvD-G bij meer dan zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
-            help: 'Een nieuwe inzet met meer patiënten dan dit krijgt een OvD-G mee als die vrij is en binnen de maximale afstand. '
+        { key: 'ovdgFrom', label: 'OvD-G vanaf zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
+            help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
+                + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
         { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
@@ -10890,9 +10891,9 @@ MKS.module({
                     if (pNeed.mmt) attrs.nef = Math.max(Number(attrs.nef) || 0, 1);
                 }
                 // Many patients on a new mission: an OvD-G along if one is free and near
-                // enough (ovdgFrom). Optional: without one the rest still goes.
+                // enough (ovdgFrom or more patients), asked for or not. Optional: without one the rest still goes.
                 const patientCount = Number(((document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+Pati/i) || [])[1] || 0);
-                const optOvdg = job.patients && mode === 'full' && job.ovdgFrom > 0 && patientCount > job.ovdgFrom && !attrs.kdow_orgl;
+                const optOvdg = job.patients && mode === 'full' && job.ovdgFrom > 0 && patientCount >= job.ovdgFrom && !attrs.kdow_orgl;
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
                 // Vehicles held for a bigger mission that is waiting (key: slot or vt:<id>).
@@ -11091,8 +11092,11 @@ MKS.module({
             if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
             const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
             const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';
-            // Only a release button for this one car; never the mission-wide one.
-            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]');
+            // A release button for this one car if there is one, else the mission-wide
+            // "Arrestant vrijlaten" (data-method="post"; jquery-ujs posts it on click).
+            // Every car sees the same cells, so nothing fits for any of them.
+            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]')
+                || document.querySelector('a[href$="/gefangene/entlassen"][data-method="post"]');
             if (job.release && release) { go(release, { release: true, dest: 'gevangenen vrijgelaten', unknownNeeds: [need] }); return; }
             report('skip', { reason: `arrestanten (${car}): geen passende cel (${reasons})`, unknownNeeds: [need], prisoners: true });
         }
@@ -11348,15 +11352,21 @@ MKS.module({
             const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} .alert-danger`)]
                 .filter((x) => x.style.display !== 'none').map((x) => x.textContent).join(' ').replace(/\s+/g, ' ').trim();
 
+            // "Arrestanten moeten vervoerd worden." in the list: a police car is (or will
+            // be) stuck there until it gets a cell.
+            const prisonersWaiting = (e) => /arrestanten moeten/i.test(sidebarMissing(e));
+
             function candidates() {
                 const now = Date.now();
                 return [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
                     const red = ctx.cfg.topUp && (sidebarMissing(e) || (ctx.cfg.patients && sidebarPatients(e)));
                     if (e.getAttribute('data-mission-state-filter') !== 'unattended' && !red) return false;
-                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    // Arrestants also on hidden missions: our own car is blocked there.
+                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).sort((a, b) => creditsOf(b) - creditsOf(a)); // big missions choose first
+                }).sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
+                    || creditsOf(b) - creditsOf(a)); // arrestants first (a cell takes seconds), then big missions
             }
 
             const titleOf = (e) => {
@@ -11514,7 +11524,9 @@ MKS.module({
                 try {
                     await transports();
                     const req = await loadMissions();
-                    for (const entry of candidates()) {
+                    const list = candidates();
+                    const cellRuns = new Map();
+                    for (const entry of list) {
                         // A round over many missions takes minutes: answer new
                         // transport requests in between, not only at the start.
                         await transports();
@@ -11562,6 +11574,11 @@ MKS.module({
                             stats.transports++;
                             errorStreak = 0;
                             tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                            // Next car with arrestants right away, not next round (a round
+                            // can take many minutes). A release frees them all.
+                            const runs = (cellRuns.get(id) || 0) + 1;
+                            cellRuns.set(id, runs);
+                            if (!res.release && runs < 6) list.splice(list.indexOf(entry) + 1, 0, entry);
                             const where = res.release ? res.dest
                                 : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
                             addLog(name, `arrestanten ${res.car}: ${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.release ? 'warn' : 'ok');

@@ -1030,15 +1030,21 @@ MKS.module({
             const sidebarPatients = (e) => [...document.querySelectorAll(`#mission_patients_${e.getAttribute('mission_id')} .alert-danger`)]
                 .filter((x) => x.style.display !== 'none').map((x) => x.textContent).join(' ').replace(/\s+/g, ' ').trim();
 
+            // "Arrestanten moeten vervoerd worden." in the list: a police car is (or will
+            // be) stuck there until it gets a cell.
+            const prisonersWaiting = (e) => /arrestanten moeten/i.test(sidebarMissing(e));
+
             function candidates() {
                 const now = Date.now();
                 return [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
                     const red = ctx.cfg.topUp && (sidebarMissing(e) || (ctx.cfg.patients && sidebarPatients(e)));
                     if (e.getAttribute('data-mission-state-filter') !== 'unattended' && !red) return false;
-                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    // Arrestants also on hidden missions: our own car is blocked there.
+                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).sort((a, b) => creditsOf(b) - creditsOf(a)); // big missions choose first
+                }).sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
+                    || creditsOf(b) - creditsOf(a)); // arrestants first (a cell takes seconds), then big missions
             }
 
             const titleOf = (e) => {
@@ -1196,7 +1202,9 @@ MKS.module({
                 try {
                     await transports();
                     const req = await loadMissions();
-                    for (const entry of candidates()) {
+                    const list = candidates();
+                    const cellRuns = new Map();
+                    for (const entry of list) {
                         // A round over many missions takes minutes: answer new
                         // transport requests in between, not only at the start.
                         await transports();
@@ -1244,6 +1252,11 @@ MKS.module({
                             stats.transports++;
                             errorStreak = 0;
                             tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                            // Next car with arrestants right away, not next round (a round
+                            // can take many minutes). A release frees them all.
+                            const runs = (cellRuns.get(id) || 0) + 1;
+                            cellRuns.set(id, runs);
+                            if (!res.release && runs < 6) list.splice(list.indexOf(entry) + 1, 0, entry);
                             const where = res.release ? res.dest
                                 : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
                             addLog(name, `arrestanten ${res.car}: ${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.release ? 'warn' : 'ok');
