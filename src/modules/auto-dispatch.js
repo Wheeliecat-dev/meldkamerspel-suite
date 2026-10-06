@@ -240,9 +240,10 @@ MKS.module({
             return null;
         }
 
-        // "Arrestanten moeten vervoerd worden." has no count: arrestants are waiting and
-        // no vehicle on scene can take them. One more Noodhulp each round; once it is
-        // there it asks for a cell, and if the box is still red the next round sends another.
+        // "Arrestanten moeten vervoerd worden." has no count. When a police car on scene
+        // can take them, the mission window lists cells under that car and the worker
+        // picks one (prisonerCell). Only when no car there can: one more Noodhulp each
+        // round, and if the box is still red the next round sends another.
         const PRISONERS = /,?\s*arrestanten moeten (?:worden )?vervoerd(?: worden)?\.?/i;
         const addPrisonerCar = (plan) => { plan.slots.fustw = Math.max(plan.slots.fustw || 0, 1); };
 
@@ -356,14 +357,7 @@ MKS.module({
                 }
 
                 const all = destinations();
-                const why = {};
-                const fit = all.filter((c) => {
-                    const r = destReason(c, job);
-                    if (r) why[r] = (why[r] || 0) + 1;
-                    return !r;
-                });
-                const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? job.ownKm : 0);
-                const best = fit.sort((x, y) => x.cost - y.cost || rank(x) - rank(y))[0];
+                const { best, why } = bestDestination(all, job);
                 if (best) {
                     go(best.a, { mode: best.kind, dest: best.name, km: best.dist, cost: best.cost });
                     return;
@@ -390,8 +384,25 @@ MKS.module({
             }
         }
 
-        // Destination rows, as the Bestemmingfilter module reads them.
-        function destinations() {
+        // Drop what does not fit, then: enough room for everyone in the car first
+        // (orange cell buttons have fewer free cells than prisoners on board),
+        // cheapest, nearest (own buildings get ownKm head start).
+        function bestDestination(all, job) {
+            const why = {};
+            const fit = all.filter((c) => {
+                const r = destReason(c, job);
+                if (r) why[r] = (why[r] || 0) + 1;
+                return !r;
+            });
+            const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? job.ownKm : 0);
+            const short = (c) => (c.a.classList.contains('btn-warning') ? 1 : 0);
+            const best = fit.sort((x, y) => short(x) - short(y) || x.cost - y.cost || rank(x) - rank(y))[0];
+            return { best, why };
+        }
+
+        // Destination rows, as the Bestemmingfilter module reads them. root: the
+        // whole page, or one car's cell list in a mission window.
+        function destinations(root = document) {
             const num = (s) => {
                 const m = String(s).replace(/\./g, '').match(/-?\d+(?:,\d+)?/);
                 return m ? parseFloat(m[0].replace(',', '.')) : NaN;
@@ -401,7 +412,7 @@ MKS.module({
             const DEST = 'a[href*="/patient/"]:not([href$="/-1"]), a[href*="/gefangener/"]:not([href$="/-1"])';
             const out = [];
             const seen = new Set();
-            for (const table of document.querySelectorAll('table')) {
+            for (const table of root.querySelectorAll('table')) {
                 const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim().toLowerCase());
                 const iDist = heads.findIndex((h) => h.startsWith('afstand'));
                 if (iDist < 0) continue;
@@ -426,14 +437,16 @@ MKS.module({
                 }
             }
             // Cells can also be loose buttons with distance, free cells and cost in the text.
-            for (const a of document.querySelectorAll('a[href*="/gefangener/"]:not([href$="/-1"])')) {
+            for (const a of root.querySelectorAll('a[href*="/gefangener/"]:not([href$="/-1"])')) {
                 if (seen.has(a)) continue;
                 const t = a.textContent.replace(/\s+/g, ' ');
                 const km = t.match(/(\d+(?:[.,]\d+)?)\s*km/);
                 const pct = t.match(/(\d+)\s*%/);
                 const freeTxt = t.match(/vrij\w*\s*(?:cel\w*)?\s*:?\s*(\d+)/i);
                 out.push({
-                    a, kind: 'cell', own: !pct, name: t.trim().slice(0, 60),
+                    // "Politiebureau Leusden (BT 33) (Vrije cellen: 0, afstand: 0,26 km)"; team cells
+                    // have no space before the bracket and end with "Afdrachtpercentage: 0%".
+                    a, kind: 'cell', own: !pct, name: t.split(/\s*\(vrij/i)[0].trim().slice(0, 60),
                     dist: km ? parseFloat(km[1].replace(',', '.')) : NaN,
                     free: isRed(a) ? 0 : (freeTxt ? Number(freeTxt[1]) : Infinity),
                     cost: pct ? Number(pct[1]) : 0,
@@ -489,6 +502,10 @@ MKS.module({
                     : (shown(pBox) && pBox.textContent.replace(/\s+/g, ' ').trim()) || job.patientText || '';
                 const pNeed = patientNeeds(pText);
                 const mode = missingText ? 'missing' : present && pText ? 'patients' : 'full';
+                // Arrestants on a car on scene: that car needs a cell, not another car
+                // sent. Does not wait for vehicles still driving.
+                const prisonerCars = [...document.querySelectorAll('.prison-select')].filter((b) => b.querySelector('a[href*="/gefangener/"]'));
+                if (prisonerCars.length) { prisonerCell(job, prisonerCars[0], report, doneKey); return; }
                 if (driving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
                 if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding' }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
@@ -706,6 +723,38 @@ MKS.module({
                 ctx.err(e);
                 report('error', { reason: e.message || String(e) });
             }
+        }
+
+        /* ========================================================================
+         * ARRESTANTEN in a mission window. Each police car on scene with
+         * arrestants has a block under its row in "Voertuigen ter plaatse":
+         *   <div id="prison-select-5848090" data-vehicle-id="5848090" class="prison-select">
+         *     <a data-prison-id="1769528" class="btn btn-success"
+         *        href="/vehicles/5848090/gefangener/1769528?...">Politie Amersfoort-Centrum
+         *        (BT 31) (Vrije cellen: 2, afstand: 6,86 km)</a> ...
+         * Red buttons are full; team cells add "Afdrachtpercentage: 0%". Same
+         * choice as a spraakaanvraag. One car per job: the click loads another page.
+         * ==================================================================== */
+        function prisonerCell(job, block, report, doneKey) {
+            // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
+            const vid = block.getAttribute('data-vehicle-id');
+            const car = clean(block.closest('tr')?.previousElementSibling?.querySelector(`a[href^="/vehicles/${vid}"]`)?.textContent || '')
+                || `voertuig ${vid}`;
+            if (!job.transport) { report('skip', { reason: `arrestanten wachten op een cel (${car}), spraakaanvragen afhandelen staat uit` }); return; }
+            const go = (a, detail) => {
+                try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
+                report('sending', { mode: 'cell', car, ...detail });
+                a.click();
+            };
+            const all = destinations(block);
+            const { best, why } = bestDestination(all, job);
+            if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
+            const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
+            const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';
+            // Only a release button for this one car; never the mission-wide one.
+            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]');
+            if (job.release && release) { go(release, { release: true, dest: 'gevangenen vrijgelaten', unknownNeeds: [need] }); return; }
+            report('skip', { reason: `arrestanten (${car}): geen passende cel (${reasons})`, unknownNeeds: [need], prisoners: true });
         }
 
         function clean(t) { return String(t).replace(/\s+/g, ' ').trim().slice(0, 160); }
@@ -1054,9 +1103,9 @@ MKS.module({
                         frame.addEventListener('load', () => {
                             let ok = false;
                             try {
-                                ok = transport
+                                ok = result.mode === 'cell' || (transport
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
-                                    : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr');
+                                    : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
                         }, { once: true });
@@ -1163,11 +1212,20 @@ MKS.module({
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
-                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly() });
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
+                            transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
-                        updateHold(id, name, credits, res);
-                        if (res.result === 'skip' && res.held) {
+                        if (res.mode !== 'cell') updateHold(id, name, credits, res);
+                        if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
+                            // More cars with arrestants: the next one in a minute.
+                            stats.transports++;
+                            errorStreak = 0;
+                            tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                            const where = res.release ? res.dest
+                                : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
+                            addLog(name, `arrestanten ${res.car}: ${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.release ? 'warn' : 'ok');
+                        } else if (res.result === 'skip' && res.held) {
                             // Not a shortage: the vehicle is there, but kept for a bigger mission.
                             errorStreak = 0;
                             addLog(name, res.reason, 'idle');
