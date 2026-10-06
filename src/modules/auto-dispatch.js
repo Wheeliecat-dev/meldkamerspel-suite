@@ -43,8 +43,9 @@ MKS.module({
             help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance per patiënt, '
                 + 'één MMT tegelijk (de volgende in een latere ronde als het nog nodig is) en hooguit één OvD-G per inzet. '
                 + 'Ook bij inzetten waar al voertuigen staan.' },
-        { key: 'ovdgFrom', label: 'OvD-G bij meer dan zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
-            help: 'Een nieuwe inzet met meer patiënten dan dit krijgt een OvD-G mee als die vrij is en binnen de maximale afstand. '
+        { key: 'ovdgFrom', label: 'OvD-G vanaf zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
+            help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
+                + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
         { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
@@ -568,9 +569,9 @@ MKS.module({
                     if (pNeed.mmt) attrs.nef = Math.max(Number(attrs.nef) || 0, 1);
                 }
                 // Many patients on a new mission: an OvD-G along if one is free and near
-                // enough (ovdgFrom). Optional: without one the rest still goes.
+                // enough (ovdgFrom or more patients), asked for or not. Optional: without one the rest still goes.
                 const patientCount = Number(((document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+Pati/i) || [])[1] || 0);
-                const optOvdg = job.patients && mode === 'full' && job.ovdgFrom > 0 && patientCount > job.ovdgFrom && !attrs.kdow_orgl;
+                const optOvdg = job.patients && mode === 'full' && job.ovdgFrom > 0 && patientCount >= job.ovdgFrom && !attrs.kdow_orgl;
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
                 // Vehicles held for a bigger mission that is waiting (key: slot or vt:<id>).
