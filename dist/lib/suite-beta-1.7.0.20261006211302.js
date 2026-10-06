@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261006075239 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261006211302 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261006075239';
+    const VERSION = '1.7.0.20261006211302';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10365,6 +10365,10 @@ MKS.module({
             help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance per patiënt, '
                 + 'één MMT tegelijk (de volgende in een latere ronde als het nog nodig is) en hooguit één OvD-G per inzet. '
                 + 'Ook bij inzetten waar al voertuigen staan.' },
+        { key: 'ovdgFrom', label: 'OvD-G vanaf zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
+            help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
+                + 'als die vrij is en binnen de maximale afstand. '
+                + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
         { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
                 + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
@@ -10886,6 +10890,10 @@ MKS.module({
                     // another in a later round while the patients still ask for it.
                     if (pNeed.mmt) attrs.nef = Math.max(Number(attrs.nef) || 0, 1);
                 }
+                // Many patients on a new mission: an OvD-G along if one is free and near
+                // enough (ovdgFrom or more patients), asked for or not. Optional: without one the rest still goes.
+                const patientCount = Number(((document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+Pati/i) || [])[1] || 0);
+                const optOvdg = job.patients && mode === 'full' && job.ovdgFrom > 0 && patientCount >= job.ovdgFrom && !attrs.kdow_orgl;
                 if (!Object.keys(attrs).length && !Object.keys(plan.vt).length) { report('skip', { reason: 'niets te sturen' }); return; }
 
                 // Vehicles held for a bigger mission that is waiting (key: slot or vt:<id>).
@@ -10982,6 +10990,8 @@ MKS.module({
                     if (Number(attrs[k]) > have) rest[k] = Number(attrs[k]) - have;
                 }
                 hidingOwnJob(() => pass(rest));
+                // Its own pass, after the rest; its shortage does not stop the mission.
+                if (optOvdg) { const before = shortage; pass({ kdow_orgl: 1 }); shortage = before; }
                 await sleep(400);
                 shortage = untranslated(shortage);
 
@@ -11002,8 +11012,7 @@ MKS.module({
                 // Shortages on the ignore list (setting) do not stop the rest from going. On a
                 // big patient mission ("24 Patiënten - 5 onbehandelde") ambulances may come in
                 // parts: the patient lines ask for the rest once these have arrived.
-                const totalPatients = Number(((document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+Pati/i) || [])[1] || 0);
-                const big = job.bigPatients > 0 && totalPatients > job.bigPatients;
+                const big = job.bigPatients > 0 && patientCount > job.bigPatients;
                 const ignored = (job.ignoreShort || []).map((n) => n.toLowerCase());
                 const blocking = [...String(shortage).matchAll(/beschikbaar:\s*\d+\s+([^.\n]+)/gi)]
                     .map((m) => m[1].trim()).filter((n) => !ignored.includes(n.toLowerCase()) && !(big && /ambulance/i.test(n)));
@@ -11023,6 +11032,16 @@ MKS.module({
                     picked = selection();
                     if (!picked.length) { report('skip', { reason: 'alle ambulances te ver', shortText: shortage }); return; }
                 }
+                const isOvdg = (c) => c.getAttribute('kdow_orgl') === '1';
+                if (optOvdg) {
+                    // The optional OvD-G from too far stays home; the rest still goes.
+                    picked.filter((c) => tooFar(c) && isOvdg(c)).forEach((c) => {
+                        document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click());
+                    });
+                    picked = selection();
+                    if (!picked.length) { report('skip', { reason: 'niets te sturen' }); return; }
+                }
+                const ovdgNote = !optOvdg ? '' : picked.some(isOvdg) ? `met OvD-G (${patientCount} patiënten)` : `zonder OvD-G (geen vrij binnen ${job.maxKm} km)`;
                 const far = Math.max(...picked.map(dist));
                 if (picked.some(tooFar)) {
                     // Which types had to come from too far: those are the ones to buy closer by.
@@ -11039,7 +11058,7 @@ MKS.module({
                 const btn = document.getElementById('alert_btn');
                 if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
                 try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage });
+                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote });
                 btn.click();
             } catch (e) {
                 ctx.err(e);
@@ -11073,8 +11092,11 @@ MKS.module({
             if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
             const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
             const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';
-            // Only a release button for this one car; never the mission-wide one.
-            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]');
+            // A release button for this one car if there is one, else the mission-wide
+            // "Arrestant vrijlaten" (data-method="post"; jquery-ujs posts it on click).
+            // Every car sees the same cells, so nothing fits for any of them.
+            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]')
+                || document.querySelector('a[href$="/gefangene/entlassen"][data-method="post"]');
             if (job.release && release) { go(release, { release: true, dest: 'gevangenen vrijgelaten', unknownNeeds: [need] }); return; }
             report('skip', { reason: `arrestanten (${car}): geen passende cel (${reasons})`, unknownNeeds: [need], prisoners: true });
         }
@@ -11535,7 +11557,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
-                            transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         if (res.mode !== 'cell') updateHold(id, name, credits, res);
@@ -11556,7 +11578,7 @@ MKS.module({
                             errorStreak = 0;
                             sent.push(Date.now());
                             const verb = res.mode === 'full' ? 'gealarmeerd' : 'bijgestuurd';
-                            addLog(name, `${res.result === 'sent' ? verb : `${verb} (niet bevestigd)`}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.short ? `, te weinig: ${res.short}` : ''}`, 'ok');
+                            addLog(name, `${res.result === 'sent' ? verb : `${verb} (niet bevestigd)`}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.note ? `, ${res.note}` : ''}${res.short ? `, te weinig: ${res.short}` : ''}`, 'ok');
                         } else if (res.result === 'wait') {
                             // Vehicles still driving: look again in a minute, not after retryMin.
                             tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);

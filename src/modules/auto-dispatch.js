@@ -770,8 +770,11 @@ MKS.module({
             if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
             const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
             const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';
-            // Only a release button for this one car; never the mission-wide one.
-            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]');
+            // A release button for this one car if there is one, else the mission-wide
+            // "Arrestant vrijlaten" (data-method="post"; jquery-ujs posts it on click).
+            // Every car sees the same cells, so nothing fits for any of them.
+            const release = block.querySelector('a[href$="/gefangener/-1"], a[href*="/gefangener/-1?"]')
+                || document.querySelector('a[href$="/gefangene/entlassen"][data-method="post"]');
             if (job.release && release) { go(release, { release: true, dest: 'gevangenen vrijgelaten', unknownNeeds: [need] }); return; }
             report('skip', { reason: `arrestanten (${car}): geen passende cel (${reasons})`, unknownNeeds: [need], prisoners: true });
         }
