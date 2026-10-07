@@ -577,6 +577,16 @@ MKS.module({
             if (extra.length) step.label += `, ${extra.length} extra om de klas vol te maken`;
             await startTraining(edu, [...pids, ...extra]);
         }
+        // People of a building in a class for this training right now ("In opleiding:
+        // Drone Flightcrew" on its personnel page); the school form does not list them.
+        async function inTraining(buildingId, training) {
+            const doc = await getDoc(`/buildings/${buildingId}/personals`);
+            const t = cleanEdu(training);
+            return [...doc.querySelectorAll('table tbody tr')].filter((tr) => {
+                const m = tr.textContent.replace(/\s+/g, ' ').match(/In opleiding:\s*([^|]+?)(?:\s{2,}|$)/i);
+                return m && cleanEdu(m[1]).includes(t);
+            }).length;
+        }
         async function startTraining(edu, pids) {
             const fd = new FormData(edu.form);
             fd.set('education_select', edu.value);
@@ -636,6 +646,11 @@ MKS.module({
                         p.training = v[4];
                         if (trained.length >= want) {
                             Object.assign(p, { stage: 'buy', key: edu.key, people: trained.slice(0, want).map((x) => x.pid) });
+                        } else if (trained.length + await inTraining(p.building, v[4]) >= want) {
+                            // Already in a class (a team training joined by hand, or our own):
+                            // wait for it instead of starting a second one.
+                            p.wait = 'personeel al in opleiding';
+                            continue;
                         } else if (!edu.key || !edu.school) {
                             p.wait = 'wacht op een vrij klaslokaal';
                             markBlocked(p.vt, 20000);
