@@ -378,14 +378,18 @@ MKS.module({
         };
         // Credits a shortage blocked in the last 7 days. Entries are [lat, lon, time,
         // credits]; older data without credits counts 1.000 per missed mission.
-        function value7d(t) {
+        // Each purchase for a need halves what the shortages from before it still weigh:
+        // the new vehicle should fix those, so only later shortages keep the full value.
+        function value7d(t, name) {
             const since = Date.now() - 7 * 86400000;
+            const buys = ((state.bought || {})[name] || []).filter((x) => x >= since);
+            const weight = (at) => 0.5 ** buys.filter((x) => x > at).length;
             const recent = (t.pos || []).filter((p) => p[2] >= since);
             // Places recorded before credits were tracked (or with unknown credits) count
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
-            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000), 0);
+            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2);
+            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();
@@ -394,7 +398,7 @@ MKS.module({
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
                 const vts = vehiclesFor(name);
-                const value = value7d(t) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
+                const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
             }
             for (const [name, t] of Object.entries(needs.other || {})) {
@@ -404,7 +408,7 @@ MKS.module({
                 const edu = name.match(/^Opleiding (.+?) \(/);
                 const pers = name.match(/^Personeel: (.+)$/);
                 if (edu || pers) { state.wishes[(edu || pers)[1]] = t.missions; continue; }
-                const value = value7d(t) * ctx.cfg.specialWeight;
+                const value = value7d(t, name) * ctx.cfg.specialWeight;
                 if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
                 else if (cells) out.push({ kind: 'ext', name, types: [5, 11, 18], match: /\bcel\b|cel$/i, value, at: centroid(t.pos), t });
             }
@@ -1214,6 +1218,11 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     state.cool[next.need] = Date.now() + 30 * 60000;
+                    if (next.cost) {
+                        state.bought = state.bought || {};
+                        const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
+                        list.push(Date.now());
+                    }
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
                     state.lastRound.result = 'gedaan';

@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007122823 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007124615 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007122823';
+    const VERSION = '1.7.0.20261007124615';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11898,7 +11898,7 @@ MKS.module({
                 + 'de gebouwen die het dichtst liggen bij de meeste plekken waar het voertuig miste.' },
         { key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
             help: 'Alleen personeel van de gebouwen die het voertuig krijgen, en alleen zoveel als dat voertuig nodig heeft. '
-                + 'Er wordt nooit iemand "op voorraad" opgeleid.' },
+                + 'Een klas start pas met alle 10 plaatsen bezet: de rest gaat naar vrij personeel van gebouwen die dat voertuig kunnen hebben (dichtstbij eerst), daarna van willekeurige gebouwen.' },
         { key: 'unlockWeight', label: 'Nieuwe meldingen: keer per week', type: 'number', default: 1, min: 0, max: 20, step: 0.5,
             help: 'Een gebouw of uitbreiding die nieuwe meldingsoorten vrijspeelt telt hun gemiddelde credits zoveel keer per week. 0 = niet.' },
         { key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
@@ -12068,7 +12068,7 @@ MKS.module({
             'signalisatie voertuigen': 83, 'signalisatievoertuig': 83, 'tankautospuiten (terreinvaardig)': 6, 'schuimblusvoertuig': 130,
             'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
             'strandvoertuigen (quad, dat-rb of khv)': 65, 'bereden brigade (paarden)': 73, 'politie helikopters': 28, 'politie helikopter': 28,
-            'dienstvoertuigen usar': 92, 'politie noodhulp': 22,
+            'dienstvoertuigen usar': 92, 'politie noodhulp': 22, 'me-ae': 64, 'vw-bb': 73, 'bb-a': 74,
         };
         const BY_NAME = {};
         for (const [id, v] of Object.entries(VT)) BY_NAME[norm(v[0])] = Number(id);
@@ -12241,14 +12241,18 @@ MKS.module({
         };
         // Credits a shortage blocked in the last 7 days. Entries are [lat, lon, time,
         // credits]; older data without credits counts 1.000 per missed mission.
-        function value7d(t) {
+        // Each purchase for a need halves what the shortages from before it still weigh:
+        // the new vehicle should fix those, so only later shortages keep the full value.
+        function value7d(t, name) {
             const since = Date.now() - 7 * 86400000;
+            const buys = ((state.bought || {})[name] || []).filter((x) => x >= since);
+            const weight = (at) => 0.5 ** buys.filter((x) => x > at).length;
             const recent = (t.pos || []).filter((p) => p[2] >= since);
             // Places recorded before credits were tracked (or with unknown credits) count
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
-            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000), 0);
+            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2);
+            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();
@@ -12257,7 +12261,7 @@ MKS.module({
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
                 const vts = vehiclesFor(name);
-                const value = value7d(t) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
+                const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
             }
             for (const [name, t] of Object.entries(needs.other || {})) {
@@ -12267,7 +12271,7 @@ MKS.module({
                 const edu = name.match(/^Opleiding (.+?) \(/);
                 const pers = name.match(/^Personeel: (.+)$/);
                 if (edu || pers) { state.wishes[(edu || pers)[1]] = t.missions; continue; }
-                const value = value7d(t) * ctx.cfg.specialWeight;
+                const value = value7d(t, name) * ctx.cfg.specialWeight;
                 if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
                 else if (cells) out.push({ kind: 'ext', name, types: [5, 11, 18], match: /\bcel\b|cel$/i, value, at: centroid(t.pos), t });
             }
@@ -12398,6 +12402,37 @@ MKS.module({
                 return { pid, has: cb.getAttribute(key) === 'true', idle, free: idle && !reserved.has(pid) };
             });
         }
+        // A class only starts when all 10 seats are taken. Empty seats go first to free
+        // people in buildings that can hold the vehicle (a crew each, trained ahead for a
+        // later purchase there), nearest first, then to free people from any building.
+        async function fillSeats(data, edu, have, vt, ref) {
+            const missing = 10 - have.length;
+            if (missing <= 0) return [];
+            const prefTypes = (VT[vt] || [])[3] || [];
+            const per = crewOf(vt);
+            const taken = new Set(have);
+            const dist = (b) => (ref ? km(posOf(b), ref) : 0);
+            const usable = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type) && b.enabled !== false);
+            const lists = [[usable.filter((b) => prefTypes.includes(b.building_type)).sort((a, b) => dist(a) - dist(b)), per],
+                [usable.filter((b) => !prefTypes.includes(b.building_type)).sort((a, b) => dist(a) - dist(b)), 10]];
+            const out = [];
+            let looked = 0;
+            for (const [list, max] of lists) {
+                for (const b of list) {
+                    if (out.length >= missing || looked >= 40) break;
+                    looked++;
+                    const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has && !taken.has(p.pid)).slice(0, Math.min(max, missing - out.length));
+                    free.forEach((p) => { out.push(p.pid); taken.add(p.pid); });
+                }
+            }
+            return out;
+        }
+        // Start a class with these people, the empty seats filled; the step's label says how many extra.
+        async function startFull(step, data, edu, pids, vt, ref) {
+            const extra = await fillSeats(data, edu, pids, vt, ref);
+            if (extra.length) step.label += `, ${extra.length} extra om de klas vol te maken`;
+            await startTraining(edu, [...pids, ...extra]);
+        }
         async function startTraining(edu, pids) {
             const fd = new FormData(edu.form);
             fd.set('education_select', edu.value);
@@ -12445,6 +12480,37 @@ MKS.module({
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
                     continue;
                 }
+                if (p.stage === 'prep') {
+                    // Extension bought: crew first (in parallel with the building work).
+                    const v = VT[p.vt];
+                    if (!v || !v[4]) { p.stage = 'buy'; p.people = []; }
+                    else {
+                        const edu = await education(v[4]);
+                        const want = v[5] === 'all' ? crewOf(p.vt) : Number(v[5]) || crewOf(p.vt);
+                        const people = edu.key ? await peopleAt(p.building, edu.key) : [];
+                        const trained = people.filter((x) => x.free && x.has);
+                        p.training = v[4];
+                        if (trained.length >= want) {
+                            Object.assign(p, { stage: 'buy', key: edu.key, people: trained.slice(0, want).map((x) => x.pid) });
+                        } else if (!edu.key || !edu.school) {
+                            p.wait = 'wacht op een vrij klaslokaal';
+                            continue;
+                        } else {
+                            const learners = people.filter((x) => x.free && !x.has).slice(0, want - trained.length);
+                            if (learners.length < want - trained.length) { p.wait = 'te weinig vrij personeel om op te leiden'; continue; }
+                            const crew = trained.map((x) => x.pid);
+                            // At most 10 per class: the rest follows as soon as a classroom is free.
+                            const all = learners.map((x) => x.pid);
+                            const learnIds = all.slice(0, 10);
+                            const later = all.slice(10);
+                            const step = { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${p.caption} (voor ${v[0]}, terwijl de uitbreiding gebouwd wordt)`, cost: 0, need: p.need,
+                                run: () => startFull(step, data, edu, learnIds, p.vt, posOf(b)),
+                                check: async () => (await peopleAt(p.building, edu.key)).filter((x) => learnIds.includes(x.pid) && x.idle).length === 0,
+                                done: () => Object.assign(p, { stage: 'train', key: edu.key, people: [...crew, ...all], queue: later.length ? later : undefined, started: Date.now(), wait: null }) };
+                            return step;
+                        }
+                    }
+                }
                 if (p.stage === 'train' && p.queue && p.queue.length) {
                     // More people than one class holds: the rest goes as soon as a school
                     // has a free classroom. Whoever left meanwhile is replaced from the same building.
@@ -12463,10 +12529,11 @@ MKS.module({
                     const edu = await education(p.training);
                     if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; continue; }
                     const batch = p.queue.slice(0, Math.min(10, ctx.cfg.trainSeats));
-                    return { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
-                        run: () => startTraining(edu, batch),
+                    const step = { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
+                        run: () => startFull(step, data, edu, batch, p.vt, posOf(b)),
                         check: async () => (await peopleAt(p.building, p.key)).filter((x) => batch.includes(x.pid) && x.idle).length === 0,
                         done: () => { p.queue = p.queue.filter((pid) => !batch.includes(pid)); p.wait = null; p.started = Date.now(); } };
+                    return step;
                 }
                 if (p.stage === 'train') {
                     const people = await peopleAt(p.building, p.key);
@@ -12541,10 +12608,11 @@ MKS.module({
                 }
                 if (!group.length) continue;
                 const learnIds = group.flatMap((p) => p.people);
-                return { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
-                    run: () => startTraining(edu, learnIds),
+                const step = { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
+                    run: () => startFull(step, data, edu, learnIds, c.vt, posOf(b)),
                     check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
                     projects: group };
+                return step;
             }
             return null;
         }
@@ -12638,8 +12706,9 @@ MKS.module({
                 const gate = info.exts.find((e) => unlocks(e.text, c.vt));
                 if (gate) {
                     if (ctx.cfg.doExtensions && gate.cost) {
-                        return { label: `uitbreiding "${gate.text.slice(0, 40)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
-                            run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id) };
+                        return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
+                            run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id),
+                            projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, c.vt, c.name) };
                     }
                     reasons.push(`${b.caption}: uitbreiding nodig`);
                     continue;
@@ -12719,14 +12788,15 @@ MKS.module({
                         group.push(mk(ob, otrained.map((p) => p.pid), olearn.map((p) => p.pid)));
                         learnIds.push(...olearn.map((p) => p.pid));
                     }
-                    return {
+                    const step = {
                         label: `opleiding ${v[4]} voor ${learnIds.length} pers.: ${group.length} gebouw(en) met project`
                             + ` (voor ${group.length}× ${v[0]}, elk met eigen personeel)`
                             + `${group[0].queue ? `, ${group[0].queue.length} later zodra er een klaslokaal vrij is` : ''}`, cost: 0,
-                        run: () => startTraining(edu, learnIds),
+                        run: () => startFull(step, data, edu, learnIds, c.vt, c.at || posOf(b)),
                         check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
                         projects: group,
                     };
+                    return step;
                 }
                 if (full) return levelStep([]);
                 const buy = await buyAction(b, c, v, info, d);
@@ -12737,6 +12807,22 @@ MKS.module({
             return { skip: `${c.name} (${v[0]}): ${reasons.join('; ') || 'geen geschikt gebouw'}` };
         }
 
+        // "Drone Team Politie Drone Team Politie Voertuigen: DB-DRONE Parkeerplaatsen: ..."
+        const extName = (text) => {
+            const head = String(text).split(/\s(?:Voertuigen:|Parkeerplaatsen:|Biedt|Deze uitbreiding)/)[0].trim();
+            const half = head.slice(0, Math.floor(head.length / 2)).trim();
+            return half && head === `${half} ${half}` ? half : head;
+        };
+        const extVehicle = (text) => {
+            const list = (String(text).match(/Voertuigen:\s*(.+?)\s*(?:Parkeerplaatsen|$)/) || [])[1];
+            if (!list) return null;
+            for (const n of list.split(/,\s*|\s+en\s+/)) { const vt = vehiclesFor(n.trim())[0]; if (vt != null) return vt; }
+            return null;
+        };
+        // After buying an extension that brings a vehicle: a project that trains its crew
+        // now, while the extension is being built, then buys and links (see advanceProjects).
+        const prepProject = (b, vt, need) => (vt == null ? [] : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => c.types.includes(b.building_type))
@@ -12745,8 +12831,9 @@ MKS.module({
                 const info = await buildingInfo(b.id);
                 const ext = info.exts.find((e) => c.match.test(e.text));
                 if (ext && ext.cost && ctx.cfg.doExtensions) {
-                    return { label: `uitbreiding "${ext.text.slice(0, 40)}" in ${b.caption}`, cost: ext.cost,
-                        run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id) };
+                    return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
+                        run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
+                        projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, extVehicle(ext.text), c.name) };
                 }
             }
             return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
@@ -12994,6 +13081,11 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     state.cool[next.need] = Date.now() + 30 * 60000;
+                    if (next.cost) {
+                        state.bought = state.bought || {};
+                        const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
+                        list.push(Date.now());
+                    }
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
                     state.lastRound.result = 'gedaan';
@@ -13036,7 +13128,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007122823' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007124615' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13176,7 +13268,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007122823',
+                version: '1.7.0.20261007124615',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
