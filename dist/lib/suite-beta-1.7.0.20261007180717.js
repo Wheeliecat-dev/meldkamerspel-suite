@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007163636 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007180717 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007163636';
+    const VERSION = '1.7.0.20261007180717';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10402,9 +10402,9 @@ MKS.module({
             help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
                 + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
-        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
+        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 15000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
-                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
+                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. Alleen voor inzetten met minstens twee keer zoveel credits. 0 = niets vasthouden.' },
         { key: 'rareMax', label: 'Zeldzaam: hooguit zoveel vrij', type: 'number', default: 2, min: 0, max: 20, step: 1,
             help: 'Een voertuigsoort die de grote inzet nodig heeft en waarvan er zoveel of minder vrij zijn (of geen), wordt voor die inzet bewaard.' },
         { key: 'holdMin', label: 'Bewaren voor grote inzet', type: 'number', default: 20, min: 1, max: 120, step: 1, unit: 'min',
@@ -11490,7 +11490,9 @@ MKS.module({
                 for (const [hid, h] of holds) {
                     if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
                     if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
-                    if (hid === id || h.credits <= credits) continue;
+                    // Only worth it for a clearly bigger mission: twice the credits or more. A
+                    // 7,190 garage fire held units back from 6,000 missions for no gain.
+                    if (hid === id || h.credits < credits * 2) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
                         if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
                         out[k].need += v.need;
@@ -12011,6 +12013,10 @@ MKS.module({
         { key: 'doExtensions', label: 'Uitbreidingen kopen', type: 'bool', default: true },
         { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
+        { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
+            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op een echte post '
+                + 'ver van je andere van die soort brengt nieuwe inzetten. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
+        { key: 'growKm', label: 'Groeien tot', type: 'number', default: 60, min: 10, max: 300, step: 5, unit: 'km', help: 'Vanaf je meldkamer.' },
     ],
 
     run(ctx) {
@@ -13129,6 +13135,60 @@ MKS.module({
             return out;
         }
 
+        /* Growth: more buildings, more missions. Per kind (fire, police, ambulance) the
+         * free real post within growKm of the dispatch centre that is furthest from the
+         * own buildings of that kind (6 km at least), valued at the average weekly
+         * income per building. After building it, a project buys its first vehicle. */
+        // The small kinds (Brandweerkazerne (klein), Politieopkomstbureau (klein)) are
+        // cheaper: fewer parking spots, but more new areas for the money. Both go into the
+        // ranking; the better return wins, and one build per kind per 2 hours.
+        const GROW = [
+            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
+            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
+            { types: [3], same: [3, 13], vt: 16, name: 'ambulancepost' },
+        ];
+        async function planGrow(data) {
+            const out = [];
+            if (!ctx.cfg.doGrow || !ctx.cfg.doBuild) return out;
+            const rate = incomeRate();
+            if (!rate || !rate.perHour) return out;
+            const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
+            const value = (rate.perHour * 168) / withVehicles;
+            const posts = await postsNear(data.home);
+            const owned = data.buildings.map(posOf);
+            for (const g of GROW) {
+                const need = `Groei: ${g.name}`;
+                if ((state.cool[need] || 0) > Date.now()) continue;
+                const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
+                let best = null;
+                for (const p of posts) {
+                    if (p[2] !== CAT_OF[g.types[0]]) continue;
+                    const at = [p[0], p[1]];
+                    if (km(at, data.home) > ctx.cfg.growKm) continue;
+                    if (owned.some((o) => km(o, at) < 0.3)) continue;
+                    const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
+                    if (gap >= 6 && (!best || gap > best.gap)) best = { at, gap };
+                }
+                if (!best) continue;
+                for (const type of g.types) {
+                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                    if (plan.skip) { skipped.push(plan.skip); continue; }
+                    const run = plan.run;
+                    out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
+                        run: async () => {
+                            const before = new Set(data.buildings.map((b) => b.id));
+                            await run();
+                            state.cool[need] = Date.now() + 2 * 3600000;
+                            await sleep(1500);
+                            // Its first vehicle as a project: bought as soon as the game sells it.
+                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === type);
+                            if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
+                        } });
+                }
+            }
+            return out;
+        }
+
         // A new building of one of these types on the nearest free real post.
         const NO_NEW_BUILDING = new Set([6, 9, 21, 23, 24]); // trauma, police and SAR helicopters, military hangar, tow trucks
         async function planBuilding(c, buildTypes, why, data, maxKm = ctx.cfg.nearKm * 2, opts = {}) {
@@ -13297,6 +13357,7 @@ MKS.module({
                     }
                     updateBlocked();
                     for (const r of await planSchools(data)) ranking.push(r);
+                    for (const r of await planGrow(data)) ranking.push(r);
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
@@ -13326,7 +13387,7 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     // A new building: plan its vehicle again soon, not after half an hour.
-                    state.cool[next.need] = Date.now() + (next.newBuilding ? 5 : 30) * 60000;
+                    state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
                     if (next.cost) {
                         state.bought = state.bought || {};
                         const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
@@ -13374,7 +13435,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007163636' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007180717' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13449,7 +13510,7 @@ MKS.module({
     short: 'Log naar GitHub',
     icon: '📤',
     category: 'auto',
-    description: 'Zet elke paar minuten de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
+    description: 'Zet elk uur (instelbaar) de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
         + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel.',
     at: 'ready',
     frames: 'top',
@@ -13459,7 +13520,7 @@ MKS.module({
     settings: [
         { key: 'repo', label: 'Repository', type: 'text', default: '', placeholder: 'gebruiker/mks-logs', help: 'eigenaar/naam van een privé repository' },
         { key: 'file', label: 'Bestand', type: 'text', default: 'status.json' },
-        { key: 'intervalMin', label: 'Elke', type: 'number', default: 10, min: 2, max: 120, unit: 'min' },
+        { key: 'intervalMin', label: 'Elke', type: 'number', default: 60, min: 2, max: 240, unit: 'min' },
         { key: 'eventHours', label: 'Gebeurtenissen van de laatste', type: 'number', default: 24, min: 1, max: 168, unit: 'uur' },
     ],
 
@@ -13514,7 +13575,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007163636',
+                version: '1.7.0.20261007180717',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

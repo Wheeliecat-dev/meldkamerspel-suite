@@ -1172,10 +1172,13 @@ MKS.module({
          * free real post within growKm of the dispatch centre that is furthest from the
          * own buildings of that kind (6 km at least), valued at the average weekly
          * income per building. After building it, a project buys its first vehicle. */
+        // The small kinds (Brandweerkazerne (klein), Politieopkomstbureau (klein)) are
+        // cheaper: fewer parking spots, but more new areas for the money. Both go into the
+        // ranking; the better return wins, and one build per kind per 2 hours.
         const GROW = [
-            { type: 0, same: [0, 17], vt: 1, name: 'brandweerkazerne' },
-            { type: 5, same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { type: 3, same: [3, 13], vt: 16, name: 'ambulancepost' },
+            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
+            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
+            { types: [3], same: [3, 13], vt: 16, name: 'ambulancepost' },
         ];
         async function planGrow(data) {
             const out = [];
@@ -1192,7 +1195,7 @@ MKS.module({
                 const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
                 let best = null;
                 for (const p of posts) {
-                    if (p[2] !== CAT_OF[g.type]) continue;
+                    if (p[2] !== CAT_OF[g.types[0]]) continue;
                     const at = [p[0], p[1]];
                     if (km(at, data.home) > ctx.cfg.growKm) continue;
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
@@ -1200,19 +1203,21 @@ MKS.module({
                     if (gap >= 6 && (!best || gap > best.gap)) best = { at, gap };
                 }
                 if (!best) continue;
-                const plan = await planBuilding({ name: need, at: best.at }, [g.type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
-                if (plan.skip) { skipped.push(plan.skip); continue; }
-                const run = plan.run;
-                out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
-                    run: async () => {
-                        const before = new Set(data.buildings.map((b) => b.id));
-                        await run();
-                        state.cool[need] = Date.now() + 2 * 3600000;
-                        await sleep(1500);
-                        // Its first vehicle as a project: bought as soon as the game sells it.
-                        const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === g.type);
-                        if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
-                    } });
+                for (const type of g.types) {
+                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                    if (plan.skip) { skipped.push(plan.skip); continue; }
+                    const run = plan.run;
+                    out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
+                        run: async () => {
+                            const before = new Set(data.buildings.map((b) => b.id));
+                            await run();
+                            state.cool[need] = Date.now() + 2 * 3600000;
+                            await sleep(1500);
+                            // Its first vehicle as a project: bought as soon as the game sells it.
+                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === type);
+                            if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
+                        } });
+                }
             }
             return out;
         }
