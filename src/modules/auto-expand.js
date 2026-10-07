@@ -850,6 +850,15 @@ MKS.module({
                 const info = await buildingInfo(b.id);
                 const gate = info.exts.find((e) => unlocks(e.text, c.vt));
                 if (gate) {
+                    // An extension takes days to build. When the vehicle has a building type of
+                    // its own (an ambulance post for an ambulance), a new one of those is ready
+                    // at once: build that instead (the "Ambulance standplaats" at Voorthuizen
+                    // would have kept the ambulance waiting for days).
+                    const own = v[3].find((t) => t !== b.building_type && CAT_OF[t] && !NO_NEW_BUILDING.has(t) && ![17, 18].includes(t));
+                    if (own != null && ctx.cfg.doBuild && c.at) {
+                        const nb = await planBuilding(c, [own], `voor ${v[0]}, direct klaar in plaats van uitbreiding in ${b.caption}`, data);
+                        if (!nb.skip) return nb;
+                    }
                     if (staffLeft(b, data) < crewOf(c.vt)) { reasons.push(`${b.caption}: uitbreiding nodig, maar personeel ${Math.max(0, staffLeft(b, data))}/${crewOf(c.vt)} over`); continue; }
                     if (ctx.cfg.doExtensions && gate.cost) {
                         return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
@@ -1160,7 +1169,7 @@ MKS.module({
             if (!btn) return { skip: `${c.name}: gebouwtype ${type} niet te bouwen` };
             const cost = num(btn.value);
             return {
-                label: `nieuw gebouw "${bname}" (${posts[0].d.toFixed(1)} km, ${why})`, cost,
+                label: `nieuw gebouw "${bname}" (${posts[0].d.toFixed(1)} km, ${why})`, cost, newBuilding: true,
                 run: () => {
                     const fd = new FormData(form);
                     fd.set('building[building_type]', String(type));
@@ -1333,7 +1342,8 @@ MKS.module({
                 if (await next.check()) {
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
-                    state.cool[next.need] = Date.now() + 30 * 60000;
+                    // A new building: plan its vehicle again soon, not after half an hour.
+                    state.cool[next.need] = Date.now() + (next.newBuilding ? 5 : 30) * 60000;
                     if (next.cost) {
                         state.bought = state.bought || {};
                         const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
