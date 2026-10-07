@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007160049 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007162715 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007160049';
+    const VERSION = '1.7.0.20261007162715';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10429,7 +10429,7 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
             help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
@@ -10854,6 +10854,18 @@ MKS.module({
                 // The game finishes its vehicle table (distances, AAO data) on load.
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
+                // The window lists only the nearest vehicles; "Laad ontbrekende voertuigen"
+                // adds the rest. Without it, free horse trucks 26.6 km away were never seen
+                // ("te weinig: 5 Police Horses" with two full trucks free in Harderwijk).
+                const shownEl = (el) => el.style.display !== 'none' && getComputedStyle(el).display !== 'none' && !el.closest('[style*="display: none"]');
+                for (let i = 0; i < 3; i++) {
+                    const more = document.querySelector('a[href*="/missing_vehicles"]');
+                    if (!more || !shownEl(more)) break;
+                    const before = document.querySelectorAll('input.vehicle_checkbox').length;
+                    more.click();
+                    for (let t = 0; t < 40 && document.querySelectorAll('input.vehicle_checkbox').length === before; t++) await sleep(200);
+                    await sleep(300);
+                }
 
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
@@ -11611,11 +11623,16 @@ MKS.module({
             const PATIENT_VT = new Set(Object.entries(VT_NAMES)
                 .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
             const sentBack = new Map(); // mission id -> when we last looked
+            // A full bar is not enough: a red (progress-bar-danger) bar is also 100% wide when
+            // units are missing (Rietkapbrand, 8 TS short, had 40 units sent back). Only a
+            // full bar that is not red counts as done.
+            const isDone = (bar) => !!bar && parseFloat(bar.style.width) >= 100
+                && !/progress-bar-(danger|warning)/.test(bar.className) && /progress-bar-success/.test(bar.className);
             async function sendBackDone() {
                 if (!ctx.cfg.sendBack) return;
                 const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
                     const bar = document.getElementById(`mission_bar_${e.getAttribute('mission_id')}`);
-                    return bar && parseFloat(bar.style.width) >= 100;
+                    return isDone(bar);
                 });
                 let looked = 0;
                 for (const e of done) {
@@ -11628,7 +11645,9 @@ MKS.module({
                         if (!r.ok) continue;
                         const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
                         const bar = doc.getElementById(`mission_bar_${id}`);
-                        if (!bar || parseFloat(bar.style.width) < 100) continue;
+                        if (!isDone(bar)) continue;
+                        // Anything still asked for in the red box: the mission is not done.
+                        if ((doc.getElementById('missing_text')?.textContent || '').trim()) continue;
                         if (doc.querySelector('[id*="prisoner"], [id*="gefangene"], a[href*="/gefangener/"]') || /arrestant/i.test(doc.getElementById('missing_text')?.textContent || '')) continue;
                         const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
                             .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
@@ -12796,6 +12815,7 @@ MKS.module({
                 const info = await buildingInfo(b.id);
                 const gate = info.exts.find((e) => unlocks(e.text, c.vt));
                 if (gate) {
+                    if (staffLeft(b, data) < crewOf(c.vt)) { reasons.push(`${b.caption}: uitbreiding nodig, maar personeel ${Math.max(0, staffLeft(b, data))}/${crewOf(c.vt)} over`); continue; }
                     if (ctx.cfg.doExtensions && gate.cost) {
                         return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
                             run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id),
@@ -12935,20 +12955,43 @@ MKS.module({
         const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
             : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
 
+        // Staff a building still has for one more vehicle: its people minus the crews of
+        // its vehicles and of the vehicles its running projects will buy.
+        function staffLeft(b, data) {
+            const crews = data.vehicles.filter((x) => x.building_id === b.id).reduce((sum, x) => sum + crewOf(x.vehicle_type), 0);
+            const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
+            return (b.personal_count || 0) - crews - planned;
+        }
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => c.types.includes(b.building_type))
                 .map((b) => ({ b, d: km(posOf(b), ref) })).sort((a, b) => a.d - b.d).slice(0, tries);
-            for (const { b } of own) {
+            const why = [];
+            const fits = [];
+            for (const { b, d } of own) {
                 const info = await buildingInfo(b.id);
                 const ext = info.exts.find((e) => c.match.test(e.text));
-                if (ext && ext.cost && ctx.cfg.doExtensions) {
-                    return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
-                        run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
-                        projects: prepProject(b, extVehicle(ext.text), c.name) };
-                }
+                if (!ext || !ext.cost || !ctx.cfg.doExtensions) continue;
+                const vt = extVehicle(ext.text);
+                // The vehicle needs people: this building must have them to spare. Four
+                // extensions went to Veenendaal (15 people needed) because it was nearest.
+                const left = staffLeft(b, data);
+                if (vt != null && left < crewOf(vt)) { why.push(`${b.caption}: personeel ${Math.max(0, left)}/${crewOf(vt)} over`); continue; }
+                // No parking of its own ("Maakt het mogelijk om STH voertuigen te kopen."):
+                // the vehicles use normal spots, so a full building at its top level is no use.
+                if (vt != null && !/Parkeerplaatsen/i.test(ext.text) && info.used != null && info.max != null && info.used >= info.max
+                    && !(ctx.cfg.doLevels && await nextLevel(b.id))) { why.push(`${b.caption}: vol, hoogste level`); continue; }
+                fits.push({ b, d, ext, vt, left });
             }
-            return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
+            // Among the buildings that can take it: the most spare people first, then the nearest.
+            fits.sort((x, y) => (y.left - x.left) || (x.d - y.d));
+            const f = fits[0];
+            if (f) {
+                return { label: `uitbreiding "${extName(f.ext.text)}" in ${f.b.caption}`, cost: f.ext.cost,
+                    run: () => hit(f.ext.href, true), check: async () => !(await buildingInfo(f.b.id)).exts.some((e) => e.id === f.ext.id),
+                    projects: prepProject(f.b, f.vt, c.name) };
+            }
+            return { skip: `${c.name}: ${why.join('; ') || 'geen gebouw in de buurt om uit te breiden'}` };
         }
 
         // New mission types: an extension where one can be bought (cheaper), else a
@@ -12978,7 +13021,7 @@ MKS.module({
                     else state.cool[c.name] = Date.now() + 24 * 3600000;
                 }
                 if (types.length) {
-                    const ext = await planExtension({ ...c, types, match: c.def.ext, at: data.home }, data, 6);
+                    const ext = await planExtension({ ...c, types, match: c.def.ext, at: data.home }, data, 12);
                     if (!ext.skip) return { ...ext, label: `${ext.label} (${why})` };
                     if (!c.def.types || !ctx.cfg.doBuild) return { skip: `${c.name}: alle ${ext.skip.split(': ').pop()}` };
                 }
@@ -13303,7 +13346,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007160049' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007162715' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13443,7 +13486,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007160049',
+                version: '1.7.0.20261007162715',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

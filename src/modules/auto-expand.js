@@ -850,6 +850,7 @@ MKS.module({
                 const info = await buildingInfo(b.id);
                 const gate = info.exts.find((e) => unlocks(e.text, c.vt));
                 if (gate) {
+                    if (staffLeft(b, data) < crewOf(c.vt)) { reasons.push(`${b.caption}: uitbreiding nodig, maar personeel ${Math.max(0, staffLeft(b, data))}/${crewOf(c.vt)} over`); continue; }
                     if (ctx.cfg.doExtensions && gate.cost) {
                         return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
                             run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id),
@@ -989,20 +990,43 @@ MKS.module({
         const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
             : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
 
+        // Staff a building still has for one more vehicle: its people minus the crews of
+        // its vehicles and of the vehicles its running projects will buy.
+        function staffLeft(b, data) {
+            const crews = data.vehicles.filter((x) => x.building_id === b.id).reduce((sum, x) => sum + crewOf(x.vehicle_type), 0);
+            const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
+            return (b.personal_count || 0) - crews - planned;
+        }
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => c.types.includes(b.building_type))
                 .map((b) => ({ b, d: km(posOf(b), ref) })).sort((a, b) => a.d - b.d).slice(0, tries);
-            for (const { b } of own) {
+            const why = [];
+            const fits = [];
+            for (const { b, d } of own) {
                 const info = await buildingInfo(b.id);
                 const ext = info.exts.find((e) => c.match.test(e.text));
-                if (ext && ext.cost && ctx.cfg.doExtensions) {
-                    return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
-                        run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
-                        projects: prepProject(b, extVehicle(ext.text), c.name) };
-                }
+                if (!ext || !ext.cost || !ctx.cfg.doExtensions) continue;
+                const vt = extVehicle(ext.text);
+                // The vehicle needs people: this building must have them to spare. Four
+                // extensions went to Veenendaal (15 people needed) because it was nearest.
+                const left = staffLeft(b, data);
+                if (vt != null && left < crewOf(vt)) { why.push(`${b.caption}: personeel ${Math.max(0, left)}/${crewOf(vt)} over`); continue; }
+                // No parking of its own ("Maakt het mogelijk om STH voertuigen te kopen."):
+                // the vehicles use normal spots, so a full building at its top level is no use.
+                if (vt != null && !/Parkeerplaatsen/i.test(ext.text) && info.used != null && info.max != null && info.used >= info.max
+                    && !(ctx.cfg.doLevels && await nextLevel(b.id))) { why.push(`${b.caption}: vol, hoogste level`); continue; }
+                fits.push({ b, d, ext, vt, left });
             }
-            return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
+            // Among the buildings that can take it: the most spare people first, then the nearest.
+            fits.sort((x, y) => (y.left - x.left) || (x.d - y.d));
+            const f = fits[0];
+            if (f) {
+                return { label: `uitbreiding "${extName(f.ext.text)}" in ${f.b.caption}`, cost: f.ext.cost,
+                    run: () => hit(f.ext.href, true), check: async () => !(await buildingInfo(f.b.id)).exts.some((e) => e.id === f.ext.id),
+                    projects: prepProject(f.b, f.vt, c.name) };
+            }
+            return { skip: `${c.name}: ${why.join('; ') || 'geen gebouw in de buurt om uit te breiden'}` };
         }
 
         // New mission types: an extension where one can be bought (cheaper), else a
@@ -1032,7 +1056,7 @@ MKS.module({
                     else state.cool[c.name] = Date.now() + 24 * 3600000;
                 }
                 if (types.length) {
-                    const ext = await planExtension({ ...c, types, match: c.def.ext, at: data.home }, data, 6);
+                    const ext = await planExtension({ ...c, types, match: c.def.ext, at: data.home }, data, 12);
                     if (!ext.skip) return { ...ext, label: `${ext.label} (${why})` };
                     if (!c.def.types || !ctx.cfg.doBuild) return { skip: `${c.name}: alle ${ext.skip.split(': ').pop()}` };
                 }
