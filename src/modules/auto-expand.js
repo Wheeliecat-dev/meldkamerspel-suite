@@ -1012,11 +1012,55 @@ MKS.module({
         /* ========================================================================
          * ROUND — hiring, then one purchase if the credits allow it.
          * ==================================================================== */
+        /* Income per hour, for when a saved-for step can be paid: the samples of the
+         * Inkomsten module ([seconds, balance, total earned], shared GM storage) over
+         * the last 7 days per wall-clock hour, so offline hours count too. Without
+         * them, its own samples of the total earned (one per round). */
+        function incomeRate() {
+            const from = Date.now() / 1000 - 7 * 86400;
+            let samples = [];
+            try { samples = (JSON.parse(GM_getValue('incomeTracker.samples.v1', '[]')) || []).filter((x) => x[0] >= from); } catch (e) { /* none */ }
+            let src = 'Inkomsten';
+            if (samples.length < 2) { samples = (state.earn || []).filter((x) => x[0] >= from).map((x) => [x[0], 0, x[1]]); src = 'eigen metingen'; }
+            if (samples.length < 2) return null;
+            const a = samples[0];
+            const b = samples[samples.length - 1];
+            const hours = (b[0] - a[0]) / 3600;
+            if (hours < 1) return null;
+            return { perHour: Math.max(0, (b[2] - a[2]) / hours), hours, src };
+        }
+        function recordEarn(total) {
+            if (!Number.isFinite(Number(total))) return;
+            state.earn = state.earn || [];
+            const now = Math.floor(Date.now() / 1000);
+            const last = state.earn[state.earn.length - 1];
+            if (last && now - last[0] < 600) return;
+            state.earn.push([now, Number(total)]);
+            if (state.earn.length > 1100) state.earn.splice(0, state.earn.length - 1100);
+        }
+        // How long until "cost" can be paid with the buffer kept: null = now.
+        function etaFor(cost, credits) {
+            const missing = ctx.cfg.buffer + cost - credits;
+            if (missing <= 0) return { now: true };
+            const rate = incomeRate();
+            if (!rate || !rate.perHour) return { unknown: true, missing };
+            const ms = (missing / rate.perHour) * 3600000;
+            return { ms, at: Date.now() + ms, missing };
+        }
+        function etaText(e) {
+            if (!e || e.now) return 'nu';
+            if (e.unknown) return 'onbekend';
+            const m = Math.round(e.ms / 60000);
+            const span = m < 60 ? `${m} min` : m < 48 * 60 ? `${Math.floor(m / 60)} u ${m % 60} min` : `${Math.round(m / 1440)} dagen`;
+            const at = new Date(e.at).toLocaleString('nl-NL', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+            return `~${span} (${at})`;
+        }
+
         async function loadData() {
             const [buildings, vehicles, credits] = await Promise.all([api('/api/buildings'), api('/api/vehicles'), api('/api/credits')]);
             const byId = Object.fromEntries(buildings.map((b) => [b.id, b]));
             const ls = buildings.find((b) => b.building_type === 1) || buildings[0];
-            return { buildings, vehicles, byId, credits: credits.credits_user_current, home: ls ? posOf(ls) : [52.1, 5.3] };
+            return { buildings, vehicles, byId, credits: credits.credits_user_current, total: credits.credits_user_total, home: ls ? posOf(ls) : [52.1, 5.3] };
         }
 
         async function round() {
@@ -1036,6 +1080,7 @@ MKS.module({
                 const data = await loadData();
                 if (ctx.cfg.doHire) await fixHiring(data);
                 const spendable = data.credits - ctx.cfg.buffer;
+                recordEarn(data.total);
                 skipped = [];
                 eduCache = null;
                 // Running projects first: their free steps now, their paid step before new needs.
@@ -1058,19 +1103,23 @@ MKS.module({
                         ranking.push({ need: c.name, value: c.value, ...plan, ratio: c.value / Math.max(plan.cost, 2000) });
                     }
                     ranking.sort((a, b) => b.ratio - a.ratio);
+                    for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
                 state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped,
                     spots: { scanned: Object.keys(state.spots || {}).length, free: Object.values(state.spots || {}).filter((f) => f.max > f.used).length }, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
-                    ranking: ranking.map(({ need, label, cost, value, ratio }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000 })) };
+                    ranking: ranking.map(({ need, label, cost, value, ratio, eta }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000, eta: etaText(eta) })),
+                    income: incomeRate() };
                 if (!next) {
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }
                 if (next.cost > spendable) {
                     state.lastRound.result = `spaart: ${next.cost} nodig, ${Math.max(0, spendable)} vrij boven de buffer`;
-                    ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer.`, { tone: 'idle' });
+                    const eta = etaText(etaFor(next.cost, data.credits));
+                    state.lastRound.eta = eta;
+                    ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer. Genoeg over ${eta}.`, { tone: 'idle' });
                     return;
                 }
                 ctx.status(`Bezig: ${next.label}`, { tone: 'busy', dock: true });
@@ -1147,11 +1196,12 @@ MKS.module({
                 ${ranking.length ? `<h4 class="mks-h">Afweging (beste rendement eerst)</h4>
                     <p class="mks-note">Waarde = credits van inzetten die hierdoor misten in 7 dagen (speciale voertuigen ×${ctx.cfg.specialWeight}),
                     of van nieuwe meldingsoorten. Rendement = waarde per uitgegeven credit.</p>
-                    <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Stap</th><th>Waarde</th><th>Kosten</th><th>Rendement</th></tr></thead><tbody>
+                    <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Stap</th><th>Waarde</th><th>Kosten</th><th>Rendement</th><th>Te betalen</th></tr></thead><tbody>
                     ${ranking.map((r) => `<tr><td>${esc(r.label)}</td><td class="mono">${ctx.nl(r.value)}</td><td class="mono">${ctx.nl(r.cost)}</td>
-                        <td class="mono">${r.cost ? r.ratio.toFixed(2) : 'gratis'}</td></tr>`).join('')}</tbody></table></div>` : ''}
+                        <td class="mono">${r.cost ? r.ratio.toFixed(2) : 'gratis'}</td><td class="mono">${r.cost ? esc(etaText(r.eta)) : 'nu'}</td></tr>`).join('')}</tbody></table></div>` : ''}
                 <h4 class="mks-h">Volgende stap</h4>
                 <p class="mks-note">${next ? `${esc(next.label)} — ${ctx.nl(next.cost)} credits` : 'Nog niets gepland.'}</p>
+                ${(() => { const r = incomeRate(); return `<p class="mks-note">Inkomen: ${r ? `${ctx.nl(r.perHour)} credits per uur (gemiddeld over ${Math.round(r.hours)} u, ${esc(r.src)})` : 'nog onbekend (zet Inkomsten aan, of wacht een uur)'}. "Te betalen" = wanneer er genoeg is met de buffer erbij.</p>`; })()}
                 ${skipped.length ? `<h4 class="mks-h">Overgeslagen</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
                     ${skipped.map((s) => `<tr><td>${esc(s)}</td></tr>`).join('')}</tbody></table></div>` : ''}
                 ${wishes.length ? `<h4 class="mks-h">Opleidingen nodig</h4>
