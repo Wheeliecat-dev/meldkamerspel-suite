@@ -205,7 +205,7 @@ MKS.module({
             'signalisatie voertuigen': 83, 'signalisatievoertuig': 83, 'tankautospuiten (terreinvaardig)': 6, 'schuimblusvoertuig': 130,
             'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
             'strandvoertuigen (quad, dat-rb of khv)': 65, 'bereden brigade (paarden)': 73, 'politie helikopters': 28, 'politie helikopter': 28,
-            'dienstvoertuigen usar': 92, 'politie noodhulp': 22,
+            'dienstvoertuigen usar': 92, 'politie noodhulp': 22, 'me-ae': 64, 'vw-bb': 73, 'bb-a': 74,
         };
         const BY_NAME = {};
         for (const [id, v] of Object.entries(VT)) BY_NAME[norm(v[0])] = Number(id);
@@ -613,6 +613,37 @@ MKS.module({
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
                     continue;
                 }
+                if (p.stage === 'prep') {
+                    // Extension bought: crew first (in parallel with the building work).
+                    const v = VT[p.vt];
+                    if (!v || !v[4]) { p.stage = 'buy'; p.people = []; }
+                    else {
+                        const edu = await education(v[4]);
+                        const want = v[5] === 'all' ? crewOf(p.vt) : Number(v[5]) || crewOf(p.vt);
+                        const people = edu.key ? await peopleAt(p.building, edu.key) : [];
+                        const trained = people.filter((x) => x.free && x.has);
+                        p.training = v[4];
+                        if (trained.length >= want) {
+                            Object.assign(p, { stage: 'buy', key: edu.key, people: trained.slice(0, want).map((x) => x.pid) });
+                        } else if (!edu.key || !edu.school) {
+                            p.wait = 'wacht op een vrij klaslokaal';
+                            continue;
+                        } else {
+                            const learners = people.filter((x) => x.free && !x.has).slice(0, want - trained.length);
+                            if (learners.length < want - trained.length) { p.wait = 'te weinig vrij personeel om op te leiden'; continue; }
+                            const crew = trained.map((x) => x.pid);
+                            // At most 10 per class: the rest follows as soon as a classroom is free.
+                            const all = learners.map((x) => x.pid);
+                            const learnIds = all.slice(0, 10);
+                            const later = all.slice(10);
+                            const step = { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${p.caption} (voor ${v[0]}, terwijl de uitbreiding gebouwd wordt)`, cost: 0, need: p.need,
+                                run: () => startFull(step, data, edu, learnIds, p.vt, posOf(b)),
+                                check: async () => (await peopleAt(p.building, edu.key)).filter((x) => learnIds.includes(x.pid) && x.idle).length === 0,
+                                done: () => Object.assign(p, { stage: 'train', key: edu.key, people: [...crew, ...all], queue: later.length ? later : undefined, started: Date.now(), wait: null }) };
+                            return step;
+                        }
+                    }
+                }
                 if (p.stage === 'train' && p.queue && p.queue.length) {
                     // More people than one class holds: the rest goes as soon as a school
                     // has a free classroom. Whoever left meanwhile is replaced from the same building.
@@ -808,8 +839,9 @@ MKS.module({
                 const gate = info.exts.find((e) => unlocks(e.text, c.vt));
                 if (gate) {
                     if (ctx.cfg.doExtensions && gate.cost) {
-                        return { label: `uitbreiding "${gate.text.slice(0, 40)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
-                            run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id) };
+                        return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
+                            run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id),
+                            projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, c.vt, c.name) };
                     }
                     reasons.push(`${b.caption}: uitbreiding nodig`);
                     continue;
@@ -908,6 +940,22 @@ MKS.module({
             return { skip: `${c.name} (${v[0]}): ${reasons.join('; ') || 'geen geschikt gebouw'}` };
         }
 
+        // "Drone Team Politie Drone Team Politie Voertuigen: DB-DRONE Parkeerplaatsen: ..."
+        const extName = (text) => {
+            const head = String(text).split(/\s(?:Voertuigen:|Parkeerplaatsen:|Biedt|Deze uitbreiding)/)[0].trim();
+            const half = head.slice(0, Math.floor(head.length / 2)).trim();
+            return half && head === `${half} ${half}` ? half : head;
+        };
+        const extVehicle = (text) => {
+            const list = (String(text).match(/Voertuigen:\s*(.+?)\s*(?:Parkeerplaatsen|$)/) || [])[1];
+            if (!list) return null;
+            for (const n of list.split(/,\s*|\s+en\s+/)) { const vt = vehiclesFor(n.trim())[0]; if (vt != null) return vt; }
+            return null;
+        };
+        // After buying an extension that brings a vehicle: a project that trains its crew
+        // now, while the extension is being built, then buys and links (see advanceProjects).
+        const prepProject = (b, vt, need) => (vt == null ? [] : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => c.types.includes(b.building_type))
@@ -916,8 +964,9 @@ MKS.module({
                 const info = await buildingInfo(b.id);
                 const ext = info.exts.find((e) => c.match.test(e.text));
                 if (ext && ext.cost && ctx.cfg.doExtensions) {
-                    return { label: `uitbreiding "${ext.text.slice(0, 40)}" in ${b.caption}`, cost: ext.cost,
-                        run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id) };
+                    return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
+                        run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
+                        projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, extVehicle(ext.text), c.name) };
                 }
             }
             return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
