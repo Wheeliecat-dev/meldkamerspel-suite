@@ -595,7 +595,9 @@ MKS.module({
                     // Most fields are "1", some carry a number (police_horse_count = horses on board).
                     const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]`
                         : `input.vehicle_checkbox[${CSS.escape(k)}]:not([${CSS.escape(k)}="0"])`;
-                    avail[k] = new Set([...document.querySelectorAll(sel)].map((c) => c.value)).size;
+                    const boxes = new Map([...document.querySelectorAll(sel)].map((c) => [c.value, c]));
+                    // Horses: the sum over the trucks (one per rider), not the number of trucks.
+                    avail[k] = k === 'police_horse_count' ? [...boxes.values()].reduce((s, c) => s + (Number(c.getAttribute(k)) || 0), 0) : boxes.size;
                 }
                 // Held for a bigger mission: only if taking ours would leave too few for it.
                 // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
@@ -1293,7 +1295,8 @@ MKS.module({
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
-                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined });
+                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
+                            ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell') updateHold(id, name, credits, res);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.

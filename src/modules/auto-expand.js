@@ -971,13 +971,14 @@ MKS.module({
                     next = ranking[0] || null;
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
-                state.lastRound = { at: Date.now(), skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
+                state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
                     ranking: ranking.map(({ need, label, cost, value, ratio }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000 })) };
                 if (!next) {
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }
                 if (next.cost > spendable) {
+                    state.lastRound.result = `spaart: ${next.cost} nodig, ${Math.max(0, spendable)} vrij boven de buffer`;
                     ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer.`, { tone: 'idle' });
                     return;
                 }
@@ -992,6 +993,7 @@ MKS.module({
                     state.cool[next.need] = Date.now() + 30 * 60000;
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
+                    state.lastRound.result = 'gedaan';
                     // Training started: a new project. Vehicle bought for trained people
                     // (now, or the buy step of a project): find it and assign them next.
                     if (next.done) next.done();
@@ -1009,6 +1011,7 @@ MKS.module({
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
                     addLog(`niet gelukt: ${next.label}`, 'error');
+                    if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
                 }
             } catch (e) {

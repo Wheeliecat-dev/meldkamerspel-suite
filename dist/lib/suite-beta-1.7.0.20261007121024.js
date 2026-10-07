@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007113509 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007121024 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007113509';
+    const VERSION = '1.7.0.20261007121024';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10736,7 +10736,13 @@ MKS.module({
                     go(release, { mode: 'release', dest: kind === 'cell' ? 'gevangenen vrijgelaten' : 'patiënt niet vervoerd', unknownNeeds: [need] });
                     return;
                 }
-                report('skip', { reason: `geen passende ${kind === 'cell' ? 'cel' : 'ziekenhuis'} (${reasons})`, unknownNeeds: [need] });
+                // No candidates at all: keep what the page showed, to find out why from the log.
+                const page = all.length ? undefined : {
+                    alert: (document.querySelector('.alert')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+                    links: [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')).filter((h) => /patient|gefangene|transport/i.test(h)).slice(0, 8),
+                    buttons: [...document.querySelectorAll('#h2_sprechwunsch ~ * a.btn, .btn-group a.btn')].map((a) => a.textContent.replace(/\s+/g, ' ').trim().slice(0, 40)).slice(0, 8),
+                };
+                report('skip', { reason: `geen passende ${kind === 'cell' ? 'cel' : 'ziekenhuis'} (${reasons})`, unknownNeeds: [need], page });
             } catch (e) {
                 ctx.err(e);
                 report('error', { reason: e.message || String(e) });
@@ -10944,7 +10950,9 @@ MKS.module({
                     // Most fields are "1", some carry a number (police_horse_count = horses on board).
                     const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]`
                         : `input.vehicle_checkbox[${CSS.escape(k)}]:not([${CSS.escape(k)}="0"])`;
-                    avail[k] = new Set([...document.querySelectorAll(sel)].map((c) => c.value)).size;
+                    const boxes = new Map([...document.querySelectorAll(sel)].map((c) => [c.value, c]));
+                    // Horses: the sum over the trucks (one per rider), not the number of trucks.
+                    avail[k] = k === 'police_horse_count' ? [...boxes.values()].reduce((s, c) => s + (Number(c.getAttribute(k)) || 0), 0) : boxes.size;
                 }
                 // Held for a bigger mission: only if taking ours would leave too few for it.
                 // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
@@ -11309,7 +11317,7 @@ MKS.module({
                 if (curPos) {
                     t.pos = t.pos || [];
                     t.pos.push([...curPos, Date.now(), curCredits || 0]);
-                    if (t.pos.length > 60) t.pos.shift();
+                    if (t.pos.length > 200) t.pos.shift();
                 }
             }
 
@@ -11550,7 +11558,7 @@ MKS.module({
                     curPos = null;
                     curCredits = 0;
                     recordResult(res, `v${vid}`, v.caption);
-                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason });
+                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason, page: res.page });
                     if (res.result === 'sent' || res.result === 'unconfirmed') {
                         stats.transports++;
                         errorStreak = 0;
@@ -11642,7 +11650,8 @@ MKS.module({
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
-                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined });
+                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
+                            ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell') updateHold(id, name, credits, res);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
@@ -12234,7 +12243,9 @@ MKS.module({
         function value7d(t) {
             const since = Date.now() - 7 * 86400000;
             const recent = (t.pos || []).filter((p) => p[2] >= since);
-            if (recent.some((p) => p.length > 3)) return recent.reduce((s, p) => s + (p[3] || 0), 0);
+            // Places recorded before credits were tracked (or with unknown credits) count
+            // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
+            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
             return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2);
         }
@@ -12459,7 +12470,7 @@ MKS.module({
                 if (p.stage === 'train') {
                     const people = await peopleAt(p.building, p.key);
                     const ready = p.people.every((pid) => people.find((x) => x.pid === pid)?.has);
-                    if (ready) { p.stage = 'buy'; addLog(`opleiding klaar: ${p.training} in ${p.caption}`, 'idle'); }
+                    if (ready) { p.stage = p.fill ? 'assign' : 'buy'; p.assignTries = 0; addLog(`opleiding klaar: ${p.training} in ${p.caption}`, 'idle'); }
                 }
                 if (p.stage === 'assign') {
                     if (await assignPeople(p.vehicle, p.people)) {
@@ -12487,12 +12498,66 @@ MKS.module({
             return null;
         }
 
+        // Vehicles whose capacity is their crew: a horse truck carries one horse per
+        // rider (tested: 6 trucks with 1 person each count as 6 Police Horses).
+        // Filling the trucks you have is cheaper than buying more.
+        const FILL_VT = { 73: 4 };
+        async function planFill(c, data) {
+            const v = VT[c.vt];
+            const max = FILL_VT[c.vt];
+            const edu = await education(v[4]);
+            if (!edu.key) return null;
+            const filling = new Set(projects().filter((p) => p.fill).map((p) => String(p.vehicle)));
+            const ref = c.at || data.home;
+            const trucks = data.vehicles.filter((x) => x.vehicle_type === c.vt && (x.assigned_personnel_count || 0) < max && !filling.has(String(x.id)))
+                .map((x) => ({ x, b: data.byId[x.building_id] })).filter((t) => t.b)
+                .sort((a, b) => km(posOf(a.b), ref) - km(posOf(b.b), ref));
+            if (!trucks.length) return null;
+            // Trained riders already free in a truck's building: link them now (free).
+            for (const { x, b } of trucks) {
+                const trained = (await peopleAt(b.id, edu.key)).filter((p) => p.free && p.has).slice(0, max - (x.assigned_personnel_count || 0));
+                if (!trained.length) continue;
+                let ok = false;
+                return { label: `${trained.length} ruiter(s) erbij op ${x.caption} in ${b.caption} (${x.assigned_personnel_count || 0} → ${(x.assigned_personnel_count || 0) + trained.length} paarden)`, cost: 0,
+                    run: async () => { ok = await assignPeople(x.id, trained.map((p) => p.pid)); }, check: async () => ok };
+            }
+            // Otherwise train free people of the truck's own building, several trucks of one
+            // building in one class; each truck is a project that links them when done.
+            if (!edu.school) return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` };
+            const seats = Math.min(10, ctx.cfg.trainSeats);
+            for (const { b } of trucks) {
+                const here = trucks.filter((t) => t.b.id === b.id);
+                const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has);
+                const group = [];
+                let used = 0;
+                for (const { x } of here) {
+                    const n = Math.min(max - (x.assigned_personnel_count || 0), free.length - used, seats - used);
+                    if (n <= 0) break;
+                    const pids = free.slice(used, used + n).map((p) => p.pid);
+                    used += n;
+                    group.push({ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key, training: v[4],
+                        people: pids, vehicle: x.id, fill: true, started: Date.now() });
+                }
+                if (!group.length) continue;
+                const learnIds = group.flatMap((p) => p.people);
+                return { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
+                    run: () => startTraining(edu, learnIds),
+                    check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
+                    projects: group };
+            }
+            return null;
+        }
+
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
             c.vt = c.vts.find((id) => VT[id] && VT[id][3].some((t) => types.has(t))) ?? c.vts[0];
             const v = VT[c.vt];
             if (!v) return { skip: `${c.name}: onbekend voertuig` };
+            if (FILL_VT[c.vt] && ctx.cfg.doVehicles) {
+                const fill = await planFill(c, data);
+                if (fill) return fill;
+            }
             if (v[4] === '?') return { skip: `${c.name}: opleiding voor ${v[0]} onbekend` };
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => v[3].includes(b.building_type) && b.enabled !== false)
@@ -12769,13 +12834,14 @@ MKS.module({
                     next = ranking[0] || null;
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
-                state.lastRound = { at: Date.now(), skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
+                state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
                     ranking: ranking.map(({ need, label, cost, value, ratio }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000 })) };
                 if (!next) {
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }
                 if (next.cost > spendable) {
+                    state.lastRound.result = `spaart: ${next.cost} nodig, ${Math.max(0, spendable)} vrij boven de buffer`;
                     ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer.`, { tone: 'idle' });
                     return;
                 }
@@ -12790,6 +12856,7 @@ MKS.module({
                     state.cool[next.need] = Date.now() + 30 * 60000;
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
+                    state.lastRound.result = 'gedaan';
                     // Training started: a new project. Vehicle bought for trained people
                     // (now, or the buy step of a project): find it and assign them next.
                     if (next.done) next.done();
@@ -12807,6 +12874,7 @@ MKS.module({
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
                     addLog(`niet gelukt: ${next.label}`, 'error');
+                    if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
                 }
             } catch (e) {
@@ -12960,7 +13028,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007113509',
+                version: '1.7.0.20261007121024',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
