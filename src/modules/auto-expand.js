@@ -711,6 +711,9 @@ MKS.module({
                 }
                 if (p.stage === 'buy') {
                     const v = VT[p.vt];
+                    // Waiting for an extension that brings the parking spot: no level meanwhile
+                    // (Voorthuizen wanted level 2 for 100k while its ambulance post was being built).
+                    if ((b.extensions || []).some((x) => x.available === false)) { p.wait = 'uitbreiding wordt nog gebouwd'; continue; }
                     const info = await buildingInfo(p.building);
                     if (info.used != null && info.max != null && info.used >= info.max) {
                         const lvl = ctx.cfg.doLevels ? await nextLevel(p.building) : null;
@@ -1012,7 +1015,7 @@ MKS.module({
         // Several per building are fine (Drone Team and ME-AE at Veenendaal): each has its
         // own vehicle and its own people; only the same vehicle twice is not.
         const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
-            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', ext: true, people: [], started: Date.now() }]);
 
         // Staff a building still has for one more vehicle: its people minus the crews of
         // its vehicles and of the vehicles its running projects will buy.
