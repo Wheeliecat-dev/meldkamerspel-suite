@@ -48,7 +48,8 @@ MKS.module({
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
         { key: 'buildMode', label: 'Bouwmodus: alleen nieuwe posten', type: 'bool', default: false,
             help: 'Bouwt de ene nieuwe post na de andere (goedkoopste soort eerst) en maakt elke post eerst af: '
-                + 'brandweer tot level 2 met TS, OvD-B en HV, ambulancepost tot level 1 met ambulances, politie level 0 met noodhulp. '
+                + 'brandweer tot level 2 met TS, OvD-B en HV, ambulancepost tot level 1 met ambulances, politie level 0 met noodhulp, '
+                + 'en nooit meer voertuigen dan het personeel kan bemannen. '
                 + 'Tekorten en opleidingen wachten zolang. De buffer blijft gelden.' },
         { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
             help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
@@ -661,6 +662,13 @@ MKS.module({
                     if (info.used != null && info.max != null && info.used < info.max && ctx.cfg.doVehicles) {
                         const have = data.vehicles.filter((x) => x.building_id === p.building).map((x) => x.vehicle_type);
                         const vt = G.vts.find((t) => !have.includes(t)) ?? G.vts[0];
+                        // Only as many vehicles as its people can man (a new post has few):
+                        // the rest of the parking stays free for later.
+                        if (staffLeft(b, data) < crewOf(vt)) {
+                            state.projects = projects().filter((x) => x !== p);
+                            addLog(`nieuwe post zo ver als het personeel toelaat: ${p.caption} (${have.length} voertuig(en))`, 'ok');
+                            continue;
+                        }
                         const buy = await buyAction(b, { vt }, VT[vt], info, null);
                         if (!buy.skip) return { ...buy, need: p.need, label: `${buy.label} (nieuwe post, bouwmodus)` };
                         p.wait = buy.skip;

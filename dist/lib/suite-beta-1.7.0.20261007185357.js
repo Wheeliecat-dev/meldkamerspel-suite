@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007181156 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007185357 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007181156';
+    const VERSION = '1.7.0.20261007185357';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -12013,10 +12013,14 @@ MKS.module({
         { key: 'doExtensions', label: 'Uitbreidingen kopen', type: 'bool', default: true },
         { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
+        { key: 'buildMode', label: 'Bouwmodus: alleen nieuwe posten', type: 'bool', default: false,
+            help: 'Bouwt de ene nieuwe post na de andere (goedkoopste soort eerst) en maakt elke post eerst af: '
+                + 'brandweer tot level 2 met TS, OvD-B en HV, ambulancepost tot level 1 met ambulances, politie level 0 met noodhulp, '
+                + 'en nooit meer voertuigen dan het personeel kan bemannen. '
+                + 'Tekorten en opleidingen wachten zolang. De buffer blijft gelden.' },
         { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
             help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
                 + 'die het dichtst bij je bestaande gebouwen ligt (minstens 3 km van je andere van die soort) brengt nieuwe inzetten zonder lange rijtijden. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
-        { key: 'growKm', label: 'Groeien tot', type: 'number', default: 60, min: 10, max: 300, step: 5, unit: 'km', help: 'Vanaf je meldkamer.' },
     ],
 
     run(ctx) {
@@ -12608,6 +12612,39 @@ MKS.module({
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
                     continue;
                 }
+                if (p.stage === 'grow') {
+                    // A new post from build mode: levels up to what its first staff can man,
+                    // then vehicles that need few people, until the parking is full.
+                    const G = GROW_FILL[p.kind] || GROW_FILL.brandweerkazerne;
+                    const info = await buildingInfo(p.building);
+                    if (p.levels < G.levels && ctx.cfg.doLevels) {
+                        const lvl = await nextLevel(p.building);
+                        if (lvl) {
+                            return { label: `level voor nieuwe post ${p.caption} (${p.levels + 1}/${G.levels}, bouwmodus)`, cost: lvl.cost, need: p.need,
+                                run: () => hit(lvl.href), check: async () => ((await buildingInfo(p.building)).max || 0) > (info.max || 0),
+                                done: () => { p.levels++; } };
+                        }
+                        p.levels = G.levels; // no more levels to buy here
+                    }
+                    if (info.used != null && info.max != null && info.used < info.max && ctx.cfg.doVehicles) {
+                        const have = data.vehicles.filter((x) => x.building_id === p.building).map((x) => x.vehicle_type);
+                        const vt = G.vts.find((t) => !have.includes(t)) ?? G.vts[0];
+                        // Only as many vehicles as its people can man (a new post has few):
+                        // the rest of the parking stays free for later.
+                        if (staffLeft(b, data) < crewOf(vt)) {
+                            state.projects = projects().filter((x) => x !== p);
+                            addLog(`nieuwe post zo ver als het personeel toelaat: ${p.caption} (${have.length} voertuig(en))`, 'ok');
+                            continue;
+                        }
+                        const buy = await buyAction(b, { vt }, VT[vt], info, null);
+                        if (!buy.skip) return { ...buy, need: p.need, label: `${buy.label} (nieuwe post, bouwmodus)` };
+                        p.wait = buy.skip;
+                        continue;
+                    }
+                    state.projects = projects().filter((x) => x !== p);
+                    addLog(`nieuwe post klaar: ${p.caption}`, 'ok');
+                    continue;
+                }
                 if (p.stage === 'prep') {
                     // Extension bought: crew first (in parallel with the building work).
                     const v = VT[p.vt];
@@ -13147,8 +13184,8 @@ MKS.module({
         }
 
         /* Growth: more buildings, more missions. Per kind (fire, police, ambulance) the
-         * free real post within growKm of the dispatch centre that is furthest from the
-         * own buildings of that kind (6 km at least), valued at the average weekly
+         * free real post nearest to any own building (3 km at least from the own ones
+         * of that kind, no limit from the dispatch centre), valued at the average weekly
          * income per building. After building it, a project buys its first vehicle. */
         // The small kinds (Brandweerkazerne (klein), Politieopkomstbureau (klein)) are
         // cheaper: fewer parking spots, but more new areas for the money. Both go into the
@@ -13158,24 +13195,39 @@ MKS.module({
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
             { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
+        // Build mode: per kind the levels its first staff can man and the vehicles, in order
+        // (fire: TS 8/9, OvD-B, HV; ambulance post: ambulances; police: DA Noodhulp).
+        const GROW_FILL = {
+            brandweerkazerne: { levels: 2, vts: [1, 3, 4] },
+            ambulancepost: { levels: 1, vts: [16] },
+            politiebureau: { levels: 0, vts: [22] },
+        };
         async function planGrow(data) {
             const out = [];
-            if (!ctx.cfg.doGrow || !ctx.cfg.doBuild) return out;
+            if ((!ctx.cfg.doGrow && !ctx.cfg.buildMode) || !ctx.cfg.doBuild) return out;
             const rate = incomeRate();
             if (!rate || !rate.perHour) return out;
             const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
             const value = (rate.perHour * 168) / withVehicles;
-            const posts = await postsNear(data.home);
+            // Real posts around every own building (1x1 degree tiles, each fetched once).
+            const seen = new Set();
+            const posts = [];
+            for (const b of data.buildings) {
+                const key = `${Math.floor(Number(b.latitude))}_${Math.floor(Number(b.longitude))}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                for (const p of await postsNear(posOf(b))) posts.push(p);
+            }
+            const uniq = [...new Set(posts)]; // neighbouring tiles overlap
             const owned = data.buildings.map(posOf);
             for (const g of GROW) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
                 const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
                 let best = null;
-                for (const p of posts) {
+                for (const p of uniq) {
                     if (p[2] !== CAT_OF[g.types[0]]) continue;
                     const at = [p[0], p[1]];
-                    if (km(at, data.home) > ctx.cfg.growKm) continue;
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
                     // Not on top of one of this kind (3 km at least, so it covers new ground),
                     // and of those the one nearest to anything you have: the network grows
@@ -13190,17 +13242,22 @@ MKS.module({
                     const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
                     const run = plan.run;
-                    out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
+                    // Build mode: new posts win outright, taking turns between fire, police and
+                    // ambulance (else the 100k VWS-post would always be cheapest).
+                    const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
+                    out.push({ ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
-                            state.cool[need] = Date.now() + 2 * 3600000;
+                            state.cool[need] = Date.now() + (ctx.cfg.buildMode ? 0 : 2 * 3600000);
+                            state.growLast = g.name;
                             await sleep(1500);
                             // Its first vehicle as a project: bought as soon as the game sells it.
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
                             const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
-                            if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
+                            if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
+                            else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } });
                 }
             }
@@ -13453,7 +13510,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007181156' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007185357' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13593,7 +13650,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007181156',
+                version: '1.7.0.20261007185357',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
