@@ -118,6 +118,8 @@ MKS.module({
             oneof_fire_engine_or_rescue: 'fire', oneof_fire_rescue_or_ladder: 'rw',
             mass_casualty: 'vt:101', mass_casualty_advanced: 'vt:100', traffic_inspector: 'vt:99',
             railway_elw: 'vt:145', railway_recovery: 'vt:146', wildfire_command: 'vt:87',
+            // The VW-NB carries it: its checkbox has wildfire_equipment="1" (seen in a mission window).
+            wildfire_equipment: 'wildfire_equipment',
             disaster_response: 'vt:90', disaster_response_equipment: 'vt:91', drone_police: 'vt:128',
             bomb_disposal_dogs: 'vt:116', bomb_disposal_patrol: 'vt:119', bomb_disposal_diver: 'vt:117', bomb_disposal_boat: 'vt:118',
             railway_material: 'vt:148',

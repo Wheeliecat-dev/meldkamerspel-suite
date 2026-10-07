@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007150236 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007154405 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007150236';
+    const VERSION = '1.7.0.20261007154405';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10429,6 +10429,9 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+            help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
+                + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
             help: 'Een lang open spelpagina wordt traag en zwaar. Ververst tussen twee rondes door en gaat daarna vanzelf verder. 0 = nooit '
                 + '(behalve als het geheugen bijna vol is).' },
@@ -10470,6 +10473,8 @@ MKS.module({
             oneof_fire_engine_or_rescue: 'fire', oneof_fire_rescue_or_ladder: 'rw',
             mass_casualty: 'vt:101', mass_casualty_advanced: 'vt:100', traffic_inspector: 'vt:99',
             railway_elw: 'vt:145', railway_recovery: 'vt:146', wildfire_command: 'vt:87',
+            // The VW-NB carries it: its checkbox has wildfire_equipment="1" (seen in a mission window).
+            wildfire_equipment: 'wildfire_equipment',
             disaster_response: 'vt:90', disaster_response_equipment: 'vt:91', drone_police: 'vt:128',
             bomb_disposal_dogs: 'vt:116', bomb_disposal_patrol: 'vt:119', bomb_disposal_diver: 'vt:117', bomb_disposal_boat: 'vt:118',
             railway_material: 'vt:148',
@@ -11595,6 +11600,48 @@ MKS.module({
                 }
             }
 
+            // Mission done except for its patients (bar at 100%): our other units there or on
+            // the way are only waiting, so send them back to their posts. Patient units
+            // (ambulances, OvD-G, MMT, Lifeliner, rapid responders) stay. Missions with
+            // arrestants are left alone: the police cars there carry them.
+            const PATIENT_VT = new Set(Object.entries(VT_NAMES)
+                .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
+            const sentBack = new Map(); // mission id -> when we last looked
+            async function sendBackDone() {
+                if (!ctx.cfg.sendBack) return;
+                const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
+                    const bar = document.getElementById(`mission_bar_${e.getAttribute('mission_id')}`);
+                    return bar && parseFloat(bar.style.width) >= 100;
+                });
+                let looked = 0;
+                for (const e of done) {
+                    const id = e.getAttribute('mission_id');
+                    if (Date.now() - (sentBack.get(id) || 0) < 3 * 60000) continue;
+                    if (++looked > 5 || !running || stopped) break;
+                    sentBack.set(id, Date.now());
+                    try {
+                        const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
+                        if (!r.ok) continue;
+                        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+                        const bar = doc.getElementById(`mission_bar_${id}`);
+                        if (!bar || parseFloat(bar.style.width) < 100) continue;
+                        if (doc.querySelector('[id*="prisoner"], [id*="gefangene"], a[href*="/gefangener/"]') || /arrestant/i.test(doc.getElementById('missing_text')?.textContent || '')) continue;
+                        const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
+                            .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
+                                name: (tr.querySelector('a[href^="/vehicles/"]')?.textContent || '').trim() }))
+                            .filter((x) => x.a && x.vt && !PATIENT_VT.has(x.vt));
+                        if (!back.length) continue;
+                        for (const x of back) {
+                            await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                            await sleep(300);
+                        }
+                        const name = (doc.getElementById('missionH1')?.textContent || titleOf(e)).replace(/\s+/g, ' ').trim();
+                        addLog(name, `klaar op patiënten na: ${back.length} voertuig(en) terug naar post`, 'ok');
+                        recordEvent({ kind: 'sendback', id, name, n: back.length, vehicles: back.map((x) => x.name).slice(0, 10) });
+                    } catch (err) { ctx.warn('send back', id, err); }
+                }
+            }
+
             // Three errors in a row. Windows that do not answer mean a slow or stuck game
             // page (14:46-14:48 three timeouts stopped auto mode for good): reload, and
             // auto mode resumes. More than three such reloads in an hour, or other
@@ -11632,6 +11679,7 @@ MKS.module({
                 busy = true;
                 try {
                     await transports();
+                    await sendBackDone();
                     const req = await loadMissions();
                     const list = candidates();
                     const cellRuns = new Map();
@@ -12854,12 +12902,33 @@ MKS.module({
         const extVehicle = (text) => {
             const list = (String(text).match(/Voertuigen:\s*(.+?)\s*(?:Parkeerplaatsen|$)/) || [])[1];
             if (!list) return null;
-            for (const n of list.split(/,\s*|\s+en\s+/)) { const vt = vehiclesFor(n.trim())[0]; if (vt != null) return vt; }
+            for (const n of list.split(/,\s*|\s+en\s+/)) {
+                const vt = vehiclesFor(n.trim())[0];
+                if (vt != null) { (state.extVt = state.extVt || {})[extName(text)] = vt; return vt; }
+            }
             return null;
         };
+        // Extensions still being built (bought here or by hand) whose vehicle the building
+        // does not have yet and no project trains for: give them a crew project.
+        const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        function prepSweep(data) {
+            for (const b of data.buildings) {
+                for (const x of b.extensions || []) {
+                    if (x.available !== false) continue;
+                    const vt = (state.extVt || {})[x.caption] ?? EXT_VT[x.caption];
+                    if (vt == null || !VT[vt]) continue;
+                    if (data.vehicles.some((v) => v.building_id === b.id && v.vehicle_type === vt)) continue;
+                    const made = prepProject(b, vt, `uitbreiding ${x.caption}`);
+                    if (made.length) { projects().push(...made); addLog(`project: personeel voor ${VT[vt][0]} in ${b.caption} (uitbreiding ${x.caption} wordt gebouwd)`, 'idle'); }
+                }
+            }
+        }
         // After buying an extension that brings a vehicle: a project that trains its crew
         // now, while the extension is being built, then buys and links (see advanceProjects).
-        const prepProject = (b, vt, need) => (vt == null ? [] : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+        // Several per building are fine (Drone Team and ME-AE at Veenendaal): each has its
+        // own vehicle and its own people; only the same vehicle twice is not.
+        const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
+            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
 
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
@@ -12871,7 +12940,7 @@ MKS.module({
                 if (ext && ext.cost && ctx.cfg.doExtensions) {
                     return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
                         run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
-                        projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, extVehicle(ext.text), c.name) };
+                        projects: prepProject(b, extVehicle(ext.text), c.name) };
                 }
             }
             return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
@@ -13071,6 +13140,7 @@ MKS.module({
                 recordEarn(data.total);
                 skipped = [];
                 eduCache = null;
+                prepSweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
                 if (!next) {
@@ -13166,7 +13236,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007150236' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007154405' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13306,7 +13376,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007150236',
+                version: '1.7.0.20261007154405',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
