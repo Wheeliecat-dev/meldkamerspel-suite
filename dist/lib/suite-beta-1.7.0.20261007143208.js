@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007130831 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007143208 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007130831';
+    const VERSION = '1.7.0.20261007143208';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11461,6 +11461,7 @@ MKS.module({
              * ------------------------------------------------------------------ */
             const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
             const holdExpired = new Map(); // mission id -> when its hold ran out
+            const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
                 const now = Date.now();
@@ -11486,6 +11487,10 @@ MKS.module({
                 if (res.result !== 'skip' || !res.avail || !(ctx.cfg.bigCredits > 0) || credits < ctx.cfg.bigCredits) return;
                 const keys = {};
                 for (const [k, n] of Object.entries(res.avail)) {
+                    // Plain units (ambulances, fire engines, police cars) are only "rare" for a
+                    // moment when many are out: holding them starved a dozen missions for one
+                    // 10k Brand in kantoorgebouw. Only specialist units are held.
+                    if (HOLD_NEVER.includes(k)) continue;
                     if (n <= ctx.cfg.rareMax) keys[k] = { cap: (res.caps && res.caps[k]) || k, need: (res.want && res.want[k]) || 1 };
                 }
                 if (!Object.keys(keys).length) return;
@@ -12259,7 +12264,10 @@ MKS.module({
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
             if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
+            // No places with times (recorded by an older version): the all-time count says
+            // little about now. Capped, and fading fast once the last shortage is a day old
+            // (291 old Noodhulp shortages bought two levels and two cars a day later).
+            return Math.min(t.missions, 30) * 1000 * (age < 24 ? 1 : age < 72 ? 0.3 : 0.05) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();
@@ -12267,6 +12275,10 @@ MKS.module({
             for (const [name, t] of Object.entries(needs.types || {})) {
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
+                // A project for this need is still under way (training, extension being
+                // built): wait for it instead of planning a second answer (a 400k police
+                // building for OvD-P while Ede's OvD-P crew waited for a classroom).
+                if (projects().some((p) => p.need === name)) continue;
                 const vts = vehiclesFor(name);
                 const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
@@ -13135,7 +13147,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007130831' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007143208' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13275,7 +13287,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007130831',
+                version: '1.7.0.20261007143208',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

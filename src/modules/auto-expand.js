@@ -400,6 +400,10 @@ MKS.module({
             for (const [name, t] of Object.entries(needs.types || {})) {
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
+                // A project for this need is still under way (training, extension being
+                // built): wait for it instead of planning a second answer (a 400k police
+                // building for OvD-P while Ede's OvD-P crew waited for a classroom).
+                if (projects().some((p) => p.need === name)) continue;
                 const vts = vehiclesFor(name);
                 const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
