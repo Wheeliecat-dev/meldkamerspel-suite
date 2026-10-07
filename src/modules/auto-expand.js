@@ -1178,7 +1178,7 @@ MKS.module({
         const GROW = [
             { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { types: [3], same: [3, 13], vt: 16, name: 'ambulancepost' },
+            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
         async function planGrow(data) {
             const out = [];
