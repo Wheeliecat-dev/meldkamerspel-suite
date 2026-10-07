@@ -1284,14 +1284,17 @@ MKS.module({
                     if (!best || near < best.near) best = { at, gap, near };
                 }
                 if (!best) continue;
+                // Full-size and small for the same spot: only the better return goes on the list.
+                let pick = null;
                 for (const type of g.types) {
                     const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
+                    if (pick && plan.cost >= pick.cost) continue;
                     const run = plan.run;
                     // Build mode: new posts win outright, taking turns between fire, police and
                     // ambulance (else the 100k VWS-post would always be cheapest).
                     const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
-                    out.push({ ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
+                    pick = { ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
@@ -1304,8 +1307,9 @@ MKS.module({
                             const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
                             else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
-                        } });
+                        } };
                 }
+                if (pick) out.push(pick);
             }
             return out;
         }
