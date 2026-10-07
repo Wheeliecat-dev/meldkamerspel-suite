@@ -389,7 +389,10 @@ MKS.module({
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
             if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
+            // No places with times (recorded by an older version): the all-time count says
+            // little about now. Capped, and fading fast once the last shortage is a day old
+            // (291 old Noodhulp shortages bought two levels and two cars a day later).
+            return Math.min(t.missions, 30) * 1000 * (age < 24 ? 1 : age < 72 ? 0.3 : 0.05) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();

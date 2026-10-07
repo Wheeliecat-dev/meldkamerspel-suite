@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007124615 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007141017 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007124615';
+    const VERSION = '1.7.0.20261007141017';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11460,12 +11460,15 @@ MKS.module({
              * mission is sent or gone, or after holdMin, so nothing stays stuck.
              * ------------------------------------------------------------------ */
             const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
+            const holdExpired = new Map(); // mission id -> when its hold ran out
+            const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
                 const now = Date.now();
                 const out = {};
                 for (const [hid, h] of holds) {
-                    if (h.until < now || !document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
+                    if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
+                    if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
                     if (hid === id || h.credits <= credits) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
                         if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
@@ -11474,11 +11477,20 @@ MKS.module({
                 }
                 return out;
             }
+            // A mission whose hold ran out is not held again for twice the hold time: before
+            // this, it was held again on its next try and kept rare vehicles idle for an hour
+            // (Brand in ziekenhuis held an OvD-P from 12:34 while 13 missions waited).
             function updateHold(id, name, credits, res) {
                 if (res.result === 'sent' || res.result === 'unconfirmed') { holds.delete(id); return; }
+                const out = holdExpired.get(id);
+                if (out && Date.now() - out < ctx.cfg.holdMin * 2 * 60000) return;
                 if (res.result !== 'skip' || !res.avail || !(ctx.cfg.bigCredits > 0) || credits < ctx.cfg.bigCredits) return;
                 const keys = {};
                 for (const [k, n] of Object.entries(res.avail)) {
+                    // Plain units (ambulances, fire engines, police cars) are only "rare" for a
+                    // moment when many are out: holding them starved a dozen missions for one
+                    // 10k Brand in kantoorgebouw. Only specialist units are held.
+                    if (HOLD_NEVER.includes(k)) continue;
                     if (n <= ctx.cfg.rareMax) keys[k] = { cap: (res.caps && res.caps[k]) || k, need: (res.want && res.want[k]) || 1 };
                 }
                 if (!Object.keys(keys).length) return;
@@ -12252,7 +12264,10 @@ MKS.module({
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
             if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
+            // No places with times (recorded by an older version): the all-time count says
+            // little about now. Capped, and fading fast once the last shortage is a day old
+            // (291 old Noodhulp shortages bought two levels and two cars a day later).
+            return Math.min(t.missions, 30) * 1000 * (age < 24 ? 1 : age < 72 ? 0.3 : 0.05) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();
@@ -13128,7 +13143,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007124615' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007141017' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13268,7 +13283,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007124615',
+                version: '1.7.0.20261007141017',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

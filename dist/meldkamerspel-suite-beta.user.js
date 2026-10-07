@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wheeliecat's Meldkamerspel Scripts (beta)
 // @namespace    https://meldkamerspel.com/suite-beta
-// @version      1.7.0.20261007140005
+// @version      1.7.0.20261007141017
 // @description  Wheeliecat's Meldkamerspel scripts, all in one. Open "Wheeliecat's scripts" in the navbar to turn each one on or off and change its settings. Work in progress.
 // @author       Wheeliecat-dev
 // @match        https://meldkamerspel.com/*
@@ -22,7 +22,7 @@
 // @connect      overpass.private.coffee
 // @connect      raw.githubusercontent.com
 // @connect      api.github.com
-// @require      https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/lib/suite-beta-1.7.0.20261007140005.js#sha256=eee056726f1bdd07bfabb698dea0372f2e49ee0de5ad86e23be9a9c74063e1ed
+// @require      https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/lib/suite-beta-1.7.0.20261007141017.js#sha256=4d6a12d61f9fb3c79168ba4ea74696046ebb3e2ce3dfda49e4bb4d2961628fb8
 // @run-at       document-start
 // ==/UserScript==
 
