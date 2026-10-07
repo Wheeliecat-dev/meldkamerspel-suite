@@ -74,7 +74,7 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
             help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
@@ -1256,11 +1256,16 @@ MKS.module({
             const PATIENT_VT = new Set(Object.entries(VT_NAMES)
                 .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
             const sentBack = new Map(); // mission id -> when we last looked
+            // A full bar is not enough: a red (progress-bar-danger) bar is also 100% wide when
+            // units are missing (Rietkapbrand, 8 TS short, had 40 units sent back). Only a
+            // full bar that is not red counts as done.
+            const isDone = (bar) => !!bar && parseFloat(bar.style.width) >= 100
+                && !/progress-bar-(danger|warning)/.test(bar.className) && /progress-bar-success/.test(bar.className);
             async function sendBackDone() {
                 if (!ctx.cfg.sendBack) return;
                 const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
                     const bar = document.getElementById(`mission_bar_${e.getAttribute('mission_id')}`);
-                    return bar && parseFloat(bar.style.width) >= 100;
+                    return isDone(bar);
                 });
                 let looked = 0;
                 for (const e of done) {
@@ -1273,7 +1278,9 @@ MKS.module({
                         if (!r.ok) continue;
                         const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
                         const bar = doc.getElementById(`mission_bar_${id}`);
-                        if (!bar || parseFloat(bar.style.width) < 100) continue;
+                        if (!isDone(bar)) continue;
+                        // Anything still asked for in the red box: the mission is not done.
+                        if ((doc.getElementById('missing_text')?.textContent || '').trim()) continue;
                         if (doc.querySelector('[id*="prisoner"], [id*="gefangene"], a[href*="/gefangener/"]') || /arrestant/i.test(doc.getElementById('missing_text')?.textContent || '')) continue;
                         const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
                             .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
