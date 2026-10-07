@@ -543,6 +543,36 @@ const MKS = (() => {
             root.remove();
             root = null;
             document.removeEventListener('keydown', onKey, true);
+            if (pip) { const w = pip; pip = null; w.close(); }
+        }
+
+        // Picture-in-picture (Chrome/Edge 116+): the same dashboard node moves into an
+        // always-on-top window, so it keeps working while the game is used. All lookups
+        // go through root, so nothing else changes. Closing that window closes the dashboard.
+        let pip = null;
+        const canPip = () => !!(W.documentPictureInPicture && W.documentPictureInPicture.requestWindow);
+        async function popOut() {
+            if (!root || pip || !canPip()) return;
+            const w = await W.documentPictureInPicture.requestWindow({ width: 920, height: 720 });
+            pip = w;
+            const d = w.document;
+            const font = d.createElement('link');
+            font.rel = 'stylesheet';
+            font.href = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap';
+            d.head.appendChild(font);
+            const st = d.createElement('style');
+            st.textContent = `${CSS}
+            html, body { margin:0; height:100%; background:#11161d; }
+            #mks-dash.mks-pip { position:static; inset:auto; height:100vh; padding:0; background:none; }
+            #mks-dash.mks-pip .mks-win { width:100%; height:100%; max-width:none; max-height:none; border:0; border-radius:0; box-shadow:none; }
+            #mks-dash.mks-pip .mks-pipbtn, #mks-dash.mks-pip .mks-wip { display:none; }
+            @media (max-width:760px) { #mks-dash.mks-pip .mks-side { width:210px; } #mks-dash.mks-pip input.mks-search { width:130px !important; } }`;
+            d.head.appendChild(st);
+            d.title = "Wheeliecat's scripts";
+            root.classList.add('mks-pip');
+            d.body.appendChild(root);
+            d.addEventListener('keydown', onKey, true);
+            w.addEventListener('pagehide', () => { if (pip === w) { pip = null; close(); } });
         }
 
         function onKey(e) {
@@ -558,7 +588,8 @@ const MKS = (() => {
                 <div class="mks-brand"><span class="mks-logo">W</span><b>Wheeliecat's scripts</b><span class="mks-ver">v${VERSION}</span>${CHANNEL === 'beta' ? '<span class="mks-pill t-warn">beta</span>' : ''}</div>
                 <span class="mks-count"></span>
                 <input class="mks-search" type="search" placeholder="Zoek script…" aria-label="Zoek script">
-                <button class="mks-btn mks-x" title="Sluiten (Esc)">✕</button>
+                ${canPip() ? '<button class="mks-btn mks-x mks-pipbtn" title="Zwevend venster: blijft boven alles, ook als je het spel gebruikt">⧉</button>' : ''}
+                <button class="mks-btn mks-x mks-close" title="Sluiten (Esc)">✕</button>
               </div>
               <div class="mks-wip"><span>🚧</span><span><b>Werk in uitvoering.</b> Deze scripts worden nog volop aangepast. Er kunnen fouten in zitten;
                 gebruik ze op eigen risico en controleer wat ze doen.</span></div>
@@ -571,7 +602,9 @@ const MKS = (() => {
             </div>`;
             document.body.appendChild(root);
             root.addEventListener('mousedown', (e) => { if (e.target === root) close(); });
-            root.querySelector('.mks-x').onclick = close;
+            root.querySelector('.mks-close').onclick = close;
+            const pipBtn = root.querySelector('.mks-pipbtn');
+            if (pipBtn) pipBtn.onclick = () => popOut().catch((e) => console.error('[MKS] picture-in-picture failed', e));
             root.querySelector('.mks-reload button').onclick = () => location.reload();
             const search = root.querySelector('.mks-search');
             search.value = query;
