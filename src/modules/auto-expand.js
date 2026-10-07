@@ -35,7 +35,7 @@ MKS.module({
                 + 'de gebouwen die het dichtst liggen bij de meeste plekken waar het voertuig miste.' },
         { key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
             help: 'Alleen personeel van de gebouwen die het voertuig krijgen, en alleen zoveel als dat voertuig nodig heeft. '
-                + 'Er wordt nooit iemand "op voorraad" opgeleid.' },
+                + 'Een klas start pas met alle 10 plaatsen bezet: de rest gaat naar vrij personeel van gebouwen die dat voertuig kunnen hebben (dichtstbij eerst), daarna van willekeurige gebouwen.' },
         { key: 'unlockWeight', label: 'Nieuwe meldingen: keer per week', type: 'number', default: 1, min: 0, max: 20, step: 0.5,
             help: 'Een gebouw of uitbreiding die nieuwe meldingsoorten vrijspeelt telt hun gemiddelde credits zoveel keer per week. 0 = niet.' },
         { key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
@@ -535,6 +535,37 @@ MKS.module({
                 return { pid, has: cb.getAttribute(key) === 'true', idle, free: idle && !reserved.has(pid) };
             });
         }
+        // A class only starts when all 10 seats are taken. Empty seats go first to free
+        // people in buildings that can hold the vehicle (a crew each, trained ahead for a
+        // later purchase there), nearest first, then to free people from any building.
+        async function fillSeats(data, edu, have, vt, ref) {
+            const missing = 10 - have.length;
+            if (missing <= 0) return [];
+            const prefTypes = (VT[vt] || [])[3] || [];
+            const per = crewOf(vt);
+            const taken = new Set(have);
+            const dist = (b) => (ref ? km(posOf(b), ref) : 0);
+            const usable = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type) && b.enabled !== false);
+            const lists = [[usable.filter((b) => prefTypes.includes(b.building_type)).sort((a, b) => dist(a) - dist(b)), per],
+                [usable.filter((b) => !prefTypes.includes(b.building_type)).sort((a, b) => dist(a) - dist(b)), 10]];
+            const out = [];
+            let looked = 0;
+            for (const [list, max] of lists) {
+                for (const b of list) {
+                    if (out.length >= missing || looked >= 40) break;
+                    looked++;
+                    const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has && !taken.has(p.pid)).slice(0, Math.min(max, missing - out.length));
+                    free.forEach((p) => { out.push(p.pid); taken.add(p.pid); });
+                }
+            }
+            return out;
+        }
+        // Start a class with these people, the empty seats filled; the step's label says how many extra.
+        async function startFull(step, data, edu, pids, vt, ref) {
+            const extra = await fillSeats(data, edu, pids, vt, ref);
+            if (extra.length) step.label += `, ${extra.length} extra om de klas vol te maken`;
+            await startTraining(edu, [...pids, ...extra]);
+        }
         async function startTraining(edu, pids) {
             const fd = new FormData(edu.form);
             fd.set('education_select', edu.value);
@@ -600,10 +631,11 @@ MKS.module({
                     const edu = await education(p.training);
                     if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; continue; }
                     const batch = p.queue.slice(0, Math.min(10, ctx.cfg.trainSeats));
-                    return { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
-                        run: () => startTraining(edu, batch),
+                    const step = { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
+                        run: () => startFull(step, data, edu, batch, p.vt, posOf(b)),
                         check: async () => (await peopleAt(p.building, p.key)).filter((x) => batch.includes(x.pid) && x.idle).length === 0,
                         done: () => { p.queue = p.queue.filter((pid) => !batch.includes(pid)); p.wait = null; p.started = Date.now(); } };
+                    return step;
                 }
                 if (p.stage === 'train') {
                     const people = await peopleAt(p.building, p.key);
@@ -678,10 +710,11 @@ MKS.module({
                 }
                 if (!group.length) continue;
                 const learnIds = group.flatMap((p) => p.people);
-                return { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
-                    run: () => startTraining(edu, learnIds),
+                const step = { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
+                    run: () => startFull(step, data, edu, learnIds, c.vt, posOf(b)),
                     check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
                     projects: group };
+                return step;
             }
             return null;
         }
@@ -856,14 +889,15 @@ MKS.module({
                         group.push(mk(ob, otrained.map((p) => p.pid), olearn.map((p) => p.pid)));
                         learnIds.push(...olearn.map((p) => p.pid));
                     }
-                    return {
+                    const step = {
                         label: `opleiding ${v[4]} voor ${learnIds.length} pers.: ${group.length} gebouw(en) met project`
                             + ` (voor ${group.length}× ${v[0]}, elk met eigen personeel)`
                             + `${group[0].queue ? `, ${group[0].queue.length} later zodra er een klaslokaal vrij is` : ''}`, cost: 0,
-                        run: () => startTraining(edu, learnIds),
+                        run: () => startFull(step, data, edu, learnIds, c.vt, c.at || posOf(b)),
                         check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
                         projects: group,
                     };
+                    return step;
                 }
                 if (full) return levelStep([]);
                 const buy = await buyAction(b, c, v, info, d);
