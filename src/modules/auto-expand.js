@@ -677,6 +677,9 @@ MKS.module({
                         // Only as many vehicles as its people can man (a new post has few):
                         // the rest of the parking stays free for later.
                         if (staffLeft(b, data) < crewOf(vt)) {
+                            // A new post starts without people: wait for the hiring to bring the
+                            // first crew. Once it has vehicles, stop where its people run out.
+                            if (!have.length && Date.now() - p.started < 3 * 86400000) { p.wait = `wacht op personeel (${b.personal_count || 0})`; continue; }
                             state.projects = projects().filter((x) => x !== p);
                             addLog(`nieuwe post zo ver als het personeel toelaat: ${p.caption} (${have.length} voertuig(en))`, 'ok');
                             continue;
@@ -1321,7 +1324,7 @@ MKS.module({
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
                             let nb = null;
-                            for (let i = 0; i < 6 && !nb; i++) {
+                            for (let i = 0; i < 10 && !nb; i++) {
                                 nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
                                 if (!nb) await sleep(2000);
                             }
@@ -1373,9 +1376,13 @@ MKS.module({
                 // One building more than before (the price check failed for the VWS-post,
                 // which always costs 100,000). The API can lag, so look a few times.
                 check: async () => {
-                    for (let i = 0; i < 5; i++) {
+                    // One building more, or the credits went down by about its price: the API
+                    // can take well over 10 seconds to list a new building.
+                    for (let i = 0; i < 8; i++) {
                         if ((await api('/api/buildings')).length > data.buildings.length) return true;
-                        await sleep(2000);
+                        const c = await api('/api/credits');
+                        if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
+                        await sleep(3000);
                     }
                     return false;
                 },

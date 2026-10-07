@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007185557 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007201817 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007185557';
+    const VERSION = '1.7.0.20261007201817';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -12644,6 +12644,9 @@ MKS.module({
                         // Only as many vehicles as its people can man (a new post has few):
                         // the rest of the parking stays free for later.
                         if (staffLeft(b, data) < crewOf(vt)) {
+                            // A new post starts without people: wait for the hiring to bring the
+                            // first crew. Once it has vehicles, stop where its people run out.
+                            if (!have.length && Date.now() - p.started < 3 * 86400000) { p.wait = `wacht op personeel (${b.personal_count || 0})`; continue; }
                             state.projects = projects().filter((x) => x !== p);
                             addLog(`nieuwe post zo ver als het personeel toelaat: ${p.caption} (${have.length} voertuig(en))`, 'ok');
                             continue;
@@ -13029,6 +13032,22 @@ MKS.module({
         // Extensions still being built (bought here or by hand) whose vehicle the building
         // does not have yet and no project trains for: give them a crew project.
         const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        // Stations without a single vehicle and no project (a build whose follow-up got
+        // lost, like Ambulancepost Nijmegen Centrum): give them their first vehicle.
+        const EMPTY_KIND = { 0: 'brandweerkazerne', 17: 'brandweerkazerne', 5: 'politiebureau', 18: 'politiebureau', 3: 'ambulancepost', 13: 'ambulancepost' };
+        function emptySweep(data) {
+            if (!ctx.cfg.doVehicles) return;
+            for (const b of data.buildings) {
+                const kind = EMPTY_KIND[b.building_type];
+                if (!kind || b.enabled === false) continue;
+                if (data.vehicles.some((v) => v.building_id === b.id) || projects().some((p) => p.building === b.id)) continue;
+                const first = GROW_FILL[kind].first;
+                projects().push(ctx.cfg.buildMode
+                    ? { building: b.id, caption: b.caption, vt: first, need: `Groei: ${kind}`, stage: 'grow', kind, levels: 0, people: [], started: Date.now() }
+                    : { building: b.id, caption: b.caption, vt: first, need: `Groei: ${kind}`, stage: 'buy', people: [], started: Date.now() });
+                addLog(`project: eerste voertuig voor ${b.caption} (nog geen voertuigen)`, 'idle');
+            }
+        }
         function prepSweep(data) {
             for (const b of data.buildings) {
                 for (const x of b.extensions || []) {
@@ -13251,14 +13270,17 @@ MKS.module({
                     if (!best || near < best.near) best = { at, gap, near };
                 }
                 if (!best) continue;
+                // Full-size and small for the same spot: only the better return goes on the list.
+                let pick = null;
                 for (const type of g.types) {
                     const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
+                    if (pick && plan.cost >= pick.cost) continue;
                     const run = plan.run;
                     // Build mode: new posts win outright, taking turns between fire, police and
                     // ambulance (else the 100k VWS-post would always be cheapest).
                     const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
-                    out.push({ ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
+                    pick = { ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
@@ -13268,11 +13290,16 @@ MKS.module({
                             // Its first vehicle as a project: bought as soon as the game sells it.
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
-                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
+                            let nb = null;
+                            for (let i = 0; i < 10 && !nb; i++) {
+                                nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
+                                if (!nb) await sleep(2000);
+                            }
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
                             else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
-                        } });
+                        } };
                 }
+                if (pick) out.push(pick);
             }
             return out;
         }
@@ -13313,8 +13340,19 @@ MKS.module({
                     fd.set('commit', btn.value);
                     return hit('/buildings', new URLSearchParams(fd));
                 },
-                // The next building of a type costs more once one is built.
-                check: async () => { const d = await getDoc('/buildings/new'); return num(d.querySelector(`#build_credits_${type}`)?.value) > cost; },
+                // One building more than before (the price check failed for the VWS-post,
+                // which always costs 100,000). The API can lag, so look a few times.
+                check: async () => {
+                    // One building more, or the credits went down by about its price: the API
+                    // can take well over 10 seconds to list a new building.
+                    for (let i = 0; i < 8; i++) {
+                        if ((await api('/api/buildings')).length > data.buildings.length) return true;
+                        const c = await api('/api/credits');
+                        if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
+                        await sleep(3000);
+                    }
+                    return false;
+                },
             };
         }
 
@@ -13424,6 +13462,7 @@ MKS.module({
                 blocked = {};
                 eduCache = null;
                 prepSweep(data);
+                emptySweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
                 if (!next) {
@@ -13523,7 +13562,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007185557' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007201817' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13663,7 +13702,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007185557',
+                version: '1.7.0.20261007201817',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
