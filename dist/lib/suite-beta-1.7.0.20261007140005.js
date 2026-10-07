@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007123143 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007140005 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007123143';
+    const VERSION = '1.7.0.20261007140005';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11460,12 +11460,15 @@ MKS.module({
              * mission is sent or gone, or after holdMin, so nothing stays stuck.
              * ------------------------------------------------------------------ */
             const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
+            const holdExpired = new Map(); // mission id -> when its hold ran out
+            const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
                 const now = Date.now();
                 const out = {};
                 for (const [hid, h] of holds) {
-                    if (h.until < now || !document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
+                    if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
+                    if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
                     if (hid === id || h.credits <= credits) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
                         if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
@@ -11474,11 +11477,20 @@ MKS.module({
                 }
                 return out;
             }
+            // A mission whose hold ran out is not held again for twice the hold time: before
+            // this, it was held again on its next try and kept rare vehicles idle for an hour
+            // (Brand in ziekenhuis held an OvD-P from 12:34 while 13 missions waited).
             function updateHold(id, name, credits, res) {
                 if (res.result === 'sent' || res.result === 'unconfirmed') { holds.delete(id); return; }
+                const out = holdExpired.get(id);
+                if (out && Date.now() - out < ctx.cfg.holdMin * 2 * 60000) return;
                 if (res.result !== 'skip' || !res.avail || !(ctx.cfg.bigCredits > 0) || credits < ctx.cfg.bigCredits) return;
                 const keys = {};
                 for (const [k, n] of Object.entries(res.avail)) {
+                    // Plain units (ambulances, fire engines, police cars) are only "rare" for a
+                    // moment when many are out: holding them starved a dozen missions for one
+                    // 10k Brand in kantoorgebouw. Only specialist units are held.
+                    if (HOLD_NEVER.includes(k)) continue;
                     if (n <= ctx.cfg.rareMax) keys[k] = { cap: (res.caps && res.caps[k]) || k, need: (res.want && res.want[k]) || 1 };
                 }
                 if (!Object.keys(keys).length) return;
@@ -12241,14 +12253,18 @@ MKS.module({
         };
         // Credits a shortage blocked in the last 7 days. Entries are [lat, lon, time,
         // credits]; older data without credits counts 1.000 per missed mission.
-        function value7d(t) {
+        // Each purchase for a need halves what the shortages from before it still weigh:
+        // the new vehicle should fix those, so only later shortages keep the full value.
+        function value7d(t, name) {
             const since = Date.now() - 7 * 86400000;
+            const buys = ((state.bought || {})[name] || []).filter((x) => x >= since);
+            const weight = (at) => 0.5 ** buys.filter((x) => x > at).length;
             const recent = (t.pos || []).filter((p) => p[2] >= since);
             // Places recorded before credits were tracked (or with unknown credits) count
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
-            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000), 0);
+            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2);
+            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();
@@ -12257,7 +12273,7 @@ MKS.module({
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
                 const vts = vehiclesFor(name);
-                const value = value7d(t) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
+                const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
             }
             for (const [name, t] of Object.entries(needs.other || {})) {
@@ -12267,7 +12283,7 @@ MKS.module({
                 const edu = name.match(/^Opleiding (.+?) \(/);
                 const pers = name.match(/^Personeel: (.+)$/);
                 if (edu || pers) { state.wishes[(edu || pers)[1]] = t.missions; continue; }
-                const value = value7d(t) * ctx.cfg.specialWeight;
+                const value = value7d(t, name) * ctx.cfg.specialWeight;
                 if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
                 else if (cells) out.push({ kind: 'ext', name, types: [5, 11, 18], match: /\bcel\b|cel$/i, value, at: centroid(t.pos), t });
             }
@@ -13077,6 +13093,11 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     state.cool[next.need] = Date.now() + 30 * 60000;
+                    if (next.cost) {
+                        state.bought = state.bought || {};
+                        const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
+                        list.push(Date.now());
+                    }
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
                     state.lastRound.result = 'gedaan';
@@ -13119,7 +13140,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007123143' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007140005' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13259,7 +13280,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007123143',
+                version: '1.7.0.20261007140005',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

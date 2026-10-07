@@ -1106,6 +1106,7 @@ MKS.module({
              * ------------------------------------------------------------------ */
             const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
             const holdExpired = new Map(); // mission id -> when its hold ran out
+            const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
                 const now = Date.now();
@@ -1131,6 +1132,10 @@ MKS.module({
                 if (res.result !== 'skip' || !res.avail || !(ctx.cfg.bigCredits > 0) || credits < ctx.cfg.bigCredits) return;
                 const keys = {};
                 for (const [k, n] of Object.entries(res.avail)) {
+                    // Plain units (ambulances, fire engines, police cars) are only "rare" for a
+                    // moment when many are out: holding them starved a dozen missions for one
+                    // 10k Brand in kantoorgebouw. Only specialist units are held.
+                    if (HOLD_NEVER.includes(k)) continue;
                     if (n <= ctx.cfg.rareMax) keys[k] = { cap: (res.caps && res.caps[k]) || k, need: (res.want && res.want[k]) || 1 };
                 }
                 if (!Object.keys(keys).length) return;
