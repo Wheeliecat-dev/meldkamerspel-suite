@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007180717 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007181156 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007180717';
+    const VERSION = '1.7.0.20261007181156';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -12014,8 +12014,8 @@ MKS.module({
         { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
         { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
-            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op een echte post '
-                + 'ver van je andere van die soort brengt nieuwe inzetten. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
+            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
+                + 'die het dichtst bij je bestaande gebouwen ligt (minstens 3 km van je andere van die soort) brengt nieuwe inzetten zonder lange rijtijden. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
         { key: 'growKm', label: 'Groeien tot', type: 'number', default: 60, min: 10, max: 300, step: 5, unit: 'km', help: 'Vanaf je meldkamer.' },
     ],
 
@@ -12303,7 +12303,10 @@ MKS.module({
             });
             const vehicleIds = [...doc.querySelectorAll('#vehicle_table a[href^="/vehicles/"]')]
                 .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)$/) || [])[1]).filter(Boolean);
-            return { used: cap ? Number(cap[1]) : null, max: cap ? Number(cap[2]) : null, exts, vehicleIds };
+            // Small station: "Gebouw upgraden (630.736 credits)" turns it into a full one (24 h).
+            const up = [...doc.querySelectorAll('a[href]')].find((a) => /\/small_expand$/.test((a.getAttribute('href') || '').split('?')[0]));
+            const smallExpand = up ? { href: up.getAttribute('href'), cost: num(up.textContent) } : null;
+            return { used: cap ? Number(cap[1]) : null, max: cap ? Number(cap[2]) : null, exts, vehicleIds, smallExpand };
         }
         // The next level on the "Uitbouwen" page: the cheapest credits link.
         async function nextLevel(id) {
@@ -12862,6 +12865,14 @@ MKS.module({
                 const full = info.used != null && info.max != null && info.used >= info.max;
                 const lvl = full && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
                 if (full && !lvl) {
+                    // A small station at its limit: upgrade it to a full one (24 hours), then a
+                    // project buys the vehicle once there is room.
+                    if (info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && staffLeft(b, data) >= crewOf(c.vt) && !projects().some((p) => p.building === b.id)) {
+                        const se = info.smallExpand;
+                        return { label: `${b.caption} uitbouwen tot groot station (24 uur, voor ${v[0]})`, cost: se.cost,
+                            run: () => hit(se.href, true), check: async () => !(await buildingInfo(b.id)).smallExpand,
+                            projects: [{ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'buy', people: [], started: Date.now() }] };
+                    }
                     reasons.push(`${b.caption}: vol${ctx.cfg.doLevels ? ', hoogste level' : ''}`);
                     continue;
                 }
@@ -13145,7 +13156,7 @@ MKS.module({
         const GROW = [
             { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { types: [3], same: [3, 13], vt: 16, name: 'ambulancepost' },
+            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
         async function planGrow(data) {
             const out = [];
@@ -13166,12 +13177,17 @@ MKS.module({
                     const at = [p[0], p[1]];
                     if (km(at, data.home) > ctx.cfg.growKm) continue;
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
+                    // Not on top of one of this kind (3 km at least, so it covers new ground),
+                    // and of those the one nearest to anything you have: the network grows
+                    // outward step by step instead of jumping to far gaps (long drives).
                     const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
-                    if (gap >= 6 && (!best || gap > best.gap)) best = { at, gap };
+                    if (gap < 3) continue;
+                    const near = Math.min(...owned.map((o) => km(o, at)));
+                    if (!best || near < best.near) best = { at, gap, near };
                 }
                 if (!best) continue;
                 for (const type of g.types) {
-                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
                     const run = plan.run;
                     out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
@@ -13181,7 +13197,9 @@ MKS.module({
                             state.cool[need] = Date.now() + 2 * 3600000;
                             await sleep(1500);
                             // Its first vehicle as a project: bought as soon as the game sells it.
-                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === type);
+                            // The API lists small ones as the normal kind with small_building set.
+                            const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
+                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
                             if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } });
                 }
@@ -13435,7 +13453,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007180717' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007181156' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13575,7 +13593,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007180717',
+                version: '1.7.0.20261007181156',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

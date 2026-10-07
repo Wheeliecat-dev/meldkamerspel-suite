@@ -47,8 +47,8 @@ MKS.module({
         { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
         { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
-            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op een echte post '
-                + 'ver van je andere van die soort brengt nieuwe inzetten. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
+            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
+                + 'die het dichtst bij je bestaande gebouwen ligt (minstens 3 km van je andere van die soort) brengt nieuwe inzetten zonder lange rijtijden. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
         { key: 'growKm', label: 'Groeien tot', type: 'number', default: 60, min: 10, max: 300, step: 5, unit: 'km', help: 'Vanaf je meldkamer.' },
     ],
 
@@ -1210,12 +1210,17 @@ MKS.module({
                     const at = [p[0], p[1]];
                     if (km(at, data.home) > ctx.cfg.growKm) continue;
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
+                    // Not on top of one of this kind (3 km at least, so it covers new ground),
+                    // and of those the one nearest to anything you have: the network grows
+                    // outward step by step instead of jumping to far gaps (long drives).
                     const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
-                    if (gap >= 6 && (!best || gap > best.gap)) best = { at, gap };
+                    if (gap < 3) continue;
+                    const near = Math.min(...owned.map((o) => km(o, at)));
+                    if (!best || near < best.near) best = { at, gap, near };
                 }
                 if (!best) continue;
                 for (const type of g.types) {
-                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
                     const run = plan.run;
                     out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
