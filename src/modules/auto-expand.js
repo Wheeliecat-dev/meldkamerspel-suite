@@ -1016,7 +1016,11 @@ MKS.module({
 
         async function round() {
             if (busy || stopped) return;
-            if (lockHolder()) { ctx.status('Draait al in een ander tabblad.', { tone: 'warn' }); return; }
+            if (lockHolder()) {
+                ctx.status('Draait al in een ander tabblad (of de vorige pagina is net herladen). Nieuwe poging over 40 seconden.', { tone: 'warn' });
+                setTimeout(() => { if (!stopped) round(); }, 40000);
+                return;
+            }
             busy = true;
             takeLock();
             try {
@@ -1113,6 +1117,10 @@ MKS.module({
         }
         const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now() })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
+        // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
+        // ("Draait al in een ander tabblad" with only one tab open).
+        const releaseLock = () => { try { const l = JSON.parse(localStorage.getItem(LOCK_KEY)); if (l && l.inst === INSTANCE) localStorage.removeItem(LOCK_KEY); } catch (e) { /* ignore */ } };
+        window.addEventListener('pagehide', releaseLock);
 
         ctx.panel((el) => {
             const day = new Date().toISOString().slice(0, 10);
@@ -1167,7 +1175,8 @@ MKS.module({
                 clearTimeout(first);
                 clearInterval(timer);
                 clearInterval(heartbeat);
-                try { const l = JSON.parse(localStorage.getItem(LOCK_KEY)); if (l && l.inst === INSTANCE) localStorage.removeItem(LOCK_KEY); } catch (e) { /* ignore */ }
+                window.removeEventListener('pagehide', releaseLock);
+                releaseLock();
             },
         };
     },
