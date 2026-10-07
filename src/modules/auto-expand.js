@@ -336,7 +336,10 @@ MKS.module({
             });
             const vehicleIds = [...doc.querySelectorAll('#vehicle_table a[href^="/vehicles/"]')]
                 .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)$/) || [])[1]).filter(Boolean);
-            return { used: cap ? Number(cap[1]) : null, max: cap ? Number(cap[2]) : null, exts, vehicleIds };
+            // Small station: "Gebouw upgraden (630.736 credits)" turns it into a full one (24 h).
+            const up = [...doc.querySelectorAll('a[href]')].find((a) => /\/small_expand$/.test((a.getAttribute('href') || '').split('?')[0]));
+            const smallExpand = up ? { href: up.getAttribute('href'), cost: num(up.textContent) } : null;
+            return { used: cap ? Number(cap[1]) : null, max: cap ? Number(cap[2]) : null, exts, vehicleIds, smallExpand };
         }
         // The next level on the "Uitbouwen" page: the cheapest credits link.
         async function nextLevel(id) {
@@ -895,6 +898,14 @@ MKS.module({
                 const full = info.used != null && info.max != null && info.used >= info.max;
                 const lvl = full && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
                 if (full && !lvl) {
+                    // A small station at its limit: upgrade it to a full one (24 hours), then a
+                    // project buys the vehicle once there is room.
+                    if (info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && staffLeft(b, data) >= crewOf(c.vt) && !projects().some((p) => p.building === b.id)) {
+                        const se = info.smallExpand;
+                        return { label: `${b.caption} uitbouwen tot groot station (24 uur, voor ${v[0]})`, cost: se.cost,
+                            run: () => hit(se.href, true), check: async () => !(await buildingInfo(b.id)).smallExpand,
+                            projects: [{ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'buy', people: [], started: Date.now() }] };
+                    }
                     reasons.push(`${b.caption}: vol${ctx.cfg.doLevels ? ', hoogste level' : ''}`);
                     continue;
                 }
@@ -1214,7 +1225,9 @@ MKS.module({
                             state.cool[need] = Date.now() + 2 * 3600000;
                             await sleep(1500);
                             // Its first vehicle as a project: bought as soon as the game sells it.
-                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === type);
+                            // The API lists small ones as the normal kind with small_building set.
+                            const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
+                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
                             if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } });
                 }

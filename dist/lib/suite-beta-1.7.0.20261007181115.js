@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007180214 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007181115 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007180214';
+    const VERSION = '1.7.0.20261007181115';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -12303,7 +12303,10 @@ MKS.module({
             });
             const vehicleIds = [...doc.querySelectorAll('#vehicle_table a[href^="/vehicles/"]')]
                 .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)$/) || [])[1]).filter(Boolean);
-            return { used: cap ? Number(cap[1]) : null, max: cap ? Number(cap[2]) : null, exts, vehicleIds };
+            // Small station: "Gebouw upgraden (630.736 credits)" turns it into a full one (24 h).
+            const up = [...doc.querySelectorAll('a[href]')].find((a) => /\/small_expand$/.test((a.getAttribute('href') || '').split('?')[0]));
+            const smallExpand = up ? { href: up.getAttribute('href'), cost: num(up.textContent) } : null;
+            return { used: cap ? Number(cap[1]) : null, max: cap ? Number(cap[2]) : null, exts, vehicleIds, smallExpand };
         }
         // The next level on the "Uitbouwen" page: the cheapest credits link.
         async function nextLevel(id) {
@@ -12862,6 +12865,14 @@ MKS.module({
                 const full = info.used != null && info.max != null && info.used >= info.max;
                 const lvl = full && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
                 if (full && !lvl) {
+                    // A small station at its limit: upgrade it to a full one (24 hours), then a
+                    // project buys the vehicle once there is room.
+                    if (info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && staffLeft(b, data) >= crewOf(c.vt) && !projects().some((p) => p.building === b.id)) {
+                        const se = info.smallExpand;
+                        return { label: `${b.caption} uitbouwen tot groot station (24 uur, voor ${v[0]})`, cost: se.cost,
+                            run: () => hit(se.href, true), check: async () => !(await buildingInfo(b.id)).smallExpand,
+                            projects: [{ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'buy', people: [], started: Date.now() }] };
+                    }
                     reasons.push(`${b.caption}: vol${ctx.cfg.doLevels ? ', hoogste level' : ''}`);
                     continue;
                 }
@@ -13139,10 +13150,13 @@ MKS.module({
          * free real post within growKm of the dispatch centre that is furthest from the
          * own buildings of that kind (6 km at least), valued at the average weekly
          * income per building. After building it, a project buys its first vehicle. */
+        // The small kinds (Brandweerkazerne (klein), Politieopkomstbureau (klein)) are
+        // cheaper: fewer parking spots, but more new areas for the money. Both go into the
+        // ranking; the better return wins, and one build per kind per 2 hours.
         const GROW = [
-            { type: 0, same: [0, 17], vt: 1, name: 'brandweerkazerne' },
-            { type: 5, same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { type: 3, same: [3, 13], vt: 16, name: 'ambulancepost' },
+            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
+            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
+            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
         async function planGrow(data) {
             const out = [];
@@ -13159,7 +13173,7 @@ MKS.module({
                 const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
                 let best = null;
                 for (const p of posts) {
-                    if (p[2] !== CAT_OF[g.type]) continue;
+                    if (p[2] !== CAT_OF[g.types[0]]) continue;
                     const at = [p[0], p[1]];
                     if (km(at, data.home) > ctx.cfg.growKm) continue;
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
@@ -13167,19 +13181,23 @@ MKS.module({
                     if (gap >= 6 && (!best || gap > best.gap)) best = { at, gap };
                 }
                 if (!best) continue;
-                const plan = await planBuilding({ name: need, at: best.at }, [g.type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
-                if (plan.skip) { skipped.push(plan.skip); continue; }
-                const run = plan.run;
-                out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
-                    run: async () => {
-                        const before = new Set(data.buildings.map((b) => b.id));
-                        await run();
-                        state.cool[need] = Date.now() + 2 * 3600000;
-                        await sleep(1500);
-                        // Its first vehicle as a project: bought as soon as the game sells it.
-                        const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === g.type);
-                        if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
-                    } });
+                for (const type of g.types) {
+                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                    if (plan.skip) { skipped.push(plan.skip); continue; }
+                    const run = plan.run;
+                    out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
+                        run: async () => {
+                            const before = new Set(data.buildings.map((b) => b.id));
+                            await run();
+                            state.cool[need] = Date.now() + 2 * 3600000;
+                            await sleep(1500);
+                            // Its first vehicle as a project: bought as soon as the game sells it.
+                            // The API lists small ones as the normal kind with small_building set.
+                            const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
+                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
+                            if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
+                        } });
+                }
             }
             return out;
         }
@@ -13430,7 +13448,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007180214' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007181115' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13570,7 +13588,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007180214',
+                version: '1.7.0.20261007181115',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
