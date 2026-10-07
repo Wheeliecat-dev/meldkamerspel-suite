@@ -933,6 +933,11 @@ MKS.module({
             if (!needs || !needs.types) needs = { since: Date.now(), types: {}, other: {} };
             const saveNeeds = () => { try { GM_setValue(NEEDS_KEY, JSON.stringify(needs)); } catch (e) { ctx.warn('needs not saved', e); } };
 
+            // Where the mission being handled is ([lat, lon]) and what it pays, set by the
+            // loop. Stored per need as [lat, lon, time, credits], so the expansion module
+            // knows where to buy and how many credits a shortage blocked.
+            let curPos = null;
+            let curCredits = 0;
             function addNeed(kind, name, units, id, missionName) {
                 const bucket = kind === 'other' ? needs.other : needs.types;
                 const t = bucket[name] || (bucket[name] = { missions: 0, short: 0, far: 0, units: 0, ids: [], last: 0, example: '' });
@@ -945,7 +950,36 @@ MKS.module({
                 t.units += units || 0;
                 t.last = Date.now();
                 t.example = missionName;
+                t.credits = (t.credits || 0) + (curCredits || 0);
+                if (curPos) {
+                    t.pos = t.pos || [];
+                    t.pos.push([...curPos, Date.now(), curCredits || 0]);
+                    if (t.pos.length > 60) t.pos.shift();
+                }
             }
+
+            /* --------------------------------------------------------------------
+             * EVENTS — one line per mission or transport handled, the last 3000,
+             * kept across sessions. Read by the expansion module, and on the page
+             * as window.mksAutoData so it can be inspected from outside.
+             * ------------------------------------------------------------------ */
+            const EVENTS_KEY = 'mks.autoDispatch.events.v1';
+            let events;
+            try { events = JSON.parse(GM_getValue(EVENTS_KEY, '[]')) || []; } catch (e) { events = []; }
+            let eventsTimer = null;
+            function recordEvent(e) {
+                events.push({ t: Date.now(), ...e });
+                if (events.length > 3000) events.splice(0, events.length - 3000);
+                clearTimeout(eventsTimer);
+                eventsTimer = setTimeout(() => { try { GM_setValue(EVENTS_KEY, JSON.stringify(events)); } catch (x) { ctx.warn('events not saved', x); } }, 2000);
+            }
+            W.mksAutoData = {
+                get needs() { return needs; },
+                get events() { return events; },
+                get stats() { return stats; },
+                get holds() { return [...holds].map(([id, h]) => ({ id, ...h })); },
+                get running() { return running; },
+            };
 
             // "Niet beschikbaar: 1 AT-Commandant. Niet beschikbaar: 2 TS 8/9. "
             function recordShortage(text, id, name) {
@@ -1158,7 +1192,10 @@ MKS.module({
                     status(`Spraakaanvraag: ${v.caption}`, 'busy');
                     const res = await runJob({ kind: 'transport', id: vid, token: Date.now(), destCost: Number(ctx.cfg.destCost),
                         destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                    curPos = null;
+                    curCredits = 0;
                     recordResult(res, `v${vid}`, v.caption);
+                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason });
                     if (res.result === 'sent' || res.result === 'unconfirmed') {
                         stats.transports++;
                         errorStreak = 0;
@@ -1216,6 +1253,9 @@ MKS.module({
                         const id = entry.getAttribute('mission_id');
                         const name = titleOf(entry);
                         const credits = creditsOf(entry);
+                        const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
+                        curPos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                        curCredits = credits;
                         tried.set(id, Date.now());
                         const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
                         const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
@@ -1246,6 +1286,8 @@ MKS.module({
                             ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
+                        recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
+                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined });
                         if (res.mode !== 'cell') updateHold(id, name, credits, res);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
