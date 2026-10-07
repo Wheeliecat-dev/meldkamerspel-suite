@@ -712,15 +712,17 @@ MKS.module({
                     reasons.push(`${b.caption}: uitbreiding nodig`);
                     continue;
                 }
-                if (info.used != null && info.max != null && info.used >= info.max) {
-                    const lvl = ctx.cfg.doLevels ? await nextLevel(b.id) : null;
-                    if (lvl) {
-                        return { label: `level ${lvl.level} voor ${b.caption} (parkeerplaats voor ${v[0]})`, cost: lvl.cost,
-                            run: () => hit(lvl.href), check: async () => ((await buildingInfo(b.id)).max || 0) > (info.max || 0) };
-                    }
+                // Full: a level only after the staff and crew checks below, and always with
+                // a project that buys the vehicle (and links trained crew) right after it.
+                const full = info.used != null && info.max != null && info.used >= info.max;
+                const lvl = full && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
+                if (full && !lvl) {
                     reasons.push(`${b.caption}: vol${ctx.cfg.doLevels ? ', hoogste level' : ''}`);
                     continue;
                 }
+                const levelStep = (crew) => ({ label: `level ${lvl.level} voor ${b.caption} (parkeerplaats voor ${v[0]}, daarna kopen)`, cost: lvl.cost,
+                    run: () => hit(lvl.href), check: async () => ((await buildingInfo(b.id)).max || 0) > (info.max || 0),
+                    projects: [{ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'buy', training: v[4] || null, people: crew, started: Date.now() }] });
                 // Staff is shared by the building's vehicles: what is left after the
                 // ones it has must crew this one too (5 staff, 2 ambulances = 1 left: no).
                 const here = data.vehicles.filter((x) => x.building_id === b.id);
@@ -741,6 +743,7 @@ MKS.module({
                     const people = await peopleAt(b.id, edu.key);
                     const trained = people.filter((p) => p.free && p.has);
                     if (trained.length >= want) {
+                        if (full) return levelStep(trained.slice(0, want).map((p) => p.pid));
                         const buy = await buyAction(b, c, v, info, d);
                         if (buy.skip) { reasons.push(buy.skip); continue; }
                         return { ...buy, people: trained.slice(0, want).map((p) => p.pid) };
@@ -793,6 +796,7 @@ MKS.module({
                         projects: group,
                     };
                 }
+                if (full) return levelStep([]);
                 const buy = await buyAction(b, c, v, info, d);
                 if (buy.skip) { reasons.push(buy.skip); continue; }
                 return buy;
@@ -999,7 +1003,9 @@ MKS.module({
                     if (next.done) next.done();
                     for (const p of next.projects || []) if (!projects().includes(p)) projects().push(p);
                     const people = next.project && next.project.stage === 'buy' ? next.project.people : next.people;
-                    if (people && next.before) {
+                    if (next.project && next.project.stage === 'buy' && !(people && people.length)) {
+                        state.projects = projects().filter((x) => x !== next.project);
+                    } else if (people && people.length && next.before) {
                         const fresh = (await buildingInfo(next.building)).vehicleIds.filter((id) => !next.before.includes(id));
                         if (fresh.length) {
                             const p = next.project && next.project.stage === 'buy' ? next.project

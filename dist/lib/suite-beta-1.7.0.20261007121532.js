@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007115633 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007121532 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007115633';
+    const VERSION = '1.7.0.20261007121532';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10736,7 +10736,13 @@ MKS.module({
                     go(release, { mode: 'release', dest: kind === 'cell' ? 'gevangenen vrijgelaten' : 'patiënt niet vervoerd', unknownNeeds: [need] });
                     return;
                 }
-                report('skip', { reason: `geen passende ${kind === 'cell' ? 'cel' : 'ziekenhuis'} (${reasons})`, unknownNeeds: [need] });
+                // No candidates at all: keep what the page showed, to find out why from the log.
+                const page = all.length ? undefined : {
+                    alert: (document.querySelector('.alert')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+                    links: [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')).filter((h) => /patient|gefangene|transport/i.test(h)).slice(0, 8),
+                    buttons: [...document.querySelectorAll('#h2_sprechwunsch ~ * a.btn, .btn-group a.btn')].map((a) => a.textContent.replace(/\s+/g, ' ').trim().slice(0, 40)).slice(0, 8),
+                };
+                report('skip', { reason: `geen passende ${kind === 'cell' ? 'cel' : 'ziekenhuis'} (${reasons})`, unknownNeeds: [need], page });
             } catch (e) {
                 ctx.err(e);
                 report('error', { reason: e.message || String(e) });
@@ -10944,7 +10950,9 @@ MKS.module({
                     // Most fields are "1", some carry a number (police_horse_count = horses on board).
                     const sel = k.startsWith('vt:') ? `input.vehicle_checkbox[vehicle_type_id="${k.slice(3)}"]`
                         : `input.vehicle_checkbox[${CSS.escape(k)}]:not([${CSS.escape(k)}="0"])`;
-                    avail[k] = new Set([...document.querySelectorAll(sel)].map((c) => c.value)).size;
+                    const boxes = new Map([...document.querySelectorAll(sel)].map((c) => [c.value, c]));
+                    // Horses: the sum over the trucks (one per rider), not the number of trucks.
+                    avail[k] = k === 'police_horse_count' ? [...boxes.values()].reduce((s, c) => s + (Number(c.getAttribute(k)) || 0), 0) : boxes.size;
                 }
                 // Held for a bigger mission: only if taking ours would leave too few for it.
                 // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
@@ -11309,7 +11317,7 @@ MKS.module({
                 if (curPos) {
                     t.pos = t.pos || [];
                     t.pos.push([...curPos, Date.now(), curCredits || 0]);
-                    if (t.pos.length > 60) t.pos.shift();
+                    if (t.pos.length > 200) t.pos.shift();
                 }
             }
 
@@ -11550,7 +11558,7 @@ MKS.module({
                     curPos = null;
                     curCredits = 0;
                     recordResult(res, `v${vid}`, v.caption);
-                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason });
+                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason, page: res.page });
                     if (res.result === 'sent' || res.result === 'unconfirmed') {
                         stats.transports++;
                         errorStreak = 0;
@@ -11642,7 +11650,8 @@ MKS.module({
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
-                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined });
+                            reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
+                            ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell') updateHold(id, name, credits, res);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
@@ -12234,7 +12243,9 @@ MKS.module({
         function value7d(t) {
             const since = Date.now() - 7 * 86400000;
             const recent = (t.pos || []).filter((p) => p[2] >= since);
-            if (recent.some((p) => p.length > 3)) return recent.reduce((s, p) => s + (p[3] || 0), 0);
+            // Places recorded before credits were tracked (or with unknown credits) count
+            // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
+            if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
             return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2);
         }
@@ -12564,15 +12575,17 @@ MKS.module({
                     reasons.push(`${b.caption}: uitbreiding nodig`);
                     continue;
                 }
-                if (info.used != null && info.max != null && info.used >= info.max) {
-                    const lvl = ctx.cfg.doLevels ? await nextLevel(b.id) : null;
-                    if (lvl) {
-                        return { label: `level ${lvl.level} voor ${b.caption} (parkeerplaats voor ${v[0]})`, cost: lvl.cost,
-                            run: () => hit(lvl.href), check: async () => ((await buildingInfo(b.id)).max || 0) > (info.max || 0) };
-                    }
+                // Full: a level only after the staff and crew checks below, and always with
+                // a project that buys the vehicle (and links trained crew) right after it.
+                const full = info.used != null && info.max != null && info.used >= info.max;
+                const lvl = full && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
+                if (full && !lvl) {
                     reasons.push(`${b.caption}: vol${ctx.cfg.doLevels ? ', hoogste level' : ''}`);
                     continue;
                 }
+                const levelStep = (crew) => ({ label: `level ${lvl.level} voor ${b.caption} (parkeerplaats voor ${v[0]}, daarna kopen)`, cost: lvl.cost,
+                    run: () => hit(lvl.href), check: async () => ((await buildingInfo(b.id)).max || 0) > (info.max || 0),
+                    projects: [{ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'buy', training: v[4] || null, people: crew, started: Date.now() }] });
                 // Staff is shared by the building's vehicles: what is left after the
                 // ones it has must crew this one too (5 staff, 2 ambulances = 1 left: no).
                 const here = data.vehicles.filter((x) => x.building_id === b.id);
@@ -12593,6 +12606,7 @@ MKS.module({
                     const people = await peopleAt(b.id, edu.key);
                     const trained = people.filter((p) => p.free && p.has);
                     if (trained.length >= want) {
+                        if (full) return levelStep(trained.slice(0, want).map((p) => p.pid));
                         const buy = await buyAction(b, c, v, info, d);
                         if (buy.skip) { reasons.push(buy.skip); continue; }
                         return { ...buy, people: trained.slice(0, want).map((p) => p.pid) };
@@ -12645,6 +12659,7 @@ MKS.module({
                         projects: group,
                     };
                 }
+                if (full) return levelStep([]);
                 const buy = await buyAction(b, c, v, info, d);
                 if (buy.skip) { reasons.push(buy.skip); continue; }
                 return buy;
@@ -12823,13 +12838,14 @@ MKS.module({
                     next = ranking[0] || null;
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
-                state.lastRound = { at: Date.now(), skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
+                state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
                     ranking: ranking.map(({ need, label, cost, value, ratio }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000 })) };
                 if (!next) {
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }
                 if (next.cost > spendable) {
+                    state.lastRound.result = `spaart: ${next.cost} nodig, ${Math.max(0, spendable)} vrij boven de buffer`;
                     ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer.`, { tone: 'idle' });
                     return;
                 }
@@ -12844,12 +12860,15 @@ MKS.module({
                     state.cool[next.need] = Date.now() + 30 * 60000;
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
+                    state.lastRound.result = 'gedaan';
                     // Training started: a new project. Vehicle bought for trained people
                     // (now, or the buy step of a project): find it and assign them next.
                     if (next.done) next.done();
                     for (const p of next.projects || []) if (!projects().includes(p)) projects().push(p);
                     const people = next.project && next.project.stage === 'buy' ? next.project.people : next.people;
-                    if (people && next.before) {
+                    if (next.project && next.project.stage === 'buy' && !(people && people.length)) {
+                        state.projects = projects().filter((x) => x !== next.project);
+                    } else if (people && people.length && next.before) {
                         const fresh = (await buildingInfo(next.building)).vehicleIds.filter((id) => !next.before.includes(id));
                         if (fresh.length) {
                             const p = next.project && next.project.stage === 'buy' ? next.project
@@ -12861,6 +12880,7 @@ MKS.module({
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
                     addLog(`niet gelukt: ${next.label}`, 'error');
+                    if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
                 }
             } catch (e) {
@@ -13014,7 +13034,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007115633',
+                version: '1.7.0.20261007121532',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
