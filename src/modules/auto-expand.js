@@ -960,12 +960,33 @@ MKS.module({
         const extVehicle = (text) => {
             const list = (String(text).match(/Voertuigen:\s*(.+?)\s*(?:Parkeerplaatsen|$)/) || [])[1];
             if (!list) return null;
-            for (const n of list.split(/,\s*|\s+en\s+/)) { const vt = vehiclesFor(n.trim())[0]; if (vt != null) return vt; }
+            for (const n of list.split(/,\s*|\s+en\s+/)) {
+                const vt = vehiclesFor(n.trim())[0];
+                if (vt != null) { (state.extVt = state.extVt || {})[extName(text)] = vt; return vt; }
+            }
             return null;
         };
+        // Extensions still being built (bought here or by hand) whose vehicle the building
+        // does not have yet and no project trains for: give them a crew project.
+        const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        function prepSweep(data) {
+            for (const b of data.buildings) {
+                for (const x of b.extensions || []) {
+                    if (x.available !== false) continue;
+                    const vt = (state.extVt || {})[x.caption] ?? EXT_VT[x.caption];
+                    if (vt == null || !VT[vt]) continue;
+                    if (data.vehicles.some((v) => v.building_id === b.id && v.vehicle_type === vt)) continue;
+                    const made = prepProject(b, vt, `uitbreiding ${x.caption}`);
+                    if (made.length) { projects().push(...made); addLog(`project: personeel voor ${VT[vt][0]} in ${b.caption} (uitbreiding ${x.caption} wordt gebouwd)`, 'idle'); }
+                }
+            }
+        }
         // After buying an extension that brings a vehicle: a project that trains its crew
         // now, while the extension is being built, then buys and links (see advanceProjects).
-        const prepProject = (b, vt, need) => (vt == null ? [] : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+        // Several per building are fine (Drone Team and ME-AE at Veenendaal): each has its
+        // own vehicle and its own people; only the same vehicle twice is not.
+        const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
+            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
 
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
@@ -977,7 +998,7 @@ MKS.module({
                 if (ext && ext.cost && ctx.cfg.doExtensions) {
                     return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
                         run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
-                        projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, extVehicle(ext.text), c.name) };
+                        projects: prepProject(b, extVehicle(ext.text), c.name) };
                 }
             }
             return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
@@ -1177,6 +1198,7 @@ MKS.module({
                 recordEarn(data.total);
                 skipped = [];
                 eduCache = null;
+                prepSweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
                 if (!next) {
