@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007140005 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007150236 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007140005';
+    const VERSION = '1.7.0.20261007150236';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11589,10 +11589,29 @@ MKS.module({
                     } else {
                         stats.errors++;
                         addLog(v.caption, `fout: ${res.reason}`, 'error');
-                        if (++errorStreak >= 3) { stop('Gestopt na 3 fouten op rij. Zie logboek.'); return; }
+                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
                     }
                     await sleep(ctx.cfg.pauseSec * 1000);
                 }
+            }
+
+            // Three errors in a row. Windows that do not answer mean a slow or stuck game
+            // page (14:46-14:48 three timeouts stopped auto mode for good): reload, and
+            // auto mode resumes. More than three such reloads in an hour, or other
+            // errors: stop.
+            function threeErrors(reason) {
+                const KEY = 'mks-auto-dispatch.timeoutReloads';
+                let list = [];
+                try { list = (JSON.parse(sessionStorage.getItem(KEY) || '[]') || []).filter((t) => Date.now() - t < 3600000); } catch (e) { /* ignore */ }
+                if (/reageerde niet/.test(String(reason)) && list.length < 3) {
+                    list.push(Date.now());
+                    try { sessionStorage.setItem(KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+                    addLog('—', '3 keer geen reactie van een venster: pagina ververst, gaat zo verder', 'warn');
+                    onPageHide();
+                    location.reload();
+                    return;
+                }
+                stop('Gestopt na 3 fouten op rij. Zie logboek.');
             }
 
             // A game page that stays open for hours gets slow and heavy. Reload
@@ -11699,7 +11718,7 @@ MKS.module({
                         } else {
                             stats.errors++;
                             addLog(name, `fout: ${res.reason}`, 'error');
-                            if (++errorStreak >= 3) { stop('Gestopt na 3 fouten op rij. Zie logboek.'); break; }
+                            if (++errorStreak >= 3) { threeErrors(res.reason); break; }
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
@@ -12264,7 +12283,10 @@ MKS.module({
             // 1,000 each; counting them as 0 put OvD-P (122 missions) below 5-mission needs.
             if (recent.length) return recent.reduce((s, p) => s + (p[3] || 1000) * weight(p[2]), 0);
             const age = (Date.now() - (t.last || 0)) / 3600000;
-            return t.missions * 1000 * (age < 24 ? 1 : age < 72 ? 0.5 : 0.2) * 0.5 ** buys.length;
+            // No places with times (recorded by an older version): the all-time count says
+            // little about now. Capped, and fading fast once the last shortage is a day old
+            // (291 old Noodhulp shortages bought two levels and two cars a day later).
+            return Math.min(t.missions, 30) * 1000 * (age < 24 ? 1 : age < 72 ? 0.3 : 0.05) * 0.5 ** buys.length;
         }
         function candidates(needs) {
             const now = Date.now();
@@ -12272,6 +12294,10 @@ MKS.module({
             for (const [name, t] of Object.entries(needs.types || {})) {
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
+                // A project for this need is still under way (training, extension being
+                // built): wait for it instead of planning a second answer (a 400k police
+                // building for OvD-P while Ede's OvD-P crew waited for a classroom).
+                if (projects().some((p) => p.need === name)) continue;
                 const vts = vehiclesFor(name);
                 const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
@@ -13140,7 +13166,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007140005' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007150236' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13280,7 +13306,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007140005',
+                version: '1.7.0.20261007150236',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

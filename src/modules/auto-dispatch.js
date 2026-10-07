@@ -1234,10 +1234,29 @@ MKS.module({
                     } else {
                         stats.errors++;
                         addLog(v.caption, `fout: ${res.reason}`, 'error');
-                        if (++errorStreak >= 3) { stop('Gestopt na 3 fouten op rij. Zie logboek.'); return; }
+                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
                     }
                     await sleep(ctx.cfg.pauseSec * 1000);
                 }
+            }
+
+            // Three errors in a row. Windows that do not answer mean a slow or stuck game
+            // page (14:46-14:48 three timeouts stopped auto mode for good): reload, and
+            // auto mode resumes. More than three such reloads in an hour, or other
+            // errors: stop.
+            function threeErrors(reason) {
+                const KEY = 'mks-auto-dispatch.timeoutReloads';
+                let list = [];
+                try { list = (JSON.parse(sessionStorage.getItem(KEY) || '[]') || []).filter((t) => Date.now() - t < 3600000); } catch (e) { /* ignore */ }
+                if (/reageerde niet/.test(String(reason)) && list.length < 3) {
+                    list.push(Date.now());
+                    try { sessionStorage.setItem(KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+                    addLog('—', '3 keer geen reactie van een venster: pagina ververst, gaat zo verder', 'warn');
+                    onPageHide();
+                    location.reload();
+                    return;
+                }
+                stop('Gestopt na 3 fouten op rij. Zie logboek.');
             }
 
             // A game page that stays open for hours gets slow and heavy. Reload
@@ -1344,7 +1363,7 @@ MKS.module({
                         } else {
                             stats.errors++;
                             addLog(name, `fout: ${res.reason}`, 'error');
-                            if (++errorStreak >= 3) { stop('Gestopt na 3 fouten op rij. Zie logboek.'); break; }
+                            if (++errorStreak >= 3) { threeErrors(res.reason); break; }
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
