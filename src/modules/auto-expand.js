@@ -1062,6 +1062,22 @@ MKS.module({
         // Extensions still being built (bought here or by hand) whose vehicle the building
         // does not have yet and no project trains for: give them a crew project.
         const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        // Stations without a single vehicle and no project (a build whose follow-up got
+        // lost, like Ambulancepost Nijmegen Centrum): give them their first vehicle.
+        const EMPTY_KIND = { 0: 'brandweerkazerne', 17: 'brandweerkazerne', 5: 'politiebureau', 18: 'politiebureau', 3: 'ambulancepost', 13: 'ambulancepost' };
+        function emptySweep(data) {
+            if (!ctx.cfg.doVehicles) return;
+            for (const b of data.buildings) {
+                const kind = EMPTY_KIND[b.building_type];
+                if (!kind || b.enabled === false) continue;
+                if (data.vehicles.some((v) => v.building_id === b.id) || projects().some((p) => p.building === b.id)) continue;
+                const first = GROW_FILL[kind].first;
+                projects().push(ctx.cfg.buildMode
+                    ? { building: b.id, caption: b.caption, vt: first, need: `Groei: ${kind}`, stage: 'grow', kind, levels: 0, people: [], started: Date.now() }
+                    : { building: b.id, caption: b.caption, vt: first, need: `Groei: ${kind}`, stage: 'buy', people: [], started: Date.now() });
+                addLog(`project: eerste voertuig voor ${b.caption} (nog geen voertuigen)`, 'idle');
+            }
+        }
         function prepSweep(data) {
             for (const b of data.buildings) {
                 for (const x of b.extensions || []) {
@@ -1304,7 +1320,11 @@ MKS.module({
                             // Its first vehicle as a project: bought as soon as the game sells it.
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
-                            const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
+                            let nb = null;
+                            for (let i = 0; i < 6 && !nb; i++) {
+                                nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
+                                if (!nb) await sleep(2000);
+                            }
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
                             else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } };
@@ -1350,8 +1370,15 @@ MKS.module({
                     fd.set('commit', btn.value);
                     return hit('/buildings', new URLSearchParams(fd));
                 },
-                // The next building of a type costs more once one is built.
-                check: async () => { const d = await getDoc('/buildings/new'); return num(d.querySelector(`#build_credits_${type}`)?.value) > cost; },
+                // One building more than before (the price check failed for the VWS-post,
+                // which always costs 100,000). The API can lag, so look a few times.
+                check: async () => {
+                    for (let i = 0; i < 5; i++) {
+                        if ((await api('/api/buildings')).length > data.buildings.length) return true;
+                        await sleep(2000);
+                    }
+                    return false;
+                },
             };
         }
 
@@ -1461,6 +1488,7 @@ MKS.module({
                 blocked = {};
                 eduCache = null;
                 prepSweep(data);
+                emptySweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
                 if (!next) {
