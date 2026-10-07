@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007112418 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007115633 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007112418';
+    const VERSION = '1.7.0.20261007115633';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -545,6 +545,36 @@ const MKS = (() => {
             root.remove();
             root = null;
             document.removeEventListener('keydown', onKey, true);
+            if (pip) { const w = pip; pip = null; w.close(); }
+        }
+
+        // Picture-in-picture (Chrome/Edge 116+): the same dashboard node moves into an
+        // always-on-top window, so it keeps working while the game is used. All lookups
+        // go through root, so nothing else changes. Closing that window closes the dashboard.
+        let pip = null;
+        const canPip = () => !!(W.documentPictureInPicture && W.documentPictureInPicture.requestWindow);
+        async function popOut() {
+            if (!root || pip || !canPip()) return;
+            const w = await W.documentPictureInPicture.requestWindow({ width: 920, height: 720 });
+            pip = w;
+            const d = w.document;
+            const font = d.createElement('link');
+            font.rel = 'stylesheet';
+            font.href = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap';
+            d.head.appendChild(font);
+            const st = d.createElement('style');
+            st.textContent = `${CSS}
+            html, body { margin:0; height:100%; background:#11161d; }
+            #mks-dash.mks-pip { position:static; inset:auto; height:100vh; padding:0; background:none; }
+            #mks-dash.mks-pip .mks-win { width:100%; height:100%; max-width:none; max-height:none; border:0; border-radius:0; box-shadow:none; }
+            #mks-dash.mks-pip .mks-pipbtn, #mks-dash.mks-pip .mks-wip { display:none; }
+            @media (max-width:760px) { #mks-dash.mks-pip .mks-side { width:210px; } #mks-dash.mks-pip input.mks-search { width:130px !important; } }`;
+            d.head.appendChild(st);
+            d.title = "Wheeliecat's scripts";
+            root.classList.add('mks-pip');
+            d.body.appendChild(root);
+            d.addEventListener('keydown', onKey, true);
+            w.addEventListener('pagehide', () => { if (pip === w) { pip = null; close(); } });
         }
 
         function onKey(e) {
@@ -560,7 +590,8 @@ const MKS = (() => {
                 <div class="mks-brand"><span class="mks-logo">W</span><b>Wheeliecat's scripts</b><span class="mks-ver">v${VERSION}</span>${CHANNEL === 'beta' ? '<span class="mks-pill t-warn">beta</span>' : ''}</div>
                 <span class="mks-count"></span>
                 <input class="mks-search" type="search" placeholder="Zoek script…" aria-label="Zoek script">
-                <button class="mks-btn mks-x" title="Sluiten (Esc)">✕</button>
+                ${canPip() ? '<button class="mks-btn mks-x mks-pipbtn" title="Zwevend venster: blijft boven alles, ook als je het spel gebruikt">⧉</button>' : ''}
+                <button class="mks-btn mks-x mks-close" title="Sluiten (Esc)">✕</button>
               </div>
               <div class="mks-wip"><span>🚧</span><span><b>Werk in uitvoering.</b> Deze scripts worden nog volop aangepast. Er kunnen fouten in zitten;
                 gebruik ze op eigen risico en controleer wat ze doen.</span></div>
@@ -573,7 +604,9 @@ const MKS = (() => {
             </div>`;
             document.body.appendChild(root);
             root.addEventListener('mousedown', (e) => { if (e.target === root) close(); });
-            root.querySelector('.mks-x').onclick = close;
+            root.querySelector('.mks-close').onclick = close;
+            const pipBtn = root.querySelector('.mks-pipbtn');
+            if (pipBtn) pipBtn.onclick = () => popOut().catch((e) => console.error('[MKS] picture-in-picture failed', e));
             root.querySelector('.mks-reload button').onclick = () => location.reload();
             const search = root.querySelector('.mks-search');
             search.value = query;
@@ -11855,10 +11888,8 @@ MKS.module({
             help: 'Eén opleiding kan meerdere gebouwen tegelijk een project geven (opleiden, level, kopen, koppelen): '
                 + 'de gebouwen die het dichtst liggen bij de meeste plekken waar het voertuig miste.' },
         { key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
-            help: 'Eerst wie het gebouw van het project nodig heeft, de rest vrij personeel uit de dichtstbijzijnde andere gebouwen '
-                + 'die dat voertuig kunnen hebben. Dan kan daar later meteen gekocht worden.' },
-        { key: 'trainPerBuilding', label: 'Per ander gebouw', type: 'number', default: 2, min: 0, max: 10, step: 1,
-            help: 'Zoveel mensen per ander gebouw mee naar dezelfde opleiding. 0 = alleen het gebouw van het project.' },
+            help: 'Alleen personeel van de gebouwen die het voertuig krijgen, en alleen zoveel als dat voertuig nodig heeft. '
+                + 'Er wordt nooit iemand "op voorraad" opgeleid.' },
         { key: 'unlockWeight', label: 'Nieuwe meldingen: keer per week', type: 'number', default: 1, min: 0, max: 20, step: 0.5,
             help: 'Een gebouw of uitbreiding die nieuwe meldingsoorten vrijspeelt telt hun gemiddelde credits zoveel keer per week. 0 = niet.' },
         { key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
@@ -12024,6 +12055,10 @@ MKS.module({
             'me commandovoertuig': 39, 'aanhoudingseenheid': 64, 'dienstbus arrestantenvervoer': 58, 'db-av': 58, 'db arrestantenvervoer': 58,
             'ovd-g': 38, 'officier van dienst geneeskunde': 38, 'mmt-auto of lifeliner': 37, 'ggb': 100, 'nht': 101,
             'verzorgingseenheid': 120, 'verzorger': 120, 'signalisatie voertuig (da-rws, da-sig of dm-rws)': 83,
+            'signalisatie voertuigen': 83, 'signalisatievoertuig': 83, 'tankautospuiten (terreinvaardig)': 6, 'schuimblusvoertuig': 130,
+            'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
+            'strandvoertuigen (quad, dat-rb of khv)': 65, 'bereden brigade (paarden)': 73, 'politie helikopters': 28, 'politie helikopter': 28,
+            'dienstvoertuigen usar': 92, 'politie noodhulp': 22,
         };
         const BY_NAME = {};
         for (const [id, v] of Object.entries(VT)) BY_NAME[norm(v[0])] = Number(id);
@@ -12031,14 +12066,35 @@ MKS.module({
         // "DB-GO, TS-GO of GOH-DC" name alternatives; "Een Berger-K" also matches the
         // variants "Berger-K (RWS)" and "Berger-K (Politie)". planVehicle picks the one
         // the player has a building for.
+        const STOP = new Set(['politie', 'brandweer', 'voertuig', 'eenheid', 'of', 'en', 'een', 'de', 'het', 'van']);
+        const singular = (w) => w.replace(/heden$/, 'heid').replace(/'s$/, '').replace(/(?<=[a-z]{3})(en|s)$/, '');
         function vehiclesFor(name) {
             const out = [];
             const add = (id) => { if (id != null && !out.includes(id)) out.push(id); };
-            const n = norm(name);
-            for (const a of [n, ...n.split(/,\s*|\s+of\s+/).map((x) => x.trim())]) {
-                add(ALIAS[a]);
-                add(BY_NAME[a]);
-                for (const [cap, id] of Object.entries(BY_NAME)) if (cap.startsWith(`${a} (`)) add(id);
+            const n = norm(name).replace(/\(s\)/g, '');
+            const parts = [n, ...n.split(/,\s*|\s+of\s+|\s*\/\s*/).map((x) => x.trim())];
+            for (const p of parts) {
+                // Plurals as the red box writes them: "Redvoertuigen", "Officiers van
+                // dienst politie", "Aanhoudingseenheden": each word singular in turn, then all.
+                const ws = p.split(' ');
+                const forms = [p, ...ws.map((w, i) => ws.map((x, k) => (k === i ? singular(x) : x)).join(' ')), ws.map(singular).join(' ')];
+                for (const a of forms) {
+                    add(ALIAS[a]);
+                    add(BY_NAME[a]);
+                    for (const [cap, id] of Object.entries(BY_NAME)) if (cap.startsWith(`${a} (`)) add(id);
+                }
+            }
+            if (!out.length) {
+                // Names the game makes up for a requirement ("Politie Noodhulp"): every
+                // vehicle whose name has all the meaningful words, cheapest kind first.
+                const words = n.split(/[\s,/()]+/).map(singular).filter((w) => w.length >= 2 && !STOP.has(w));
+                if (words.length) {
+                    for (const [cap, id] of Object.entries(BY_NAME)) {
+                        const capWords = cap.split(/[\s,/()-]+/).map(singular);
+                        if (words.every((w) => capWords.includes(w))) add(id);
+                    }
+                    out.sort((a, b) => a - b);
+                }
             }
             return out;
         }
@@ -12252,7 +12308,8 @@ MKS.module({
                 let n = 0;
                 for (const b of data.buildings) {
                     if (def.types && def.types.includes(b.building_type)) n++;
-                    if (def.ext) n += (b.extensions || []).filter((x) => x.available !== false && def.ext.test(x.caption || '')).length;
+                    // Extensions still being built count too, or the next round buys a second one elsewhere.
+                    if (def.ext) n += (b.extensions || []).filter((x) => def.ext.test(x.caption || '')).length;
                 }
                 have[key] = n;
             }
@@ -12325,7 +12382,8 @@ MKS.module({
                 const tr = cb.closest('tr');
                 const bound = (tr?.cells[tr.cells.length - 1]?.textContent || '').trim();
                 const pid = cb.value;
-                return { pid, has: cb.getAttribute(key) === 'true', free: !bound && !cb.disabled && !reserved.has(pid) };
+                const idle = !bound && !cb.disabled;
+                return { pid, has: cb.getAttribute(key) === 'true', idle, free: idle && !reserved.has(pid) };
             });
         }
         async function startTraining(edu, pids) {
@@ -12375,10 +12433,33 @@ MKS.module({
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
                     continue;
                 }
+                if (p.stage === 'train' && p.queue && p.queue.length) {
+                    // More people than one class holds: the rest goes as soon as a school
+                    // has a free classroom. Whoever left meanwhile is replaced from the same building.
+                    const people = await peopleAt(p.building, p.key);
+                    const want = p.queue.length;
+                    p.people = p.people.filter((pid) => !p.queue.includes(pid));
+                    const still = p.queue.filter((pid) => people.find((x) => x.pid === pid && x.idle && !x.has));
+                    const fill = people.filter((x) => x.free && !x.has && !still.includes(x.pid)).slice(0, want - still.length).map((x) => x.pid);
+                    p.queue = [...still, ...fill];
+                    p.people.push(...p.queue);
+                    if (p.queue.length < want) {
+                        state.projects = projects().filter((x) => x !== p);
+                        addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (te weinig vrij personeel voor de volgende opleiding)`, 'warn');
+                        continue;
+                    }
+                    const edu = await education(p.training);
+                    if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; continue; }
+                    const batch = p.queue.slice(0, Math.min(10, ctx.cfg.trainSeats));
+                    return { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
+                        run: () => startTraining(edu, batch),
+                        check: async () => (await peopleAt(p.building, p.key)).filter((x) => batch.includes(x.pid) && x.idle).length === 0,
+                        done: () => { p.queue = p.queue.filter((pid) => !batch.includes(pid)); p.wait = null; p.started = Date.now(); } };
+                }
                 if (p.stage === 'train') {
                     const people = await peopleAt(p.building, p.key);
                     const ready = p.people.every((pid) => people.find((x) => x.pid === pid)?.has);
-                    if (ready) { p.stage = 'buy'; addLog(`opleiding klaar: ${p.training} in ${p.caption}`, 'idle'); }
+                    if (ready) { p.stage = p.fill ? 'assign' : 'buy'; p.assignTries = 0; addLog(`opleiding klaar: ${p.training} in ${p.caption}`, 'idle'); }
                 }
                 if (p.stage === 'assign') {
                     if (await assignPeople(p.vehicle, p.people)) {
@@ -12406,12 +12487,66 @@ MKS.module({
             return null;
         }
 
+        // Vehicles whose capacity is their crew: a horse truck carries one horse per
+        // rider (tested: 6 trucks with 1 person each count as 6 Police Horses).
+        // Filling the trucks you have is cheaper than buying more.
+        const FILL_VT = { 73: 4 };
+        async function planFill(c, data) {
+            const v = VT[c.vt];
+            const max = FILL_VT[c.vt];
+            const edu = await education(v[4]);
+            if (!edu.key) return null;
+            const filling = new Set(projects().filter((p) => p.fill).map((p) => String(p.vehicle)));
+            const ref = c.at || data.home;
+            const trucks = data.vehicles.filter((x) => x.vehicle_type === c.vt && (x.assigned_personnel_count || 0) < max && !filling.has(String(x.id)))
+                .map((x) => ({ x, b: data.byId[x.building_id] })).filter((t) => t.b)
+                .sort((a, b) => km(posOf(a.b), ref) - km(posOf(b.b), ref));
+            if (!trucks.length) return null;
+            // Trained riders already free in a truck's building: link them now (free).
+            for (const { x, b } of trucks) {
+                const trained = (await peopleAt(b.id, edu.key)).filter((p) => p.free && p.has).slice(0, max - (x.assigned_personnel_count || 0));
+                if (!trained.length) continue;
+                let ok = false;
+                return { label: `${trained.length} ruiter(s) erbij op ${x.caption} in ${b.caption} (${x.assigned_personnel_count || 0} → ${(x.assigned_personnel_count || 0) + trained.length} paarden)`, cost: 0,
+                    run: async () => { ok = await assignPeople(x.id, trained.map((p) => p.pid)); }, check: async () => ok };
+            }
+            // Otherwise train free people of the truck's own building, several trucks of one
+            // building in one class; each truck is a project that links them when done.
+            if (!edu.school) return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` };
+            const seats = Math.min(10, ctx.cfg.trainSeats);
+            for (const { b } of trucks) {
+                const here = trucks.filter((t) => t.b.id === b.id);
+                const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has);
+                const group = [];
+                let used = 0;
+                for (const { x } of here) {
+                    const n = Math.min(max - (x.assigned_personnel_count || 0), free.length - used, seats - used);
+                    if (n <= 0) break;
+                    const pids = free.slice(used, used + n).map((p) => p.pid);
+                    used += n;
+                    group.push({ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key, training: v[4],
+                        people: pids, vehicle: x.id, fill: true, started: Date.now() });
+                }
+                if (!group.length) continue;
+                const learnIds = group.flatMap((p) => p.people);
+                return { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
+                    run: () => startTraining(edu, learnIds),
+                    check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
+                    projects: group };
+            }
+            return null;
+        }
+
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
             c.vt = c.vts.find((id) => VT[id] && VT[id][3].some((t) => types.has(t))) ?? c.vts[0];
             const v = VT[c.vt];
             if (!v) return { skip: `${c.name}: onbekend voertuig` };
+            if (FILL_VT[c.vt] && ctx.cfg.doVehicles) {
+                const fill = await planFill(c, data);
+                if (fill) return fill;
+            }
             if (v[4] === '?') return { skip: `${c.name}: opleiding voor ${v[0]} onbekend` };
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => v[3].includes(b.building_type) && b.enabled !== false)
@@ -12463,7 +12598,7 @@ MKS.module({
                         return { ...buy, people: trained.slice(0, want).map((p) => p.pid) };
                     }
                     const missing = want - trained.length;
-                    const learners = people.filter((p) => p.free && !p.has).slice(0, Math.min(missing, 10));
+                    const learners = people.filter((p) => p.free && !p.has).slice(0, missing);
                     if (learners.length < missing) {
                         state.wishes[v[4]] = (state.wishes[v[4]] || 0) + 1;
                         reasons.push(`${b.caption}: ${trained.length}/${want} met ${v[4]}, te weinig vrij personeel om op te leiden`);
@@ -12474,7 +12609,9 @@ MKS.module({
                     const mk = (bb, crew, learn) => ({ building: bb.id, caption: bb.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key,
                         training: v[4], people: [...crew, ...learn], started: Date.now() });
                     const group = [mk(b, trained.slice(0, want).map((p) => p.pid), learners.map((p) => p.pid))];
-                    const learnIds = learners.map((p) => p.pid); // who goes to the school
+                    const firstClass = learners.slice(0, seats);
+                    const learnIds = firstClass.map((p) => p.pid); // who goes to the school now
+                    if (learners.length > seats) group[0].queue = learners.slice(seats).map((p) => p.pid);
                     // More buildings in the same training, each its own project (train, level,
                     // buy, link): the ones nearest to the most places where the vehicle
                     // was missing, so the new vehicles spread over the problem areas.
@@ -12499,22 +12636,12 @@ MKS.module({
                         group.push(mk(ob, otrained.map((p) => p.pid), olearn.map((p) => p.pid)));
                         learnIds.push(...olearn.map((p) => p.pid));
                     }
-                    // Seats still empty: free people from the nearest other buildings, a few
-                    // each, trained in advance so a later purchase there needs no training.
-                    const extra = [];
-                    for (const o of own) {
-                        if (learnIds.length + extra.length >= seats) break;
-                        if (group.some((p) => p.building === o.b.id) || projects().some((p) => p.building === o.b.id)) continue;
-                        const free = (await peopleAt(o.b.id, edu.key)).filter((p) => p.free && !p.has)
-                            .slice(0, Math.min(ctx.cfg.trainPerBuilding, seats - learnIds.length - extra.length));
-                        extra.push(...free.map((p) => p.pid));
-                    }
-                    learnIds.push(...extra);
                     return {
                         label: `opleiding ${v[4]} voor ${learnIds.length} pers.: ${group.length} gebouw(en) met project`
-                            + `${extra.length ? `, ${extra.length} extra` : ''} (voor ${group.length}× ${v[0]})`, cost: 0,
+                            + ` (voor ${group.length}× ${v[0]}, elk met eigen personeel)`
+                            + `${group[0].queue ? `, ${group[0].queue.length} later zodra er een klaslokaal vrij is` : ''}`, cost: 0,
                         run: () => startTraining(edu, learnIds),
-                        check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learners.some((l) => l.pid === p.pid) && p.free).length === 0,
+                        check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
                         projects: group,
                     };
                 }
@@ -12546,11 +12673,35 @@ MKS.module({
         async function planUnlock(c, data) {
             const why = `${c.unlockCount} nieuwe meldingen, o.a. ${c.examples.slice(0, 2).join(', ')}`;
             if (c.def.ext && ctx.cfg.doExtensions) {
-                const ext = await planExtension({ ...c, types: [...new Set(data.buildings.map((b) => b.building_type))], match: c.def.ext, at: data.home }, data, 6);
-                if (!ext.skip) return { ...ext, label: `${ext.label} (${why})` };
+                // Which building type sells this extension is learned once (the nearest
+                // building of every own type is looked at) and remembered, e.g. Drone
+                // Team Politie and Aanhoudingseenheid: Politiebureau (type 11).
+                state.extTypes = state.extTypes || {};
+                let types = state.extTypes[c.key];
+                if (!types) {
+                    const ref = data.home;
+                    const firstOfType = {};
+                    for (const b of data.buildings) {
+                        if (SCHOOL_TYPES.includes(b.building_type) || b.building_type === 1) continue;
+                        const cur = firstOfType[b.building_type];
+                        if (!cur || km(posOf(b), ref) < km(posOf(cur), ref)) firstOfType[b.building_type] = b;
+                    }
+                    types = [];
+                    for (const b of Object.values(firstOfType)) {
+                        if ((await buildingInfo(b.id)).exts.some((e) => c.def.ext.test(e.text))) types.push(b.building_type);
+                    }
+                    // Not offered anywhere (yet): look again in a day.
+                    if (types.length) state.extTypes[c.key] = types;
+                    else state.cool[c.name] = Date.now() + 24 * 3600000;
+                }
+                if (types.length) {
+                    const ext = await planExtension({ ...c, types, match: c.def.ext, at: data.home }, data, 6);
+                    if (!ext.skip) return { ...ext, label: `${ext.label} (${why})` };
+                    if (!c.def.types || !ctx.cfg.doBuild) return { skip: `${c.name}: alle ${ext.skip.split(': ').pop()}` };
+                }
             }
             if (c.def.types && ctx.cfg.doBuild) return planBuilding({ ...c, at: data.home }, c.def.types, why, data, 80);
-            return { skip: `${c.name}: niets te kopen` };
+            return { skip: `${c.name}: geen eigen gebouw biedt deze uitbreiding aan${c.def.types ? '' : ' (en het is geen los gebouw)'}` };
         }
 
         // Real posts from the Plaatsingsadvies data (1x1 degree tiles on GitHub).
@@ -12671,6 +12822,9 @@ MKS.module({
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     next = ranking[0] || null;
                 }
+                // Saved, so Log naar GitHub uploads them from any tab.
+                state.lastRound = { at: Date.now(), skipped, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
+                    ranking: ranking.map(({ need, label, cost, value, ratio }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000 })) };
                 if (!next) {
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
@@ -12686,11 +12840,13 @@ MKS.module({
                 // (tested: a bought level and ambulance only showed there later).
                 if (await next.check()) {
                     failStreak = 0;
+                    unlocksAt = 0; // what is unlocked may have changed
                     state.cool[next.need] = Date.now() + 30 * 60000;
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
                     // Training started: a new project. Vehicle bought for trained people
                     // (now, or the buy step of a project): find it and assign them next.
+                    if (next.done) next.done();
                     for (const p of next.projects || []) if (!projects().includes(p)) projects().push(p);
                     const people = next.project && next.project.stage === 'buy' ? next.project.people : next.people;
                     if (people && next.before) {
@@ -12783,6 +12939,157 @@ MKS.module({
                 try { const l = JSON.parse(localStorage.getItem(LOCK_KEY)); if (l && l.inst === INSTANCE) localStorage.removeItem(LOCK_KEY); } catch (e) { /* ignore */ }
             },
         };
+    },
+});
+
+/* ==== module: log-github ================================================== */
+MKS.module({
+    id: 'log-github',
+    name: 'Log naar GitHub',
+    short: 'Log naar GitHub',
+    icon: '📤',
+    category: 'auto',
+    description: 'Zet elke paar minuten de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
+        + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel.',
+    at: 'ready',
+    frames: 'top',
+    live: true,
+    warning: 'Gebruik een <b>privé</b> repository en een fine-grained token met alleen "Contents: read and write" op die ene repository. '
+        + 'In een openbare repository kan iedereen je spelgegevens lezen.',
+    settings: [
+        { key: 'repo', label: 'Repository', type: 'text', default: '', placeholder: 'gebruiker/mks-logs', help: 'eigenaar/naam van een privé repository' },
+        { key: 'file', label: 'Bestand', type: 'text', default: 'status.json' },
+        { key: 'intervalMin', label: 'Elke', type: 'number', default: 10, min: 2, max: 120, unit: 'min' },
+        { key: 'eventHours', label: 'Gebeurtenissen van de laatste', type: 'number', default: 24, min: 1, max: 168, unit: 'uur' },
+    ],
+
+    run(ctx) {
+        const W = ctx.W;
+        const TOKEN_KEY = 'mks.logGithub.token';
+        const LAST_KEY = 'mks.logGithub.last';
+        const SHA_KEY = 'mks.logGithub.sha';
+        const read = (key, fallback) => { try { return JSON.parse(GM_getValue(key, '')) || fallback; } catch (e) { return fallback; } };
+        let busy = false;
+        let lastResult = null;
+
+        const token = () => GM_getValue(TOKEN_KEY, '');
+
+        function gh(method, path, body) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method,
+                    url: `https://api.github.com${path}`,
+                    headers: {
+                        Authorization: `Bearer ${token()}`,
+                        Accept: 'application/vnd.github+json',
+                        'Content-Type': 'application/json',
+                    },
+                    data: body ? JSON.stringify(body) : undefined,
+                    timeout: 30000,
+                    onload: (r) => {
+                        let json = null;
+                        try { json = JSON.parse(r.responseText); } catch (e) { /* empty body */ }
+                        resolve({ status: r.status, json });
+                    },
+                    onerror: () => reject(new Error('geen verbinding met GitHub')),
+                    ontimeout: () => reject(new Error('GitHub reageert niet')),
+                });
+            });
+        }
+
+        // UTF-8 safe base64 for the contents API.
+        function b64(text) {
+            const bytes = new TextEncoder().encode(text);
+            let s = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            return btoa(s);
+        }
+
+        // Everything both automation modules keep: GM storage is shared by all
+        // tabs, the live extras (stats, ranking) only exist in the tab that runs them.
+        function snapshot() {
+            const since = Date.now() - ctx.cfg.eventHours * 3600 * 1000;
+            const dispatch = W.mksAutoData;
+            const expand = W.mksAutoExpand;
+            const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
+            return {
+                at: new Date().toISOString(),
+                version: '1.7.0.20261007115633',
+                page: location.pathname,
+                dispatch: {
+                    events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
+                    needs: read('mks.autoDispatch.needs.v1', {}),
+                    live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, holds: dispatch.holds }) : null,
+                },
+                expand: {
+                    state: read('mks.autoExpand.state.v1', {}),
+                    live: expand ? strip({ next: expand.next, skipped: expand.skipped, ranking: expand.ranking, unlocks: expand.unlocks }) : null,
+                },
+            };
+        }
+
+        async function upload(force) {
+            if (busy) return;
+            const repo = String(ctx.cfg.repo || '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\/$/, '');
+            if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { ctx.status('Vul eerst de repository in (eigenaar/naam)', { tone: 'warn' }); return; }
+            if (!token()) { ctx.status('Stel eerst een token in', { tone: 'warn' }); return; }
+            // One upload per interval across all tabs.
+            const last = Number(GM_getValue(LAST_KEY, 0)) || 0;
+            if (!force && Date.now() - last < ctx.cfg.intervalMin * 60 * 1000) return;
+            GM_setValue(LAST_KEY, Date.now());
+            busy = true;
+            ctx.status('Uploaden…', { tone: 'busy' });
+            try {
+                const file = String(ctx.cfg.file || 'status.json').trim().replace(/^\/+/, '');
+                const path = `/repos/${repo}/contents/${file.split('/').map(encodeURIComponent).join('/')}`;
+                const content = b64(JSON.stringify(snapshot(), null, 1));
+                const put = (sha) => gh('PUT', path, { message: `Log ${new Date().toLocaleString('nl-NL')}`, content, ...(sha ? { sha } : {}) });
+                let r = await put(GM_getValue(SHA_KEY, '') || undefined);
+                if (r.status === 409 || r.status === 422) {
+                    // Stored sha is stale (or missing): ask GitHub for the current one.
+                    const cur = await gh('GET', path);
+                    r = await put(cur.status === 200 ? cur.json.sha : undefined);
+                }
+                if (r.status !== 200 && r.status !== 201) throw new Error(`GitHub ${r.status}: ${r.json?.message || 'onbekende fout'}`);
+                GM_setValue(SHA_KEY, r.json.content.sha);
+                lastResult = { ok: true, at: new Date(), kb: Math.round(content.length * 0.75 / 1024) };
+                ctx.status(`Geüpload om ${lastResult.at.toLocaleTimeString('nl-NL')} (${lastResult.kb} KB)`, { tone: 'ok' });
+            } catch (e) {
+                ctx.err(e);
+                lastResult = { ok: false, at: new Date(), error: e.message };
+                ctx.status(`Mislukt: ${e.message}`, { tone: 'error' });
+            } finally {
+                busy = false;
+                ctx.refresh();
+            }
+        }
+
+        ctx.actions([
+            { label: 'Nu uploaden', kind: 'primary', run: () => upload(true) },
+            {
+                label: 'Token instellen',
+                run: () => {
+                    const t = prompt('GitHub fine-grained token (alleen Contents: read and write op je log-repository). Leeg laten = token verwijderen.', '');
+                    if (t === null) return;
+                    GM_setValue(TOKEN_KEY, t.trim());
+                    GM_setValue(SHA_KEY, '');
+                    ctx.status(t.trim() ? 'Token opgeslagen' : 'Token verwijderd', { tone: 'idle' });
+                    ctx.refresh();
+                },
+            },
+        ]);
+
+        ctx.panel((el) => {
+            const last = Number(GM_getValue(LAST_KEY, 0)) || 0;
+            el.innerHTML = `<p class="mks-note">Token: ${token() ? 'ingesteld' : '<b>niet ingesteld</b>'}. `
+                + `Laatste upload (alle tabbladen): ${last ? new Date(last).toLocaleString('nl-NL') : 'nog nooit'}.`
+                + (lastResult && !lastResult.ok ? `<br>Fout: ${ctx.esc(lastResult.error)}` : '') + '</p>';
+        });
+
+        ctx.onSettings(() => ctx.refresh());
+        const timer = setInterval(() => upload(false), 60 * 1000);
+        setTimeout(() => upload(false), 15 * 1000);
+        return { stop() { clearInterval(timer); } };
     },
 });
 

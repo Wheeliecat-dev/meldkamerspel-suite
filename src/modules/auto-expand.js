@@ -605,7 +605,7 @@ MKS.module({
                 if (p.stage === 'train') {
                     const people = await peopleAt(p.building, p.key);
                     const ready = p.people.every((pid) => people.find((x) => x.pid === pid)?.has);
-                    if (ready) { p.stage = 'buy'; addLog(`opleiding klaar: ${p.training} in ${p.caption}`, 'idle'); }
+                    if (ready) { p.stage = p.fill ? 'assign' : 'buy'; p.assignTries = 0; addLog(`opleiding klaar: ${p.training} in ${p.caption}`, 'idle'); }
                 }
                 if (p.stage === 'assign') {
                     if (await assignPeople(p.vehicle, p.people)) {
@@ -633,12 +633,66 @@ MKS.module({
             return null;
         }
 
+        // Vehicles whose capacity is their crew: a horse truck carries one horse per
+        // rider (tested: 6 trucks with 1 person each count as 6 Police Horses).
+        // Filling the trucks you have is cheaper than buying more.
+        const FILL_VT = { 73: 4 };
+        async function planFill(c, data) {
+            const v = VT[c.vt];
+            const max = FILL_VT[c.vt];
+            const edu = await education(v[4]);
+            if (!edu.key) return null;
+            const filling = new Set(projects().filter((p) => p.fill).map((p) => String(p.vehicle)));
+            const ref = c.at || data.home;
+            const trucks = data.vehicles.filter((x) => x.vehicle_type === c.vt && (x.assigned_personnel_count || 0) < max && !filling.has(String(x.id)))
+                .map((x) => ({ x, b: data.byId[x.building_id] })).filter((t) => t.b)
+                .sort((a, b) => km(posOf(a.b), ref) - km(posOf(b.b), ref));
+            if (!trucks.length) return null;
+            // Trained riders already free in a truck's building: link them now (free).
+            for (const { x, b } of trucks) {
+                const trained = (await peopleAt(b.id, edu.key)).filter((p) => p.free && p.has).slice(0, max - (x.assigned_personnel_count || 0));
+                if (!trained.length) continue;
+                let ok = false;
+                return { label: `${trained.length} ruiter(s) erbij op ${x.caption} in ${b.caption} (${x.assigned_personnel_count || 0} → ${(x.assigned_personnel_count || 0) + trained.length} paarden)`, cost: 0,
+                    run: async () => { ok = await assignPeople(x.id, trained.map((p) => p.pid)); }, check: async () => ok };
+            }
+            // Otherwise train free people of the truck's own building, several trucks of one
+            // building in one class; each truck is a project that links them when done.
+            if (!edu.school) return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` };
+            const seats = Math.min(10, ctx.cfg.trainSeats);
+            for (const { b } of trucks) {
+                const here = trucks.filter((t) => t.b.id === b.id);
+                const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has);
+                const group = [];
+                let used = 0;
+                for (const { x } of here) {
+                    const n = Math.min(max - (x.assigned_personnel_count || 0), free.length - used, seats - used);
+                    if (n <= 0) break;
+                    const pids = free.slice(used, used + n).map((p) => p.pid);
+                    used += n;
+                    group.push({ building: b.id, caption: b.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key, training: v[4],
+                        people: pids, vehicle: x.id, fill: true, started: Date.now() });
+                }
+                if (!group.length) continue;
+                const learnIds = group.flatMap((p) => p.people);
+                return { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${b.caption}, daarna op ${group.length} paardentruck(s)`, cost: 0,
+                    run: () => startTraining(edu, learnIds),
+                    check: async () => (await peopleAt(b.id, edu.key)).filter((p) => learnIds.includes(p.pid) && p.idle).length === 0,
+                    projects: group };
+            }
+            return null;
+        }
+
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
             c.vt = c.vts.find((id) => VT[id] && VT[id][3].some((t) => types.has(t))) ?? c.vts[0];
             const v = VT[c.vt];
             if (!v) return { skip: `${c.name}: onbekend voertuig` };
+            if (FILL_VT[c.vt] && ctx.cfg.doVehicles) {
+                const fill = await planFill(c, data);
+                if (fill) return fill;
+            }
             if (v[4] === '?') return { skip: `${c.name}: opleiding voor ${v[0]} onbekend` };
             const ref = c.at || data.home;
             const own = data.buildings.filter((b) => v[3].includes(b.building_type) && b.enabled !== false)
