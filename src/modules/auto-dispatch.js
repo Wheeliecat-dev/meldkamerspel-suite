@@ -1105,12 +1105,14 @@ MKS.module({
              * mission is sent or gone, or after holdMin, so nothing stays stuck.
              * ------------------------------------------------------------------ */
             const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
+            const holdExpired = new Map(); // mission id -> when its hold ran out
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
                 const now = Date.now();
                 const out = {};
                 for (const [hid, h] of holds) {
-                    if (h.until < now || !document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
+                    if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
+                    if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
                     if (hid === id || h.credits <= credits) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
                         if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
@@ -1119,8 +1121,13 @@ MKS.module({
                 }
                 return out;
             }
+            // A mission whose hold ran out is not held again for twice the hold time: before
+            // this, it was held again on its next try and kept rare vehicles idle for an hour
+            // (Brand in ziekenhuis held an OvD-P from 12:34 while 13 missions waited).
             function updateHold(id, name, credits, res) {
                 if (res.result === 'sent' || res.result === 'unconfirmed') { holds.delete(id); return; }
+                const out = holdExpired.get(id);
+                if (out && Date.now() - out < ctx.cfg.holdMin * 2 * 60000) return;
                 if (res.result !== 'skip' || !res.avail || !(ctx.cfg.bigCredits > 0) || credits < ctx.cfg.bigCredits) return;
                 const keys = {};
                 for (const [k, n] of Object.entries(res.avail)) {
