@@ -49,7 +49,6 @@ MKS.module({
         { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
             help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
                 + 'die het dichtst bij je bestaande gebouwen ligt (minstens 3 km van je andere van die soort) brengt nieuwe inzetten zonder lange rijtijden. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
-        { key: 'growKm', label: 'Groeien tot', type: 'number', default: 60, min: 10, max: 300, step: 5, unit: 'km', help: 'Vanaf je meldkamer.' },
     ],
 
     run(ctx) {
@@ -1180,8 +1179,8 @@ MKS.module({
         }
 
         /* Growth: more buildings, more missions. Per kind (fire, police, ambulance) the
-         * free real post within growKm of the dispatch centre that is furthest from the
-         * own buildings of that kind (6 km at least), valued at the average weekly
+         * free real post nearest to any own building (3 km at least from the own ones
+         * of that kind, no limit from the dispatch centre), valued at the average weekly
          * income per building. After building it, a project buys its first vehicle. */
         // The small kinds (Brandweerkazerne (klein), Politieopkomstbureau (klein)) are
         // cheaper: fewer parking spots, but more new areas for the money. Both go into the
@@ -1198,17 +1197,25 @@ MKS.module({
             if (!rate || !rate.perHour) return out;
             const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
             const value = (rate.perHour * 168) / withVehicles;
-            const posts = await postsNear(data.home);
+            // Real posts around every own building (1x1 degree tiles, each fetched once).
+            const seen = new Set();
+            const posts = [];
+            for (const b of data.buildings) {
+                const key = `${Math.floor(Number(b.latitude))}_${Math.floor(Number(b.longitude))}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                for (const p of await postsNear(posOf(b))) posts.push(p);
+            }
+            const uniq = [...new Set(posts)]; // neighbouring tiles overlap
             const owned = data.buildings.map(posOf);
             for (const g of GROW) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
                 const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
                 let best = null;
-                for (const p of posts) {
+                for (const p of uniq) {
                     if (p[2] !== CAT_OF[g.types[0]]) continue;
                     const at = [p[0], p[1]];
-                    if (km(at, data.home) > ctx.cfg.growKm) continue;
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
                     // Not on top of one of this kind (3 km at least, so it covers new ground),
                     // and of those the one nearest to anything you have: the network grows
