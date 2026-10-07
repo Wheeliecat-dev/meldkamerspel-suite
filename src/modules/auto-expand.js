@@ -940,8 +940,12 @@ MKS.module({
             return out;
         }
         // A new building of one of these types on the nearest free real post.
+        const NO_NEW_BUILDING = new Set([6, 9, 21, 23, 24]); // trauma, police and SAR helicopters, military hangar, tow trucks
         async function planBuilding(c, buildTypes, why, data, maxKm = ctx.cfg.nearKm * 2) {
             const type = buildTypes.find((t) => CAT_OF[t] && ![17, 18].includes(t)) ?? buildTypes[0];
+            // Helicopter bases and tow-truck posts: the OSM data does not place these well
+            // enough yet. Never built new; existing ones still get levels and vehicles.
+            if (NO_NEW_BUILDING.has(type)) return { skip: `${c.name}: geen nieuw gebouw voor dit type (helikopter/berger), alleen bestaande uitbreiden` };
             const cat = CAT_OF[type];
             if (!cat) return { skip: `${c.name}: geen echte post voor gebouwtype ${type}` };
             const owned = data.buildings.map(posOf);

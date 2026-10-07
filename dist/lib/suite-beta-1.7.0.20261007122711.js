@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007121653 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007122711 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007121653';
+    const VERSION = '1.7.0.20261007122711';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11921,6 +11921,7 @@ MKS.module({
         const LOCK_KEY = 'mks-auto-expand.lock';
         const DATA_BASE = 'https://raw.githubusercontent.com/Wheeliecat-dev/meldkamerspel-suite/main/dist/data/posts/';
         const INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const STARTED = Date.now();
 
         /* ========================================================================
          * VEHICLE TYPES (LSSM data): id: [name, credits, min crew, building types,
@@ -12802,8 +12803,12 @@ MKS.module({
             return out;
         }
         // A new building of one of these types on the nearest free real post.
+        const NO_NEW_BUILDING = new Set([6, 9, 21, 23, 24]); // trauma, police and SAR helicopters, military hangar, tow trucks
         async function planBuilding(c, buildTypes, why, data, maxKm = ctx.cfg.nearKm * 2) {
             const type = buildTypes.find((t) => CAT_OF[t] && ![17, 18].includes(t)) ?? buildTypes[0];
+            // Helicopter bases and tow-truck posts: the OSM data does not place these well
+            // enough yet. Never built new; existing ones still get levels and vehicles.
+            if (NO_NEW_BUILDING.has(type)) return { skip: `${c.name}: geen nieuw gebouw voor dit type (helikopter/berger), alleen bestaande uitbreiden` };
             const cat = CAT_OF[type];
             if (!cat) return { skip: `${c.name}: geen echte post voor gebouwtype ${type}` };
             const owned = data.buildings.map(posOf);
@@ -12879,7 +12884,15 @@ MKS.module({
 
         async function round() {
             if (busy || stopped) return;
-            if (lockHolder()) { ctx.status('Draait al in een ander tabblad.', { tone: 'warn' }); return; }
+            const other = lockHolder();
+            if (other) {
+                const ago = (t) => `${Math.round((Date.now() - t) / 1000)} s`;
+                const who = other.since ? ` (pagina ${other.url}, versie ${other.version}, gestart ${ago(other.since)} geleden)` : ' (oude versie, of de vorige pagina is net herladen)';
+                ctx.status(`Draait al in een ander tabblad${who}. Nieuwe poging over 40 seconden.`, { tone: 'warn' });
+                addLog(`wacht op ander tabblad${who}`, 'warn');
+                setTimeout(() => { if (!stopped) round(); }, 40000);
+                return;
+            }
             busy = true;
             takeLock();
             try {
@@ -12974,8 +12987,12 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now() })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007122711' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
+        // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
+        // ("Draait al in een ander tabblad" with only one tab open).
+        const releaseLock = () => { try { const l = JSON.parse(localStorage.getItem(LOCK_KEY)); if (l && l.inst === INSTANCE) localStorage.removeItem(LOCK_KEY); } catch (e) { /* ignore */ } };
+        window.addEventListener('pagehide', releaseLock);
 
         ctx.panel((el) => {
             const day = new Date().toISOString().slice(0, 10);
@@ -13030,7 +13047,8 @@ MKS.module({
                 clearTimeout(first);
                 clearInterval(timer);
                 clearInterval(heartbeat);
-                try { const l = JSON.parse(localStorage.getItem(LOCK_KEY)); if (l && l.inst === INSTANCE) localStorage.removeItem(LOCK_KEY); } catch (e) { /* ignore */ }
+                window.removeEventListener('pagehide', releaseLock);
+                releaseLock();
             },
         };
     },
@@ -13108,7 +13126,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007121653',
+                version: '1.7.0.20261007122711',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
