@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007163314 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007172641 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007163314';
+    const VERSION = '1.7.0.20261007172641';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10402,9 +10402,9 @@ MKS.module({
             help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
                 + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
-        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
+        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 15000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
-                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
+                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. Alleen voor inzetten met minstens twee keer zoveel credits. 0 = niets vasthouden.' },
         { key: 'rareMax', label: 'Zeldzaam: hooguit zoveel vrij', type: 'number', default: 2, min: 0, max: 20, step: 1,
             help: 'Een voertuigsoort die de grote inzet nodig heeft en waarvan er zoveel of minder vrij zijn (of geen), wordt voor die inzet bewaard.' },
         { key: 'holdMin', label: 'Bewaren voor grote inzet', type: 'number', default: 20, min: 1, max: 120, step: 1, unit: 'min',
@@ -11490,7 +11490,9 @@ MKS.module({
                 for (const [hid, h] of holds) {
                     if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
                     if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
-                    if (hid === id || h.credits <= credits) continue;
+                    // Only worth it for a clearly bigger mission: twice the credits or more. A
+                    // 7,190 garage fire held units back from 6,000 missions for no gain.
+                    if (hid === id || h.credits < credits * 2) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
                         if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
                         out[k].need += v.need;
@@ -12542,6 +12544,16 @@ MKS.module({
             if (extra.length) step.label += `, ${extra.length} extra om de klas vol te maken`;
             await startTraining(edu, [...pids, ...extra]);
         }
+        // People of a building in a class for this training right now ("In opleiding:
+        // Drone Flightcrew" on its personnel page); the school form does not list them.
+        async function inTraining(buildingId, training) {
+            const doc = await getDoc(`/buildings/${buildingId}/personals`);
+            const t = cleanEdu(training);
+            return [...doc.querySelectorAll('table tbody tr')].filter((tr) => {
+                const m = tr.textContent.replace(/\s+/g, ' ').match(/In opleiding:\s*([^|]+?)(?:\s{2,}|$)/i);
+                return m && cleanEdu(m[1]).includes(t);
+            }).length;
+        }
         async function startTraining(edu, pids) {
             const fd = new FormData(edu.form);
             fd.set('education_select', edu.value);
@@ -12601,6 +12613,11 @@ MKS.module({
                         p.training = v[4];
                         if (trained.length >= want) {
                             Object.assign(p, { stage: 'buy', key: edu.key, people: trained.slice(0, want).map((x) => x.pid) });
+                        } else if (trained.length + await inTraining(p.building, v[4]) >= want) {
+                            // Already in a class (a team training joined by hand, or our own):
+                            // wait for it instead of starting a second one.
+                            p.wait = 'personeel al in opleiding';
+                            continue;
                         } else if (!edu.key || !edu.school) {
                             p.wait = 'wacht op een vrij klaslokaal';
                             markBlocked(p.vt, 20000);
@@ -12661,6 +12678,9 @@ MKS.module({
                 }
                 if (p.stage === 'buy') {
                     const v = VT[p.vt];
+                    // Waiting for an extension that brings the parking spot: no level meanwhile
+                    // (Voorthuizen wanted level 2 for 100k while its ambulance post was being built).
+                    if ((b.extensions || []).some((x) => x.available === false)) { p.wait = 'uitbreiding wordt nog gebouwd'; continue; }
                     const info = await buildingInfo(p.building);
                     if (info.used != null && info.max != null && info.used >= info.max) {
                         const lvl = ctx.cfg.doLevels ? await nextLevel(p.building) : null;
@@ -12962,7 +12982,7 @@ MKS.module({
         // Several per building are fine (Drone Team and ME-AE at Veenendaal): each has its
         // own vehicle and its own people; only the same vehicle twice is not.
         const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
-            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', ext: true, people: [], started: Date.now() }]);
 
         // Staff a building still has for one more vehicle: its people minus the crews of
         // its vehicles and of the vehicles its running projects will buy.
@@ -13356,7 +13376,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007163314' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007172641' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13496,7 +13516,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007163314',
+                version: '1.7.0.20261007172641',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

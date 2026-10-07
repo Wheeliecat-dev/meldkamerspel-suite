@@ -47,9 +47,9 @@ MKS.module({
             help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
                 + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
-        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 5000, min: 0, max: 100000, step: 500, unit: 'credits',
+        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 15000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
-                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. 0 = niets vasthouden.' },
+                + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. Alleen voor inzetten met minstens twee keer zoveel credits. 0 = niets vasthouden.' },
         { key: 'rareMax', label: 'Zeldzaam: hooguit zoveel vrij', type: 'number', default: 2, min: 0, max: 20, step: 1,
             help: 'Een voertuigsoort die de grote inzet nodig heeft en waarvan er zoveel of minder vrij zijn (of geen), wordt voor die inzet bewaard.' },
         { key: 'holdMin', label: 'Bewaren voor grote inzet', type: 'number', default: 20, min: 1, max: 120, step: 1, unit: 'min',
@@ -1135,7 +1135,9 @@ MKS.module({
                 for (const [hid, h] of holds) {
                     if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
                     if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
-                    if (hid === id || h.credits <= credits) continue;
+                    // Only worth it for a clearly bigger mission: twice the credits or more. A
+                    // 7,190 garage fire held units back from 6,000 missions for no gain.
+                    if (hid === id || h.credits < credits * 2) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
                         if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
                         out[k].need += v.need;
