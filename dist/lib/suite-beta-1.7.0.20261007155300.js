@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007153321 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007155300 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007153321';
+    const VERSION = '1.7.0.20261007155300';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10473,6 +10473,8 @@ MKS.module({
             oneof_fire_engine_or_rescue: 'fire', oneof_fire_rescue_or_ladder: 'rw',
             mass_casualty: 'vt:101', mass_casualty_advanced: 'vt:100', traffic_inspector: 'vt:99',
             railway_elw: 'vt:145', railway_recovery: 'vt:146', wildfire_command: 'vt:87',
+            // The VW-NB carries it: its checkbox has wildfire_equipment="1" (seen in a mission window).
+            wildfire_equipment: 'wildfire_equipment',
             disaster_response: 'vt:90', disaster_response_equipment: 'vt:91', drone_police: 'vt:128',
             bomb_disposal_dogs: 'vt:116', bomb_disposal_patrol: 'vt:119', bomb_disposal_diver: 'vt:117', bomb_disposal_boat: 'vt:118',
             railway_material: 'vt:148',
@@ -11208,6 +11210,10 @@ MKS.module({
             const sent = saved.sent || [];            // send times, for the hourly cap
             const log = (saved.log || []).map((l) => ({ ...l, at: new Date(l.at) }));
             const stats = { sent: 0, skipped: 0, errors: 0, transports: 0, ...(saved.stats || {}) };
+            // Kept across reloads, or a reload (beta update, memory recycle) let an ended hold
+            // start over: Rietkapbrand held an OvD-P from 15:11 to 15:49.
+            const holds = new Map(saved.holds || []); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
+            const holdExpired = new Map(saved.holdExpired || []); // mission id -> when its hold ran out
 
             function saveSession() {
                 const now = Date.now();
@@ -11215,6 +11221,8 @@ MKS.module({
                     sessionStorage.setItem(SESSION_KEY, JSON.stringify({
                         running, stats, sent,
                         tried: [...tried].filter(([, t]) => now - t < 3 * 3600000),
+                        holds: [...holds].filter(([, h]) => h.until > now),
+                        holdExpired: [...holdExpired].filter(([, t]) => now - t < 3 * 3600000),
                         log: log.slice(0, 100),
                     }));
                 } catch (e) { /* ignore */ }
@@ -11462,8 +11470,6 @@ MKS.module({
              * missions do not take them in the meantime. A hold ends when the
              * mission is sent or gone, or after holdMin, so nothing stays stuck.
              * ------------------------------------------------------------------ */
-            const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
-            const holdExpired = new Map(); // mission id -> when its hold ran out
             const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
@@ -12900,12 +12906,33 @@ MKS.module({
         const extVehicle = (text) => {
             const list = (String(text).match(/Voertuigen:\s*(.+?)\s*(?:Parkeerplaatsen|$)/) || [])[1];
             if (!list) return null;
-            for (const n of list.split(/,\s*|\s+en\s+/)) { const vt = vehiclesFor(n.trim())[0]; if (vt != null) return vt; }
+            for (const n of list.split(/,\s*|\s+en\s+/)) {
+                const vt = vehiclesFor(n.trim())[0];
+                if (vt != null) { (state.extVt = state.extVt || {})[extName(text)] = vt; return vt; }
+            }
             return null;
         };
+        // Extensions still being built (bought here or by hand) whose vehicle the building
+        // does not have yet and no project trains for: give them a crew project.
+        const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        function prepSweep(data) {
+            for (const b of data.buildings) {
+                for (const x of b.extensions || []) {
+                    if (x.available !== false) continue;
+                    const vt = (state.extVt || {})[x.caption] ?? EXT_VT[x.caption];
+                    if (vt == null || !VT[vt]) continue;
+                    if (data.vehicles.some((v) => v.building_id === b.id && v.vehicle_type === vt)) continue;
+                    const made = prepProject(b, vt, `uitbreiding ${x.caption}`);
+                    if (made.length) { projects().push(...made); addLog(`project: personeel voor ${VT[vt][0]} in ${b.caption} (uitbreiding ${x.caption} wordt gebouwd)`, 'idle'); }
+                }
+            }
+        }
         // After buying an extension that brings a vehicle: a project that trains its crew
         // now, while the extension is being built, then buys and links (see advanceProjects).
-        const prepProject = (b, vt, need) => (vt == null ? [] : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
+        // Several per building are fine (Drone Team and ME-AE at Veenendaal): each has its
+        // own vehicle and its own people; only the same vehicle twice is not.
+        const prepProject = (b, vt, need) => (vt == null || projects().some((p) => p.building === b.id && p.vt === vt) ? []
+            : [{ building: b.id, caption: b.caption, vt, need, stage: 'prep', people: [], started: Date.now() }]);
 
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
@@ -12917,7 +12944,7 @@ MKS.module({
                 if (ext && ext.cost && ctx.cfg.doExtensions) {
                     return { label: `uitbreiding "${extName(ext.text)}" in ${b.caption}`, cost: ext.cost,
                         run: () => hit(ext.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
-                        projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, extVehicle(ext.text), c.name) };
+                        projects: prepProject(b, extVehicle(ext.text), c.name) };
                 }
             }
             return { skip: `${c.name}: geen gebouw in de buurt om uit te breiden` };
@@ -13117,6 +13144,7 @@ MKS.module({
                 recordEarn(data.total);
                 skipped = [];
                 eduCache = null;
+                prepSweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
                 if (!next) {
@@ -13212,7 +13240,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007153321' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007155300' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13352,7 +13380,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007153321',
+                version: '1.7.0.20261007155300',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

@@ -855,6 +855,10 @@ MKS.module({
             const sent = saved.sent || [];            // send times, for the hourly cap
             const log = (saved.log || []).map((l) => ({ ...l, at: new Date(l.at) }));
             const stats = { sent: 0, skipped: 0, errors: 0, transports: 0, ...(saved.stats || {}) };
+            // Kept across reloads, or a reload (beta update, memory recycle) let an ended hold
+            // start over: Rietkapbrand held an OvD-P from 15:11 to 15:49.
+            const holds = new Map(saved.holds || []); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
+            const holdExpired = new Map(saved.holdExpired || []); // mission id -> when its hold ran out
 
             function saveSession() {
                 const now = Date.now();
@@ -862,6 +866,8 @@ MKS.module({
                     sessionStorage.setItem(SESSION_KEY, JSON.stringify({
                         running, stats, sent,
                         tried: [...tried].filter(([, t]) => now - t < 3 * 3600000),
+                        holds: [...holds].filter(([, h]) => h.until > now),
+                        holdExpired: [...holdExpired].filter(([, t]) => now - t < 3 * 3600000),
                         log: log.slice(0, 100),
                     }));
                 } catch (e) { /* ignore */ }
@@ -1109,8 +1115,6 @@ MKS.module({
              * missions do not take them in the meantime. A hold ends when the
              * mission is sent or gone, or after holdMin, so nothing stays stuck.
              * ------------------------------------------------------------------ */
-            const holds = new Map(); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
-            const holdExpired = new Map(); // mission id -> when its hold ran out
             const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
             function reservedFor(id, credits) {
