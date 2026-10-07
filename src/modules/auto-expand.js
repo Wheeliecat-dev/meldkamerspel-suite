@@ -58,6 +58,7 @@ MKS.module({
         const LOCK_KEY = 'mks-auto-expand.lock';
         const DATA_BASE = '{{DATA_BASE}}';
         const INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const STARTED = Date.now();
 
         /* ========================================================================
          * VEHICLE TYPES (LSSM data): id: [name, credits, min crew, building types,
@@ -1016,8 +1017,12 @@ MKS.module({
 
         async function round() {
             if (busy || stopped) return;
-            if (lockHolder()) {
-                ctx.status('Draait al in een ander tabblad (of de vorige pagina is net herladen). Nieuwe poging over 40 seconden.', { tone: 'warn' });
+            const other = lockHolder();
+            if (other) {
+                const ago = (t) => `${Math.round((Date.now() - t) / 1000)} s`;
+                const who = other.since ? ` (pagina ${other.url}, versie ${other.version}, gestart ${ago(other.since)} geleden)` : ' (oude versie, of de vorige pagina is net herladen)';
+                ctx.status(`Draait al in een ander tabblad${who}. Nieuwe poging over 40 seconden.`, { tone: 'warn' });
+                addLog(`wacht op ander tabblad${who}`, 'warn');
                 setTimeout(() => { if (!stopped) round(); }, 40000);
                 return;
             }
@@ -1115,7 +1120,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now() })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '{{VERSION}}' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
