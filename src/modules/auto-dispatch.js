@@ -74,6 +74,9 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+            help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
+                + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
             help: 'Een lang open spelpagina wordt traag en zwaar. Ververst tussen twee rondes door en gaat daarna vanzelf verder. 0 = nooit '
                 + '(behalve als het geheugen bijna vol is).' },
@@ -1240,6 +1243,48 @@ MKS.module({
                 }
             }
 
+            // Mission done except for its patients (bar at 100%): our other units there or on
+            // the way are only waiting, so send them back to their posts. Patient units
+            // (ambulances, OvD-G, MMT, Lifeliner, rapid responders) stay. Missions with
+            // arrestants are left alone: the police cars there carry them.
+            const PATIENT_VT = new Set(Object.entries(VT_NAMES)
+                .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
+            const sentBack = new Map(); // mission id -> when we last looked
+            async function sendBackDone() {
+                if (!ctx.cfg.sendBack) return;
+                const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
+                    const bar = document.getElementById(`mission_bar_${e.getAttribute('mission_id')}`);
+                    return bar && parseFloat(bar.style.width) >= 100;
+                });
+                let looked = 0;
+                for (const e of done) {
+                    const id = e.getAttribute('mission_id');
+                    if (Date.now() - (sentBack.get(id) || 0) < 3 * 60000) continue;
+                    if (++looked > 5 || !running || stopped) break;
+                    sentBack.set(id, Date.now());
+                    try {
+                        const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
+                        if (!r.ok) continue;
+                        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+                        const bar = doc.getElementById(`mission_bar_${id}`);
+                        if (!bar || parseFloat(bar.style.width) < 100) continue;
+                        if (doc.querySelector('[id*="prisoner"], [id*="gefangene"], a[href*="/gefangener/"]') || /arrestant/i.test(doc.getElementById('missing_text')?.textContent || '')) continue;
+                        const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
+                            .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
+                                name: (tr.querySelector('a[href^="/vehicles/"]')?.textContent || '').trim() }))
+                            .filter((x) => x.a && x.vt && !PATIENT_VT.has(x.vt));
+                        if (!back.length) continue;
+                        for (const x of back) {
+                            await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                            await sleep(300);
+                        }
+                        const name = (doc.getElementById('missionH1')?.textContent || titleOf(e)).replace(/\s+/g, ' ').trim();
+                        addLog(name, `klaar op patiënten na: ${back.length} voertuig(en) terug naar post`, 'ok');
+                        recordEvent({ kind: 'sendback', id, name, n: back.length, vehicles: back.map((x) => x.name).slice(0, 10) });
+                    } catch (err) { ctx.warn('send back', id, err); }
+                }
+            }
+
             // Three errors in a row. Windows that do not answer mean a slow or stuck game
             // page (14:46-14:48 three timeouts stopped auto mode for good): reload, and
             // auto mode resumes. More than three such reloads in an hour, or other
@@ -1277,6 +1322,7 @@ MKS.module({
                 busy = true;
                 try {
                     await transports();
+                    await sendBackDone();
                     const req = await loadMissions();
                     const list = candidates();
                     const cellRuns = new Map();

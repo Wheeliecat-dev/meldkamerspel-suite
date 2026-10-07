@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007141017 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007153321 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007141017';
+    const VERSION = '1.7.0.20261007153321';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10429,6 +10429,9 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+            help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
+                + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
             help: 'Een lang open spelpagina wordt traag en zwaar. Ververst tussen twee rondes door en gaat daarna vanzelf verder. 0 = nooit '
                 + '(behalve als het geheugen bijna vol is).' },
@@ -11589,10 +11592,71 @@ MKS.module({
                     } else {
                         stats.errors++;
                         addLog(v.caption, `fout: ${res.reason}`, 'error');
-                        if (++errorStreak >= 3) { stop('Gestopt na 3 fouten op rij. Zie logboek.'); return; }
+                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
                     }
                     await sleep(ctx.cfg.pauseSec * 1000);
                 }
+            }
+
+            // Mission done except for its patients (bar at 100%): our other units there or on
+            // the way are only waiting, so send them back to their posts. Patient units
+            // (ambulances, OvD-G, MMT, Lifeliner, rapid responders) stay. Missions with
+            // arrestants are left alone: the police cars there carry them.
+            const PATIENT_VT = new Set(Object.entries(VT_NAMES)
+                .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
+            const sentBack = new Map(); // mission id -> when we last looked
+            async function sendBackDone() {
+                if (!ctx.cfg.sendBack) return;
+                const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
+                    const bar = document.getElementById(`mission_bar_${e.getAttribute('mission_id')}`);
+                    return bar && parseFloat(bar.style.width) >= 100;
+                });
+                let looked = 0;
+                for (const e of done) {
+                    const id = e.getAttribute('mission_id');
+                    if (Date.now() - (sentBack.get(id) || 0) < 3 * 60000) continue;
+                    if (++looked > 5 || !running || stopped) break;
+                    sentBack.set(id, Date.now());
+                    try {
+                        const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
+                        if (!r.ok) continue;
+                        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+                        const bar = doc.getElementById(`mission_bar_${id}`);
+                        if (!bar || parseFloat(bar.style.width) < 100) continue;
+                        if (doc.querySelector('[id*="prisoner"], [id*="gefangene"], a[href*="/gefangener/"]') || /arrestant/i.test(doc.getElementById('missing_text')?.textContent || '')) continue;
+                        const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
+                            .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
+                                name: (tr.querySelector('a[href^="/vehicles/"]')?.textContent || '').trim() }))
+                            .filter((x) => x.a && x.vt && !PATIENT_VT.has(x.vt));
+                        if (!back.length) continue;
+                        for (const x of back) {
+                            await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                            await sleep(300);
+                        }
+                        const name = (doc.getElementById('missionH1')?.textContent || titleOf(e)).replace(/\s+/g, ' ').trim();
+                        addLog(name, `klaar op patiënten na: ${back.length} voertuig(en) terug naar post`, 'ok');
+                        recordEvent({ kind: 'sendback', id, name, n: back.length, vehicles: back.map((x) => x.name).slice(0, 10) });
+                    } catch (err) { ctx.warn('send back', id, err); }
+                }
+            }
+
+            // Three errors in a row. Windows that do not answer mean a slow or stuck game
+            // page (14:46-14:48 three timeouts stopped auto mode for good): reload, and
+            // auto mode resumes. More than three such reloads in an hour, or other
+            // errors: stop.
+            function threeErrors(reason) {
+                const KEY = 'mks-auto-dispatch.timeoutReloads';
+                let list = [];
+                try { list = (JSON.parse(sessionStorage.getItem(KEY) || '[]') || []).filter((t) => Date.now() - t < 3600000); } catch (e) { /* ignore */ }
+                if (/reageerde niet/.test(String(reason)) && list.length < 3) {
+                    list.push(Date.now());
+                    try { sessionStorage.setItem(KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+                    addLog('—', '3 keer geen reactie van een venster: pagina ververst, gaat zo verder', 'warn');
+                    onPageHide();
+                    location.reload();
+                    return;
+                }
+                stop('Gestopt na 3 fouten op rij. Zie logboek.');
             }
 
             // A game page that stays open for hours gets slow and heavy. Reload
@@ -11613,6 +11677,7 @@ MKS.module({
                 busy = true;
                 try {
                     await transports();
+                    await sendBackDone();
                     const req = await loadMissions();
                     const list = candidates();
                     const cellRuns = new Map();
@@ -11699,7 +11764,7 @@ MKS.module({
                         } else {
                             stats.errors++;
                             addLog(name, `fout: ${res.reason}`, 'error');
-                            if (++errorStreak >= 3) { stop('Gestopt na 3 fouten op rij. Zie logboek.'); break; }
+                            if (++errorStreak >= 3) { threeErrors(res.reason); break; }
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
@@ -12275,6 +12340,10 @@ MKS.module({
             for (const [name, t] of Object.entries(needs.types || {})) {
                 if (t.missions < ctx.cfg.minMissions) continue;
                 if ((state.cool[name] || 0) > now) continue;
+                // A project for this need is still under way (training, extension being
+                // built): wait for it instead of planning a second answer (a 400k police
+                // building for OvD-P while Ede's OvD-P crew waited for a classroom).
+                if (projects().some((p) => p.need === name)) continue;
                 const vts = vehiclesFor(name);
                 const value = value7d(t, name) * (vts.length && PLAIN.has(vts[0]) ? 1 : ctx.cfg.specialWeight);
                 out.push({ kind: 'vehicle', name, vts, value, at: centroid(t.pos), t });
@@ -13143,7 +13212,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007141017' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007153321' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13283,7 +13352,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007141017',
+                version: '1.7.0.20261007153321',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
