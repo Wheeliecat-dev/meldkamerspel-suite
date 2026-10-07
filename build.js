@@ -51,10 +51,11 @@ const MODULES = [
     'personnel-assign',
     'auto-dispatch',
     'auto-expand',
+    'log-github',
 ];
 
 // Only in the beta build, still being tested. Stable leaves them out.
-const BETA_ONLY = ['auto-dispatch', 'vehicle-status-bar', 'building-price', 'building-share', 'vehicle-scrap', 'personnel-assign', 'auto-expand'];
+const BETA_ONLY = ['auto-dispatch', 'vehicle-status-bar', 'building-price', 'building-share', 'vehicle-scrap', 'personnel-assign', 'auto-expand', 'log-github'];
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8').replace(/\r\n/g, '\n').trimEnd();
 

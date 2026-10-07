@@ -21,6 +21,7 @@
 // @connect      overpass.openstreetmap.ru
 // @connect      overpass.private.coffee
 // @connect      raw.githubusercontent.com
+// @connect      api.github.com
 // @require      {{REQUIRE_URL}}
 // @run-at       document-start
 // ==/UserScript==
