@@ -46,6 +46,10 @@ MKS.module({
         { key: 'doExtensions', label: 'Uitbreidingen kopen', type: 'bool', default: true },
         { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
+        { key: 'buildMode', label: 'Bouwmodus: alleen nieuwe posten', type: 'bool', default: false,
+            help: 'Bouwt de ene nieuwe post na de andere (goedkoopste soort eerst) en maakt elke post eerst af: '
+                + 'brandweer tot level 2 met TS, OvD-B en HV, ambulancepost tot level 1 met ambulances, politie level 0 met noodhulp. '
+                + 'Tekorten en opleidingen wachten zolang. De buffer blijft gelden.' },
         { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
             help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
                 + 'die het dichtst bij je bestaande gebouwen ligt (minstens 3 km van je andere van die soort) brengt nieuwe inzetten zonder lange rijtijden. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
@@ -640,6 +644,32 @@ MKS.module({
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
                     continue;
                 }
+                if (p.stage === 'grow') {
+                    // A new post from build mode: levels up to what its first staff can man,
+                    // then vehicles that need few people, until the parking is full.
+                    const G = GROW_FILL[p.kind] || GROW_FILL.brandweerkazerne;
+                    const info = await buildingInfo(p.building);
+                    if (p.levels < G.levels && ctx.cfg.doLevels) {
+                        const lvl = await nextLevel(p.building);
+                        if (lvl) {
+                            return { label: `level voor nieuwe post ${p.caption} (${p.levels + 1}/${G.levels}, bouwmodus)`, cost: lvl.cost, need: p.need,
+                                run: () => hit(lvl.href), check: async () => ((await buildingInfo(p.building)).max || 0) > (info.max || 0),
+                                done: () => { p.levels++; } };
+                        }
+                        p.levels = G.levels; // no more levels to buy here
+                    }
+                    if (info.used != null && info.max != null && info.used < info.max && ctx.cfg.doVehicles) {
+                        const have = data.vehicles.filter((x) => x.building_id === p.building).map((x) => x.vehicle_type);
+                        const vt = G.vts.find((t) => !have.includes(t)) ?? G.vts[0];
+                        const buy = await buyAction(b, { vt }, VT[vt], info, null);
+                        if (!buy.skip) return { ...buy, need: p.need, label: `${buy.label} (nieuwe post, bouwmodus)` };
+                        p.wait = buy.skip;
+                        continue;
+                    }
+                    state.projects = projects().filter((x) => x !== p);
+                    addLog(`nieuwe post klaar: ${p.caption}`, 'ok');
+                    continue;
+                }
                 if (p.stage === 'prep') {
                     // Extension bought: crew first (in parallel with the building work).
                     const v = VT[p.vt];
@@ -1190,9 +1220,16 @@ MKS.module({
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
             { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
+        // Build mode: per kind the levels its first staff can man and the vehicles, in order
+        // (fire: TS 8/9, OvD-B, HV; ambulance post: ambulances; police: DA Noodhulp).
+        const GROW_FILL = {
+            brandweerkazerne: { levels: 2, vts: [1, 3, 4] },
+            ambulancepost: { levels: 1, vts: [16] },
+            politiebureau: { levels: 0, vts: [22] },
+        };
         async function planGrow(data) {
             const out = [];
-            if (!ctx.cfg.doGrow || !ctx.cfg.doBuild) return out;
+            if ((!ctx.cfg.doGrow && !ctx.cfg.buildMode) || !ctx.cfg.doBuild) return out;
             const rate = incomeRate();
             if (!rate || !rate.perHour) return out;
             const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
@@ -1230,17 +1267,22 @@ MKS.module({
                     const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
                     const run = plan.run;
-                    out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
+                    // Build mode: new posts win outright, taking turns between fire, police and
+                    // ambulance (else the 100k VWS-post would always be cheapest).
+                    const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
+                    out.push({ ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
-                            state.cool[need] = Date.now() + 2 * 3600000;
+                            state.cool[need] = Date.now() + (ctx.cfg.buildMode ? 0 : 2 * 3600000);
+                            state.growLast = g.name;
                             await sleep(1500);
                             // Its first vehicle as a project: bought as soon as the game sells it.
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
                             const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
-                            if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
+                            if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
+                            else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } });
                 }
             }
