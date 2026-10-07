@@ -203,7 +203,7 @@ MKS.module({
             'ovd-g': 38, 'officier van dienst geneeskunde': 38, 'mmt-auto of lifeliner': 37, 'ggb': 100, 'nht': 101,
             'verzorgingseenheid': 120, 'verzorger': 120, 'signalisatie voertuig (da-rws, da-sig of dm-rws)': 83,
             'signalisatie voertuigen': 83, 'signalisatievoertuig': 83, 'tankautospuiten (terreinvaardig)': 6, 'schuimblusvoertuig': 130,
-            'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
+            'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'natuurbrandbestrijding vrachtwagen of haakarmbak': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
             'strandvoertuigen (quad, dat-rb of khv)': 65, 'bereden brigade (paarden)': 73, 'politie helikopters': 28, 'politie helikopter': 28,
             'dienstvoertuigen usar': 92, 'politie noodhulp': 22, 'me-ae': 64, 'vw-bb': 73, 'bb-a': 74,
         };
