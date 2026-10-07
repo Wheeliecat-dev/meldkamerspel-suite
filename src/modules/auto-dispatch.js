@@ -499,6 +499,18 @@ MKS.module({
                 // The game finishes its vehicle table (distances, AAO data) on load.
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
+                // The window lists only the nearest vehicles; "Laad ontbrekende voertuigen"
+                // adds the rest. Without it, free horse trucks 26.6 km away were never seen
+                // ("te weinig: 5 Police Horses" with two full trucks free in Harderwijk).
+                const shownEl = (el) => el.style.display !== 'none' && getComputedStyle(el).display !== 'none' && !el.closest('[style*="display: none"]');
+                for (let i = 0; i < 3; i++) {
+                    const more = document.querySelector('a[href*="/missing_vehicles"]');
+                    if (!more || !shownEl(more)) break;
+                    const before = document.querySelectorAll('input.vehicle_checkbox').length;
+                    more.click();
+                    for (let t = 0; t < 40 && document.querySelectorAll('input.vehicle_checkbox').length === before; t++) await sleep(200);
+                    await sleep(300);
+                }
 
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while

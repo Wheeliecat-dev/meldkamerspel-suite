@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007155705 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261007161153 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -39,7 +39,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261007155705';
+    const VERSION = '1.7.0.20261007161153';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10429,7 +10429,7 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
             help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
@@ -10513,7 +10513,7 @@ MKS.module({
             'tankautospuiten of hulpverleningsvoertuigen': 'oneof_fire_engine_or_rescue', 'voorlichters': 'spokesman', 'da-la-nb': 'wildfire_command',
             'fbo-heli': 'fire_aviation', 'commandowagen': 'elw3', 'adembeschermingsvoertuigen': 'mobile_air_vehicles',
             'waterongevallenvoertuigen / oppervlaktereddingsteams': 'diver_units', 'min. pomp capaciteit': 'min_pump_speed',
-            'officiers van dienst politie': 'ovdp', 'natuurbrandbestrijding uitrusting': 'wildfire_equipment', 'me commandovoertuigen': 'lebefkw',
+            'officiers van dienst politie': 'ovdp', 'natuurbrandbestrijding uitrusting': 'wildfire_equipment', 'natuurbrandbestrijding vrachtwagen of haakarmbak': 'wildfire_equipment', 'me commandovoertuigen': 'lebefkw',
             'crashtender': 'arff', 'afo/osc': 'elw_airport', 'bootaanhanger (woa of ba-rb)': 'boats', 'verkenningseenheden': 'gwmess',
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
@@ -10854,6 +10854,18 @@ MKS.module({
                 // The game finishes its vehicle table (distances, AAO data) on load.
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
+                // The window lists only the nearest vehicles; "Laad ontbrekende voertuigen"
+                // adds the rest. Without it, free horse trucks 26.6 km away were never seen
+                // ("te weinig: 5 Police Horses" with two full trucks free in Harderwijk).
+                const shownEl = (el) => el.style.display !== 'none' && getComputedStyle(el).display !== 'none' && !el.closest('[style*="display: none"]');
+                for (let i = 0; i < 3; i++) {
+                    const more = document.querySelector('a[href*="/missing_vehicles"]');
+                    if (!more || !shownEl(more)) break;
+                    const before = document.querySelectorAll('input.vehicle_checkbox').length;
+                    more.click();
+                    for (let t = 0; t < 40 && document.querySelectorAll('input.vehicle_checkbox').length === before; t++) await sleep(200);
+                    await sleep(300);
+                }
 
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
@@ -11611,11 +11623,16 @@ MKS.module({
             const PATIENT_VT = new Set(Object.entries(VT_NAMES)
                 .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
             const sentBack = new Map(); // mission id -> when we last looked
+            // A full bar is not enough: a red (progress-bar-danger) bar is also 100% wide when
+            // units are missing (Rietkapbrand, 8 TS short, had 40 units sent back). Only a
+            // full bar that is not red counts as done.
+            const isDone = (bar) => !!bar && parseFloat(bar.style.width) >= 100
+                && !/progress-bar-(danger|warning)/.test(bar.className) && /progress-bar-success/.test(bar.className);
             async function sendBackDone() {
                 if (!ctx.cfg.sendBack) return;
                 const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
                     const bar = document.getElementById(`mission_bar_${e.getAttribute('mission_id')}`);
-                    return bar && parseFloat(bar.style.width) >= 100;
+                    return isDone(bar);
                 });
                 let looked = 0;
                 for (const e of done) {
@@ -11628,7 +11645,9 @@ MKS.module({
                         if (!r.ok) continue;
                         const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
                         const bar = doc.getElementById(`mission_bar_${id}`);
-                        if (!bar || parseFloat(bar.style.width) < 100) continue;
+                        if (!isDone(bar)) continue;
+                        // Anything still asked for in the red box: the mission is not done.
+                        if ((doc.getElementById('missing_text')?.textContent || '').trim()) continue;
                         if (doc.querySelector('[id*="prisoner"], [id*="gefangene"], a[href*="/gefangener/"]') || /arrestant/i.test(doc.getElementById('missing_text')?.textContent || '')) continue;
                         const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
                             .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
@@ -12149,7 +12168,7 @@ MKS.module({
             'ovd-g': 38, 'officier van dienst geneeskunde': 38, 'mmt-auto of lifeliner': 37, 'ggb': 100, 'nht': 101,
             'verzorgingseenheid': 120, 'verzorger': 120, 'signalisatie voertuig (da-rws, da-sig of dm-rws)': 83,
             'signalisatie voertuigen': 83, 'signalisatievoertuig': 83, 'tankautospuiten (terreinvaardig)': 6, 'schuimblusvoertuig': 130,
-            'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
+            'me flexbussen': 40, 'natuurbrandbestrijding uitrusting': 88, 'natuurbrandbestrijding vrachtwagen of haakarmbak': 88, 'bootaanhanger (woa of ba-rb)': 67, 'at materiaalwagens': 55,
             'strandvoertuigen (quad, dat-rb of khv)': 65, 'bereden brigade (paarden)': 73, 'politie helikopters': 28, 'politie helikopter': 28,
             'dienstvoertuigen usar': 92, 'politie noodhulp': 22, 'me-ae': 64, 'vw-bb': 73, 'bb-a': 74,
         };
@@ -13303,7 +13322,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007155705' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261007161153' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13443,7 +13462,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261007155705',
+                version: '1.7.0.20261007161153',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
