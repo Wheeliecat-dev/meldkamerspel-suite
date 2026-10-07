@@ -46,6 +46,10 @@ MKS.module({
         { key: 'doExtensions', label: 'Uitbreidingen kopen', type: 'bool', default: true },
         { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
         { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
+        { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
+            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op een echte post '
+                + 'ver van je andere van die soort brengt nieuwe inzetten. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
+        { key: 'growKm', label: 'Groeien tot', type: 'number', default: 60, min: 10, max: 300, step: 5, unit: 'km', help: 'Vanaf je meldkamer.' },
     ],
 
     run(ctx) {
@@ -1164,6 +1168,55 @@ MKS.module({
             return out;
         }
 
+        /* Growth: more buildings, more missions. Per kind (fire, police, ambulance) the
+         * free real post within growKm of the dispatch centre that is furthest from the
+         * own buildings of that kind (6 km at least), valued at the average weekly
+         * income per building. After building it, a project buys its first vehicle. */
+        const GROW = [
+            { type: 0, same: [0, 17], vt: 1, name: 'brandweerkazerne' },
+            { type: 5, same: [5, 11, 18], vt: 22, name: 'politiebureau' },
+            { type: 3, same: [3, 13], vt: 16, name: 'ambulancepost' },
+        ];
+        async function planGrow(data) {
+            const out = [];
+            if (!ctx.cfg.doGrow || !ctx.cfg.doBuild) return out;
+            const rate = incomeRate();
+            if (!rate || !rate.perHour) return out;
+            const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
+            const value = (rate.perHour * 168) / withVehicles;
+            const posts = await postsNear(data.home);
+            const owned = data.buildings.map(posOf);
+            for (const g of GROW) {
+                const need = `Groei: ${g.name}`;
+                if ((state.cool[need] || 0) > Date.now()) continue;
+                const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
+                let best = null;
+                for (const p of posts) {
+                    if (p[2] !== CAT_OF[g.type]) continue;
+                    const at = [p[0], p[1]];
+                    if (km(at, data.home) > ctx.cfg.growKm) continue;
+                    if (owned.some((o) => km(o, at) < 0.3)) continue;
+                    const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
+                    if (gap >= 6 && (!best || gap > best.gap)) best = { at, gap };
+                }
+                if (!best) continue;
+                const plan = await planBuilding({ name: need, at: best.at }, [g.type], `groei: ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                if (plan.skip) { skipped.push(plan.skip); continue; }
+                const run = plan.run;
+                out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000),
+                    run: async () => {
+                        const before = new Set(data.buildings.map((b) => b.id));
+                        await run();
+                        state.cool[need] = Date.now() + 2 * 3600000;
+                        await sleep(1500);
+                        // Its first vehicle as a project: bought as soon as the game sells it.
+                        const nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && b.building_type === g.type);
+                        if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
+                    } });
+            }
+            return out;
+        }
+
         // A new building of one of these types on the nearest free real post.
         const NO_NEW_BUILDING = new Set([6, 9, 21, 23, 24]); // trauma, police and SAR helicopters, military hangar, tow trucks
         async function planBuilding(c, buildTypes, why, data, maxKm = ctx.cfg.nearKm * 2, opts = {}) {
@@ -1332,6 +1385,7 @@ MKS.module({
                     }
                     updateBlocked();
                     for (const r of await planSchools(data)) ranking.push(r);
+                    for (const r of await planGrow(data)) ranking.push(r);
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
@@ -1361,7 +1415,7 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     // A new building: plan its vehicle again soon, not after half an hour.
-                    state.cool[next.need] = Date.now() + (next.newBuilding ? 5 : 30) * 60000;
+                    state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
                     if (next.cost) {
                         state.bought = state.bought || {};
                         const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));

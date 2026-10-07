@@ -4,7 +4,7 @@ MKS.module({
     short: 'Log naar GitHub',
     icon: '📤',
     category: 'auto',
-    description: 'Zet elke paar minuten de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
+    description: 'Zet elk uur (instelbaar) de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
         + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel.',
     at: 'ready',
     frames: 'top',
@@ -14,7 +14,7 @@ MKS.module({
     settings: [
         { key: 'repo', label: 'Repository', type: 'text', default: '', placeholder: 'gebruiker/mks-logs', help: 'eigenaar/naam van een privé repository' },
         { key: 'file', label: 'Bestand', type: 'text', default: 'status.json' },
-        { key: 'intervalMin', label: 'Elke', type: 'number', default: 10, min: 2, max: 120, unit: 'min' },
+        { key: 'intervalMin', label: 'Elke', type: 'number', default: 60, min: 2, max: 240, unit: 'min' },
         { key: 'eventHours', label: 'Gebeurtenissen van de laatste', type: 'number', default: 24, min: 1, max: 168, unit: 'uur' },
     ],
 
