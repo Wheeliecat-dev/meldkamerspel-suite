@@ -638,6 +638,7 @@ MKS.module({
                             Object.assign(p, { stage: 'buy', key: edu.key, people: trained.slice(0, want).map((x) => x.pid) });
                         } else if (!edu.key || !edu.school) {
                             p.wait = 'wacht op een vrij klaslokaal';
+                            markBlocked(p.vt, 20000);
                             continue;
                         } else {
                             const learners = people.filter((x) => x.free && !x.has).slice(0, want - trained.length);
@@ -671,7 +672,7 @@ MKS.module({
                         continue;
                     }
                     const edu = await education(p.training);
-                    if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; continue; }
+                    if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; markBlocked(p.vt, 20000); continue; }
                     const batch = p.queue.slice(0, Math.min(10, ctx.cfg.trainSeats));
                     const step = { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
                         run: () => startFull(step, data, edu, batch, p.vt, posOf(b)),
@@ -735,7 +736,7 @@ MKS.module({
             }
             // Otherwise train free people of the truck's own building, several trucks of one
             // building in one class; each truck is a project that links them when done.
-            if (!edu.school) return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` };
+            if (!edu.school) { markBlocked(c.vt, c.value); return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` }; }
             const seats = Math.min(10, ctx.cfg.trainSeats);
             for (const { b } of trucks) {
                 const here = trucks.filter((t) => t.b.id === b.id);
@@ -884,7 +885,7 @@ MKS.module({
                     // people to training first (a project that buys and assigns later).
                     const want = v[5] === 'all' ? need : Number(v[5]) || need;
                     const edu = await education(v[4]);
-                    if (!edu.key) { reasons.push(`${b.caption}: opleiding ${v[4]} onbekend (geen school gezien)`); continue; }
+                    if (!edu.key) { markBlocked(c.vt, c.value); reasons.push(`${b.caption}: opleiding ${v[4]} onbekend (alle klaslokalen bezet)`); continue; }
                     const people = await peopleAt(b.id, edu.key);
                     const trained = people.filter((p) => p.free && p.has);
                     if (trained.length >= want) {
@@ -900,7 +901,7 @@ MKS.module({
                         reasons.push(`${b.caption}: ${trained.length}/${want} met ${v[4]}, te weinig vrij personeel om op te leiden`);
                         continue;
                     }
-                    if (!edu.school) { reasons.push(`${b.caption}: ${v[4]} nodig, geen vrij klaslokaal`); continue; }
+                    if (!edu.school) { markBlocked(c.vt, c.value); reasons.push(`${b.caption}: ${v[4]} nodig, geen vrij klaslokaal`); continue; }
                     const seats = Math.min(10, ctx.cfg.trainSeats);
                     const mk = (bb, crew, learn) => ({ building: bb.id, caption: bb.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key,
                         training: v[4], people: [...crew, ...learn], started: Date.now() });
@@ -1054,14 +1055,72 @@ MKS.module({
             }
             return out;
         }
+        /* Schools: trainings that wait for a classroom are counted per school type each
+         * round. Blocked for 2 hours or more: an "Extra klaslokaal" at an own school of
+         * that type (400k, 7 days), or when none can be added, a new academy (500k). */
+        const schoolFor = (vt) => {
+            const t = (VT[vt] || [])[3] || [];
+            if (t.some((x) => [5, 11, 18].includes(x))) return 8;      // police academy
+            if (t.some((x) => [0, 17].includes(x))) return 4;          // fire academy
+            if (t.some((x) => [2, 3, 6, 13].includes(x))) return 7;    // medical faculty
+            if (t.some((x) => [16, 19, 21].includes(x))) return 20;    // SAR academy
+            if (t.includes(25)) return 26;                             // military academy
+            return null;
+        };
+        const SCHOOL_NAME = { 4: 'brandweeracademie', 7: 'faculteit geneeskunde', 8: 'politieacademie', 20: 'SAR academie', 26: 'militaire academie' };
+        const SCHOOL_CAT = { 4: 'F', 7: 'H', 8: 'P', 20: 'W', 26: 'M' };
+        let blocked = {};
+        function markBlocked(vt, value) {
+            const t = schoolFor(vt);
+            if (t == null) return;
+            blocked[t] = (blocked[t] || 0) + (value || 20000);
+        }
+        function updateBlocked() {
+            state.classBlocked = state.classBlocked || {};
+            for (const t of Object.keys(state.classBlocked)) if (!blocked[t]) delete state.classBlocked[t];
+            for (const [t, v] of Object.entries(blocked)) state.classBlocked[t] = { since: (state.classBlocked[t] || {}).since || Date.now(), value: v };
+        }
+        async function planSchools(data) {
+            const out = [];
+            for (const [t, b] of Object.entries(state.classBlocked || {})) {
+                const type = Number(t);
+                const hours = (Date.now() - b.since) / 3600000;
+                if (hours < 2) continue;
+                const need = `Klaslokalen ${SCHOOL_NAME[type] || type}`;
+                if ((state.cool[need] || 0) > Date.now()) continue;
+                // Classrooms are used again and again: value the blocked trainings three times.
+                const value = b.value * 3;
+                const why = `opleidingen wachten al ${Math.floor(hours)} u op een klaslokaal`;
+                const schools = data.buildings.filter((x) => x.building_type === type);
+                if (schools.some((x) => (x.extensions || []).some((e) => /klaslokaal/i.test(e.caption || '') && e.available === false))) continue; // one is coming
+                let plan = null;
+                for (const sb of schools) {
+                    const info = await buildingInfo(sb.id);
+                    const ext = info.exts.find((e) => /klaslokaal/i.test(e.text) && e.cost);
+                    if (ext && ctx.cfg.doExtensions) {
+                        plan = { label: `extra klaslokaal in ${sb.caption} (${why})`, cost: ext.cost,
+                            run: () => hit(ext.href, true), check: async () => !(await buildingInfo(sb.id)).exts.some((e) => e.id === ext.id) };
+                        break;
+                    }
+                }
+                if (!plan && ctx.cfg.doBuild) {
+                    const p = await planBuilding({ name: need, at: data.home }, [type], why, data, 60, { cat: SCHOOL_CAT[type], prefix: SCHOOL_NAME[type] });
+                    if (!p.skip) plan = p;
+                    else skipped.push(p.skip);
+                }
+                if (plan) out.push({ ...plan, need, value, ratio: value / Math.max(plan.cost, 2000) });
+            }
+            return out;
+        }
+
         // A new building of one of these types on the nearest free real post.
         const NO_NEW_BUILDING = new Set([6, 9, 21, 23, 24]); // trauma, police and SAR helicopters, military hangar, tow trucks
-        async function planBuilding(c, buildTypes, why, data, maxKm = ctx.cfg.nearKm * 2) {
+        async function planBuilding(c, buildTypes, why, data, maxKm = ctx.cfg.nearKm * 2, opts = {}) {
             const type = buildTypes.find((t) => CAT_OF[t] && ![17, 18].includes(t)) ?? buildTypes[0];
             // Helicopter bases and tow-truck posts: the OSM data does not place these well
             // enough yet. Never built new; existing ones still get levels and vehicles.
             if (NO_NEW_BUILDING.has(type)) return { skip: `${c.name}: geen nieuw gebouw voor dit type (helikopter/berger), alleen bestaande uitbreiden` };
-            const cat = CAT_OF[type];
+            const cat = opts.cat || CAT_OF[type];
             if (!cat) return { skip: `${c.name}: geen echte post voor gebouwtype ${type}` };
             const owned = data.buildings.map(posOf);
             const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
@@ -1070,17 +1129,18 @@ MKS.module({
                 .sort((a, b) => a.d - b.d);
             if (!posts.length) return { skip: `${c.name}: geen vrije echte post binnen ${maxKm} km` };
             const post = posts[0].p;
+            const bname = opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3];
             const doc = await getDoc('/buildings/new');
             const form = [...doc.forms].find((f) => /\/buildings$/.test(f.getAttribute('action') || ''));
             const btn = form && form.querySelector(`#build_credits_${type}`);
             if (!btn) return { skip: `${c.name}: gebouwtype ${type} niet te bouwen` };
             const cost = num(btn.value);
             return {
-                label: `nieuw gebouw "${post[3]}" (${posts[0].d.toFixed(1)} km, ${why})`, cost,
+                label: `nieuw gebouw "${bname}" (${posts[0].d.toFixed(1)} km, ${why})`, cost,
                 run: () => {
                     const fd = new FormData(form);
                     fd.set('building[building_type]', String(type));
-                    fd.set('building[name]', post[3]);
+                    fd.set('building[name]', bname);
                     fd.set('building[latitude]', String(post[0]));
                     fd.set('building[longitude]', String(post[1]));
                     fd.set('build_with_coins', '');
@@ -1197,6 +1257,7 @@ MKS.module({
                 const spendable = data.credits - ctx.cfg.buffer;
                 recordEarn(data.total);
                 skipped = [];
+                blocked = {};
                 eduCache = null;
                 prepSweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
@@ -1218,6 +1279,8 @@ MKS.module({
                         if (plan.skip) { skipped.push(plan.skip); continue; }
                         ranking.push({ need: c.name, value: c.value, ...plan, ratio: c.value / Math.max(plan.cost, 2000) });
                     }
+                    updateBlocked();
+                    for (const r of await planSchools(data)) ranking.push(r);
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
@@ -1226,7 +1289,7 @@ MKS.module({
                 state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped,
                     spots: { scanned: Object.keys(state.spots || {}).length, free: Object.values(state.spots || {}).filter((f) => f.max > f.used).length }, next: next ? { label: next.label, cost: next.cost, need: next.need } : null,
                     ranking: ranking.map(({ need, label, cost, value, ratio, eta }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000, eta: etaText(eta) })),
-                    income: incomeRate() };
+                    income: incomeRate(), classBlocked: state.classBlocked };
                 if (!next) {
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
