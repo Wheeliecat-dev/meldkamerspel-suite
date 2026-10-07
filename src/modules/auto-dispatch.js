@@ -381,7 +381,13 @@ MKS.module({
                     go(release, { mode: 'release', dest: kind === 'cell' ? 'gevangenen vrijgelaten' : 'patiënt niet vervoerd', unknownNeeds: [need] });
                     return;
                 }
-                report('skip', { reason: `geen passende ${kind === 'cell' ? 'cel' : 'ziekenhuis'} (${reasons})`, unknownNeeds: [need] });
+                // No candidates at all: keep what the page showed, to find out why from the log.
+                const page = all.length ? undefined : {
+                    alert: (document.querySelector('.alert')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+                    links: [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')).filter((h) => /patient|gefangene|transport/i.test(h)).slice(0, 8),
+                    buttons: [...document.querySelectorAll('#h2_sprechwunsch ~ * a.btn, .btn-group a.btn')].map((a) => a.textContent.replace(/\s+/g, ' ').trim().slice(0, 40)).slice(0, 8),
+                };
+                report('skip', { reason: `geen passende ${kind === 'cell' ? 'cel' : 'ziekenhuis'} (${reasons})`, unknownNeeds: [need], page });
             } catch (e) {
                 ctx.err(e);
                 report('error', { reason: e.message || String(e) });
@@ -954,7 +960,7 @@ MKS.module({
                 if (curPos) {
                     t.pos = t.pos || [];
                     t.pos.push([...curPos, Date.now(), curCredits || 0]);
-                    if (t.pos.length > 60) t.pos.shift();
+                    if (t.pos.length > 200) t.pos.shift();
                 }
             }
 
@@ -1195,7 +1201,7 @@ MKS.module({
                     curPos = null;
                     curCredits = 0;
                     recordResult(res, `v${vid}`, v.caption);
-                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason });
+                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason, page: res.page });
                     if (res.result === 'sent' || res.result === 'unconfirmed') {
                         stats.transports++;
                         errorStreak = 0;
