@@ -158,7 +158,7 @@ MKS.module({
             'tankautospuiten of hulpverleningsvoertuigen': 'oneof_fire_engine_or_rescue', 'voorlichters': 'spokesman', 'da-la-nb': 'wildfire_command',
             'fbo-heli': 'fire_aviation', 'commandowagen': 'elw3', 'adembeschermingsvoertuigen': 'mobile_air_vehicles',
             'waterongevallenvoertuigen / oppervlaktereddingsteams': 'diver_units', 'min. pomp capaciteit': 'min_pump_speed',
-            'officiers van dienst politie': 'ovdp', 'natuurbrandbestrijding uitrusting': 'wildfire_equipment', 'natuurbrandbestrijding vrachtwagen of haakarmbak': 'wildfire_equipment', 'me commandovoertuigen': 'lebefkw',
+            'officiers van dienst politie': 'ovdp', 'officieren van dienst - politie': 'ovdp', 'officieren van dienst politie': 'ovdp', 'natuurbrandbestrijding uitrusting': 'wildfire_equipment', 'natuurbrandbestrijding vrachtwagen of haakarmbak': 'wildfire_equipment', 'me commandovoertuigen': 'lebefkw',
             'crashtender': 'arff', 'afo/osc': 'elw_airport', 'bootaanhanger (woa of ba-rb)': 'boats', 'verkenningseenheden': 'gwmess',
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
