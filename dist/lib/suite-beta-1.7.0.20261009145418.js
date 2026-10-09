@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009145137 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009145418 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009145137';
+    const VERSION = '1.7.0.20261009145418';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10436,7 +10436,7 @@ MKS.module({
             help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
                 + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
                 + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
-                + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
+                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -11824,17 +11824,17 @@ MKS.module({
                 for (const id of [...teamDone.keys()]) if (!live.has(id)) teamDone.delete(id);
                 if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
                 const now = Date.now();
-                let hidden = 0, joined = 0;
+                // Hidden ones too (Teamfilter, mission filters): "Alleen zichtbare inzetten" is for
+                // our own missions; team missions are often hidden just to keep the list short.
+                let joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
                     if (teamDone.has(id)) { joined++; return false; }
-                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') { hidden++; return false; }
                     const t = tried.get(id);
                     return !t || now - t > ctx.cfg.retryMin * 60000;
                 }).sort((a, b) => creditsOf(b) - creditsOf(a));
                 if (!todo.length) {
-                    if (hidden && hidden + joined === entries.length) teamNote(`alle ${hidden} open teaminzetten zijn verborgen (Teamfilter of missiefilter) en "Alleen zichtbare inzetten" staat aan`);
-                    else if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
+                    if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
                     return;
                 }
                 for (const entry of todo) {
@@ -13880,7 +13880,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009145137' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009145418' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14020,7 +14020,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009145137',
+                version: '1.7.0.20261009145418',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

@@ -58,12 +58,12 @@ MKS.module({
             help: 'Daar mogen ambulances in delen: te weinig of te ver weg houdt de rest niet tegen. De patiënten vragen daarna zelf '
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
-            help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
+            help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
             help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
                 + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
                 + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
-                + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
+                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -1451,17 +1451,17 @@ MKS.module({
                 for (const id of [...teamDone.keys()]) if (!live.has(id)) teamDone.delete(id);
                 if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
                 const now = Date.now();
-                let hidden = 0, joined = 0;
+                // Hidden ones too (Teamfilter, mission filters): "Alleen zichtbare inzetten" is for
+                // our own missions; team missions are often hidden just to keep the list short.
+                let joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
                     if (teamDone.has(id)) { joined++; return false; }
-                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') { hidden++; return false; }
                     const t = tried.get(id);
                     return !t || now - t > ctx.cfg.retryMin * 60000;
                 }).sort((a, b) => creditsOf(b) - creditsOf(a));
                 if (!todo.length) {
-                    if (hidden && hidden + joined === entries.length) teamNote(`alle ${hidden} open teaminzetten zijn verborgen (Teamfilter of missiefilter) en "Alleen zichtbare inzetten" staat aan`);
-                    else if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
+                    if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
                     return;
                 }
                 for (const entry of todo) {
