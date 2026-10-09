@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009170558 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009171118 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009170558';
+    const VERSION = '1.7.0.20261009171118';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10433,7 +10433,7 @@ MKS.module({
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
-            help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
+            help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
                 + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
                 + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
                 + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien.' },
@@ -11223,7 +11223,14 @@ MKS.module({
         async function teamWorker(job, report, doneKey) {
             if (ownRowOn(document, job.me)) {
                 const row = [...document.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')].find((tr) => ownRowOn({ querySelectorAll: () => [tr] }, job.me));
-                report('skip', { reason: `eigen voertuig: ${clean(row?.textContent || '').slice(0, 60)}`, joined: true });
+                const cells = row ? [...row.cells].map((c) => c.textContent.trim()).filter(Boolean).join(' · ') : '';
+                report('skip', { reason: `eigen voertuig: ${clean(cells).slice(0, 80)}`, joined: true });
+                return;
+            }
+            // A planned event that has not started yet (or any page without a vehicle list or
+            // Alarmeren button) cannot take a car: skip it quietly, it is not "no car free".
+            if (!document.getElementById('alert_btn') || !document.querySelector('input.vehicle_checkbox')) {
+                report('skip', { reason: 'kan (nog) geen voertuigen ontvangen', notYet: true });
                 return;
             }
             const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
@@ -11496,6 +11503,9 @@ MKS.module({
                 clearTimeout(eventsTimer);
                 eventsTimer = setTimeout(() => { try { GM_setValue(EVENTS_KEY, JSON.stringify(events)); } catch (x) { ctx.warn('events not saved', x); } }, 2000);
             }
+            // Team missions and team events ("geplande inzetten" of the team): both get one noodhulp.
+            const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id]';
+            const isEvent = (e) => !!e.closest('#mission_list_alliance_event');
             W.mksAutoData = {
                 get needs() { return needs; },
                 get events() { return events; },
@@ -11505,8 +11515,9 @@ MKS.module({
                 get log() { return log; },
                 get team() {
                     return { on: !!ctx.cfg.teamMissions, busy: teamBusy, pausedUntil: teamPauseUntil || null, joined: teamDone.size,
-                        listed: document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]').length,
-                        hidden: [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')].filter((e) => getComputedStyle(e).display === 'none').length };
+                        listed: document.querySelectorAll(TEAM_LISTS).length,
+                        events: [...document.querySelectorAll(TEAM_LISTS)].filter(isEvent).length,
+                        hidden: [...document.querySelectorAll(TEAM_LISTS)].filter((e) => getComputedStyle(e).display === 'none').length };
                 },
             };
 
@@ -11895,7 +11906,7 @@ MKS.module({
                 if (reloadWanted && !busy) reloadWhenIdle();
             }
             async function teamRound() {
-                const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
+                const entries = [...document.querySelectorAll(TEAM_LISTS)];
                 const live = new Set(entries.map((e) => e.getAttribute('mission_id')));
                 for (const id of [...teamDone.keys()]) if (!live.has(id)) teamDone.delete(id);
                 if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
@@ -11921,10 +11932,10 @@ MKS.module({
                     const id = entry.getAttribute('mission_id');
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
-                    const name = `Team: ${titleOf(entry)}`;
+                    const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
                     const res = await runJob({ id, token: Date.now(), team: true, avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
-                    recordEvent({ kind: 'team', id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
+                    recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
                         teamDone.set(id, Date.now());
@@ -11940,6 +11951,9 @@ MKS.module({
                     } else if (res.result === 'skip' && res.joined) {
                         teamDone.set(id, Date.now());
                         addLog(name, `doet al mee (${res.reason})`, 'idle');
+                        continue;
+                    } else if (res.result === 'skip' && res.notYet) {
+                        teamNote(`${titleOf(entry)}: kan nog geen voertuigen ontvangen, later opnieuw`);
                         continue;
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
@@ -13970,7 +13984,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009170558' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009171118' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14110,7 +14124,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009170558',
+                version: '1.7.0.20261009171118',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
