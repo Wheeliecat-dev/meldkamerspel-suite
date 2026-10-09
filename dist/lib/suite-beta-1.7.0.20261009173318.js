@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009172133 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009173318 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009172133';
+    const VERSION = '1.7.0.20261009173318';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10434,6 +10434,7 @@ MKS.module({
             help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
             help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
+                + 'naar een teamevenement ook één ambulance, '
                 + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
                 + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
                 + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien.' },
@@ -11235,43 +11236,57 @@ MKS.module({
                 return;
             }
             const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
+            // Team mission: one noodhulp ("fustw"). Team event: one noodhulp and one ambulance
+            // ("rtw"), nearest first, any distance.
+            const want = job.event ? { fustw: 1, rtw: 1 } : { fustw: 1 };
+            const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
             async function select() {
                 const el = document.createElement('a');
                 el.id = 'aao_mks_team';
                 el.className = 'aao_btn';
                 el.style.display = 'none';
-                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', fustw: '1' })) el.setAttribute(k, v);
+                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', ...want })) el.setAttribute(k, String(v));
                 document.body.appendChild(el);
                 const realAlert = W.alert;
                 W.alert = () => {}; // "Niet beschikbaar: 1 noodhulp": no popup in the hidden window
                 try { W.aaoClickHandler(el); } catch (e) { ctx.warn('aaoClickHandler', e); } finally { W.alert = realAlert; el.remove(); }
                 await sleep(400);
-                return [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()]
-                    .sort((a, b) => dist(a) - dist(b));
+                const checked = [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()]
+                    .sort((x, y) => dist(x) - dist(y));
+                // Exactly one per kind, whatever the game picked; the rest is unticked.
+                const keep = [];
+                for (const k of Object.keys(want)) {
+                    const c = checked.find((x) => x.getAttribute(k) === '1' && !keep.includes(x));
+                    if (c) keep.push(c);
+                }
+                checked.filter((c) => !keep.includes(c)).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
+                return keep;
             }
             dropAvoided(job.avoid);
             let picked = await select();
-            // None among the nearest listed: any distance counts, so load the rest and look again.
-            if (!picked.length) { await loadMissing(); dropAvoided(job.avoid); picked = await select(); }
-            const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
-            if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij', noCar: true }); return; }
-            // Never more than one, whatever the game picked.
-            picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
+            // Fewer than wanted among the nearest listed: any distance counts, so load the rest and look again.
+            if (picked.length < Object.keys(want).length) {
+                reset();
+                await loadMissing();
+                dropAvoided(job.avoid);
+                picked = await select();
+            }
+            if (!picked.length) { report('skip', { reason: job.event ? 'geen noodhulp of ambulance vrij' : 'geen noodhulp vrij', noCar: true }); return; }
             const btn = document.getElementById('alert_btn');
             if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
-            // Taken by our own missions meanwhile: leave it out and pick the next one, once.
+            // Taken by our own missions meanwhile: leave those out and choose again, once.
             for (let i = 0; i < 2; i++) {
-                const taken = await claimCars([picked[0].value]);
+                const taken = await claimCars(picked.map((c) => c.value));
                 if (!taken.length) break;
                 reset();
                 dropAvoided(taken);
                 picked = await select();
-                picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
-                if (!picked.length || i === 1) { reset(); report('wait', { reason: 'noodhulp net door je eigen inzetten gestuurd, zo opnieuw' }); return; }
+                if (!picked.length || i === 1) { reset(); report('wait', { reason: 'voertuig net door je eigen inzetten gestuurd, zo opnieuw' }); return; }
             }
-            const km = dist(picked[0]); // no distance limit for team missions
+            const km = Math.max(...picked.map(dist)); // no distance limit for team missions
+            const car = picked.map((c) => c.closest('tr')?.getAttribute('vehicle_type') || (c.getAttribute('rtw') === '1' ? 'ambulance' : 'noodhulp')).join(' + ');
             try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-            report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp'), ids: [picked[0].value] });
+            report('sending', { mode: 'team', n: picked.length, km, car, ids: picked.map((c) => c.value) });
             btn.click();
         }
 
@@ -11935,7 +11950,7 @@ MKS.module({
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
@@ -11943,12 +11958,12 @@ MKS.module({
                         stats.sent++;
                         teamErrors = 0;
                         sent.push(Date.now());
-                        addLog(name, `1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'ok');
+                        addLog(name, `${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'ok');
                     } else if (res.result === 'unconfirmed') {
                         // Not seen on the mission, so not marked joined. The retry after retryMin
                         // looks for our own vehicle first, so it never sends a second one.
                         teamErrors = 0;
-                        addLog(name, `niet bevestigd: 1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'warn');
+                        addLog(name, `niet bevestigd: ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'warn');
                     } else if (res.result === 'skip' && res.joined) {
                         teamDone.set(id, Date.now());
                         addLog(name, `doet al mee (${res.reason})`, 'idle');
@@ -13985,7 +14000,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009172133' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009173318' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14125,7 +14140,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009172133',
+                version: '1.7.0.20261009173318',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
