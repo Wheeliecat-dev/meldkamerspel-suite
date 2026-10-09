@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009145426 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009150221 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009145426';
+    const VERSION = '1.7.0.20261009150221';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10912,6 +10912,7 @@ MKS.module({
                     return;
                 }
                 await loadAllVehicles();
+                dropAvoided(job.avoid); // loadAllVehicles can add rows again
 
                 let plan = mode === 'patients' ? { slots: {}, vt: {}, vtCaptions: {} }
                     : { slots: job.slots || {}, vt: job.vt || {}, vtCaptions: job.vtCaptions || {} };
@@ -11131,6 +11132,13 @@ MKS.module({
 
                 const btn = document.getElementById('alert_btn');
                 if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
+                const taken = await claimCars(picked.map((c) => c.value));
+                if (taken.length) {
+                    // The team window sent one of these meanwhile: look again in a minute.
+                    reset();
+                    report('wait', { reason: `${taken.length} voertuig(en) net door het andere venster gestuurd, zo opnieuw` });
+                    return;
+                }
                 try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
                 report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value) });
                 btn.click();
@@ -11168,6 +11176,26 @@ MKS.module({
         // Own missions and team missions run side by side, each in its own hidden window. A
         // car one of them sent seconds ago can still look free in the other's window: those
         // (job.avoid) are taken out of the list before anything is chosen.
+        // Right before Alarmeren: ask the controller whether these cars are still ours to send.
+        // It answers one frame at a time and marks them taken at once, so two windows can never
+        // both send the same car, however long ago their vehicle lists were loaded.
+        function claimCars(ids) {
+            return new Promise((resolve) => {
+                const key = Math.random().toString(36).slice(2);
+                let t = null;
+                const on = (ev) => {
+                    if (ev.source !== window.parent || !ev.data || !ev.data[MSG] || ev.data.claimReply !== key) return;
+                    window.removeEventListener('message', on);
+                    clearTimeout(t);
+                    resolve(ev.data.taken || []);
+                };
+                window.addEventListener('message', on);
+                // No answer (an older controller): go ahead as before.
+                t = setTimeout(() => { window.removeEventListener('message', on); resolve([]); }, 3000);
+                window.parent.postMessage({ [MSG]: true, claim: ids.map(String), key }, location.origin);
+            });
+        }
+
         function dropAvoided(ids) {
             if (!ids || !ids.length) return;
             const avoid = new Set(ids.map(String));
@@ -11212,9 +11240,19 @@ MKS.module({
             if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij', noCar: true }); return; }
             // Never more than one, whatever the game picked.
             picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
-            const km = dist(picked[0]); // no distance limit for team missions
             const btn = document.getElementById('alert_btn');
             if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
+            // Taken by our own missions meanwhile: leave it out and pick the next one, once.
+            for (let i = 0; i < 2; i++) {
+                const taken = await claimCars([picked[0].value]);
+                if (!taken.length) break;
+                reset();
+                dropAvoided(taken);
+                picked = await select();
+                picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
+                if (!picked.length || i === 1) { reset(); report('wait', { reason: 'noodhulp net door je eigen inzetten gestuurd, zo opnieuw' }); return; }
+            }
+            const km = dist(picked[0]); // no distance limit for team missions
             try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
             report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp'), ids: [picked[0].value] });
             btn.click();
@@ -11615,7 +11653,14 @@ MKS.module({
             }
 
             // One mission in a hidden iframe. Resolves with the worker's report.
+            // Mission jobs running right now in either loop, so maxPerHour holds for both together.
+            let inFlight = 0;
             function runJob(job) {
+                const counts = job.kind !== 'transport';
+                if (counts) inFlight++;
+                return runFrame(job).finally(() => { if (counts) inFlight--; });
+            }
+            function runFrame(job) {
                 return new Promise((resolve) => {
                     const frame = document.createElement('iframe');
                     frame.name = WORKER + JSON.stringify(job);
@@ -11637,6 +11682,14 @@ MKS.module({
                     const transport = job.kind === 'transport';
                     function onMsg(ev) {
                         if (ev.origin !== location.origin || ev.source !== frame.contentWindow || !ev.data || !ev.data[MSG]) return;
+                        if (ev.data.claim) {
+                            // Check and mark in one go (one message at a time): see claimCars().
+                            avoidCars();
+                            const taken = ev.data.claim.filter((v) => recentCars.has(v));
+                            if (!taken.length) ev.data.claim.forEach((v) => recentCars.set(v, Date.now()));
+                            ev.source.postMessage({ [MSG]: true, claimReply: ev.data.key, taken }, location.origin);
+                            return;
+                        }
                         result = ev.data;
                         if (result.result !== 'sending') return cleanup(result);
                         (result.ids || []).forEach((v) => recentCars.set(String(v), Date.now()));
@@ -11772,8 +11825,7 @@ MKS.module({
                     list.push(Date.now());
                     try { sessionStorage.setItem(KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
                     addLog('—', '3 keer geen reactie van een venster: pagina ververst, gaat zo verder', 'warn');
-                    onPageHide();
-                    location.reload();
+                    reloadWhenIdle();
                     return;
                 }
                 stop('Gestopt na 3 fouten op rij. Zie logboek.');
@@ -11788,6 +11840,14 @@ MKS.module({
                 const old = ctx.cfg.reloadMin > 0 && Date.now() - loadedAt > ctx.cfg.reloadMin * 60000;
                 if (!heavy && !old) return;
                 addLog('—', heavy ? 'pagina ververst (geheugen bijna vol), gaat zo verder' : 'pagina ververst, gaat zo verder', 'idle');
+                reloadWhenIdle();
+            }
+            // Never in the middle of a job: the other loop may just be pressing Alarmeren. Both
+            // loops stop starting new jobs, and the last one to finish reloads.
+            let reloadWanted = false;
+            function reloadWhenIdle() {
+                reloadWanted = true;
+                if (busy || teamBusy) return;
                 onPageHide();
                 location.reload();
             }
@@ -11812,11 +11872,12 @@ MKS.module({
                 return [...recentCars.keys()];
             }
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
-            let teamBusy = false, teamTimer = null, teamErrors = 0, teamPauseUntil = 0;
+            let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
             async function teamCycle() {
-                if (!running || stopped || teamBusy || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
+                if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
                 try { await teamRound(); } catch (e) { ctx.err(e); addLog('Teaminzetten', `fout: ${e.message}`, 'error'); } finally { teamBusy = false; saveSession(); }
+                if (reloadWanted && !busy) reloadWhenIdle();
             }
             async function teamRound() {
                 const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
@@ -11838,10 +11899,10 @@ MKS.module({
                     return;
                 }
                 for (const entry of todo) {
-                    if (!running || stopped || !ctx.cfg.teamMissions) return;
+                    if (!running || stopped || !ctx.cfg.teamMissions || reloadWanted) return;
                     const hourAgo = Date.now() - 3600000;
                     while (sent.length && sent[0] < hourAgo) sent.shift();
-                    if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
+                    if (sent.length + inFlight >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
                     const id = entry.getAttribute('mission_id');
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
@@ -11887,6 +11948,7 @@ MKS.module({
 
             async function cycle() {
                 if (!running || busy || stopped) return;
+                if (reloadWanted) { reloadWhenIdle(); return; }
                 busy = true;
                 try {
                     await transports();
@@ -11898,10 +11960,10 @@ MKS.module({
                         // A round over many missions takes minutes: answer new
                         // transport requests in between, not only at the start.
                         await transports();
-                        if (!running || stopped) break;
+                        if (!running || stopped || reloadWanted) break;
                         const hourAgo = Date.now() - 3600000;
                         while (sent.length && sent[0] < hourAgo) sent.shift();
-                        if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); break; }
+                        if (sent.length + inFlight >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); break; }
 
                         const id = entry.getAttribute('mission_id');
                         const name = titleOf(entry);
@@ -11990,6 +12052,7 @@ MKS.module({
                     saveSession();
                 }
                 maybeReload();
+                if (reloadWanted) reloadWhenIdle(); // e.g. after 3 timeouts in this round
             }
 
             function status(text, tone) {
@@ -12017,7 +12080,7 @@ MKS.module({
                 timer = setInterval(cycle, ctx.cfg.scanSec * 1000);
                 // Team missions side by side with our own, a few seconds later so the two hidden
                 // windows do not load at the same moment.
-                setTimeout(teamCycle, 5000);
+                teamKick = setTimeout(teamCycle, 5000);
                 teamTimer = setInterval(teamCycle, ctx.cfg.scanSec * 1000);
             }
 
@@ -12026,6 +12089,7 @@ MKS.module({
                 running = false;
                 clearInterval(timer);
                 clearInterval(teamTimer);
+                clearTimeout(teamKick);
                 clearInterval(heartbeat);
                 releaseLock();
                 addLog('—', text || 'gestopt', text ? 'error' : 'idle');
@@ -12132,7 +12196,13 @@ MKS.module({
             });
 
             ctx.onSettings((cfg, key) => {
-                if (key === 'scanSec' && running) { clearInterval(timer); timer = setInterval(cycle, ctx.cfg.scanSec * 1000); }
+                // key null = settings reset to defaults.
+                if ((key === 'scanSec' || key == null) && running) {
+                    clearInterval(timer);
+                    timer = setInterval(cycle, ctx.cfg.scanSec * 1000);
+                    clearInterval(teamTimer);
+                    teamTimer = setInterval(teamCycle, ctx.cfg.scanSec * 1000);
+                }
             });
             status();
             if (saved.running) resume();
@@ -12143,6 +12213,8 @@ MKS.module({
                     stopped = true;
                     running = false;
                     clearInterval(timer);
+                    clearInterval(teamTimer);
+                    clearTimeout(teamKick);
                     clearInterval(heartbeat);
                     saveSession();
                     releaseLock();
@@ -13880,7 +13952,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009145426' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009150221' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14020,7 +14092,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009145426',
+                version: '1.7.0.20261009150221',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
