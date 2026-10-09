@@ -22,38 +22,47 @@ MKS.module({
     pageNote: 'Op de kaartpagina',
     live: true,
     settings: [
-        { key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 100000, max: 100000000, step: 50000, unit: 'credits' },
-        { key: 'intervalMin', label: 'Eén stap per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
-        { key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
-            help: 'Een voertuigsoort komt pas in aanmerking als die zo vaak in de tekortlijst staat.' },
-        { key: 'specialWeight', label: 'Voorrang speciale voertuigen', type: 'number', default: 3, min: 1, max: 10, step: 1,
+        // Same keys as before, so saved values stay; only order, groups and texts changed.
+        { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 100000, max: 100000000, step: 50000, unit: 'credits',
+            help: 'Zoveel blijft altijd staan. Minimaal 100.000.' },
+        { group: 'Geld', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
+
+        { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
+        { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
+        { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
+            help: 'Meer parkeerplaatsen. Een kleine post die vol is of een uitbreiding nodig heeft, wordt eerst een gewone post (24 uur).' },
+        { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen voor tekorten', type: 'bool', default: true,
+            help: 'Op een echte post (Plaatsingsadvies) als er in de buurt geen geschikt gebouw is.' },
+
+        { group: 'Groeien', key: 'doGrow', label: 'Nieuwe posten in lege gebieden', type: 'bool', default: true,
+            help: 'Een brandweerkazerne, politiebureau of ambulancepost op de vrije echte post die het dichtst bij je gebouwen ligt '
+                + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw.' },
+        { group: 'Groeien', key: 'buildMode', label: 'Bouwmodus: vooral nieuwe posten', type: 'bool', default: false,
+            help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (brandweer, politie en ambulance om de beurt), en maakt elke post af: '
+                + 'brandweer level 2 met een TST 4/5, ambulancepost level 1 met een ambulance, politie met noodhulp; de rest van de plekken '
+                + 'naar het grootste tekort dat er past. Tekorten en opleidingen wachten zolang. Werkt ook als "Nieuwe gebouwen" uit staat.' },
+        { group: 'Groeien', key: 'buildCity', label: 'Bouwmodus: stad', type: 'text', default: '', placeholder: 'bijv. Utrecht',
+            help: 'Leeg = overal. Met een stad: eerst alle vrije echte posten in die stad, het dichtst bij het centrum eerst. '
+                + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
+
+        { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
+        { group: 'Personeel', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
+
+        { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
+            help: 'Een voertuigsoort komt pas in aanmerking als die zo vaak in de tekortlijst van Automatisch alarmeren staat.' },
+        { advanced: true, key: 'specialWeight', label: 'Voorrang speciale voertuigen', type: 'number', default: 3, min: 1, max: 10, step: 1,
             help: 'Zoveel keer zwaarder dan tankautospuiten, ambulances en noodhulp, bij hetzelfde aantal gemiste inzetten.' },
-        { key: 'nearKm', label: 'Gebouw telt als "in de buurt" tot', type: 'number', default: 15, min: 2, max: 100, step: 1, unit: 'km',
-            help: 'Van het midden van de inzetten waar het voertuig miste. Verder weg: nieuw gebouw (als dat aan staat).' },
-        { key: 'groupMax', label: 'Gebouwen per opleiding', type: 'number', default: 5, min: 1, max: 10, step: 1,
-            help: 'Eén opleiding kan meerdere gebouwen tegelijk een project geven (opleiden, level, kopen, koppelen): '
-                + 'de gebouwen die het dichtst liggen bij de meeste plekken waar het voertuig miste.' },
-        { key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
-            help: 'Alleen personeel van de gebouwen die het voertuig krijgen, en alleen zoveel als dat voertuig nodig heeft. '
-                + 'Een klas start pas met alle 10 plaatsen bezet: de rest gaat naar vrij personeel van gebouwen die dat voertuig kunnen hebben (dichtstbij eerst), daarna van willekeurige gebouwen.' },
-        { key: 'unlockWeight', label: 'Nieuwe meldingen: keer per week', type: 'number', default: 1, min: 0, max: 20, step: 0.5,
+        { advanced: true, key: 'unlockWeight', label: 'Nieuwe meldingen: keer per week', type: 'number', default: 1, min: 0, max: 20, step: 0.5,
             help: 'Een gebouw of uitbreiding die nieuwe meldingsoorten vrijspeelt telt hun gemiddelde credits zoveel keer per week. 0 = niet.' },
-        { key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
+        { advanced: true, key: 'nearKm', label: 'Gebouw telt als "in de buurt" tot', type: 'number', default: 15, min: 2, max: 100, step: 1, unit: 'km',
+            help: 'Van het midden van de inzetten waar het voertuig miste. Verder weg: een nieuw gebouw (als dat mag).' },
+        { advanced: true, key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
             help: 'Zoveel van de waardevolste tekorten worden uitgewerkt; de stap met de meeste credits per uitgegeven credit wint.' },
-        { key: 'hireTarget', label: 'Personeel doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10 },
-        { key: 'doHire', label: 'Werving op automatisch + doel', type: 'bool', default: true },
-        { key: 'doVehicles', label: 'Voertuigen kopen', type: 'bool', default: true },
-        { key: 'doExtensions', label: 'Uitbreidingen kopen', type: 'bool', default: true },
-        { key: 'doLevels', label: 'Levels kopen (meer parkeerplaatsen)', type: 'bool', default: true },
-        { key: 'doBuild', label: 'Nieuwe gebouwen bouwen', type: 'bool', default: true },
-        { key: 'buildMode', label: 'Bouwmodus: alleen nieuwe posten', type: 'bool', default: false,
-            help: 'Bouwt de ene nieuwe post na de andere (goedkoopste soort eerst) en maakt elke post eerst af: '
-                + 'brandweer tot level 2 met een TST 4/5, ambulancepost tot level 1 met een ambulance, politie level 0 met noodhulp; '
-                + 'verdere plekken naar het grootste tekort dat er past, nooit meer voertuigen dan het personeel kan bemannen. '
-                + 'Tekorten en opleidingen wachten zolang. De buffer blijft gelden.' },
-        { key: 'doGrow', label: 'Groeien: nieuwe posten in lege gebieden', type: 'bool', default: true,
-            help: 'Nieuwe inzetten ontstaan rond je gebouwen. Een brandweerkazerne, politiebureau of ambulancepost op de echte post '
-                + 'die het dichtst bij je bestaande gebouwen ligt (minstens 3 km van je andere van die soort) brengt nieuwe inzetten zonder lange rijtijden. Waarde = je gemiddelde weekinkomen per gebouw. Hooguit één per soort per 2 uur.' },
+        { advanced: true, key: 'groupMax', label: 'Gebouwen per opleiding', type: 'number', default: 5, min: 1, max: 10, step: 1,
+            help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste.' },
+        { advanced: true, key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
+            help: 'Eerst personeel van de gebouwen die het voertuig krijgen. Een klas start pas met alle plaatsen bezet: de rest gaat naar vrij personeel '
+                + 'van gebouwen die dat voertuig kunnen hebben (dichtstbij eerst), daarna van andere gebouwen.' },
     ],
 
     run(ctx) {
@@ -269,6 +278,8 @@ MKS.module({
         state = state || {};
         state.log = state.log || [];
         state.cool = state.cool || {};
+        // Growth used to wait 2 hours per kind; drop those waits (a failed build still waits 1 hour).
+        for (const k of Object.keys(state.cool)) if (k.startsWith('Groei:') && state.cool[k] > Date.now() + 61 * 60000) delete state.cool[k];
         state.spent = state.spent || {};
         state.wishes = state.wishes || {};
         const save = () => { try { GM_setValue(STATE_KEY, JSON.stringify(state)); } catch (e) { ctx.warn('state not saved', e); } };
@@ -326,6 +337,17 @@ MKS.module({
             return 2 * R * Math.asin(Math.sqrt(x));
         };
         const posOf = (b) => [Number(b.latitude), Number(b.longitude)];
+        // Brandweerkazerne (klein) and Politieopkomstbureau (klein): the API lists them as the
+        // normal kind with small_building set. Most extensions cannot be built there (the game
+        // refuses the purchase) until the station is upgraded to a full one (24 hours).
+        const isSmall = (b) => !!b.small_building || [17, 18].includes(b.building_type);
+        // Upgrade a small station to a full one, so an extension fits there later.
+        const upgradeStep = (b, se, why) => ({ label: `${b.caption} uitbouwen tot groot station (24 uur, ${why})`, cost: se.cost,
+            run: () => hit(se.href, true), check: async () => !(await buildingInfo(b.id)).smallExpand });
+        // Extensions the game refused for a building: not tried there again.
+        const extKey = (b, e) => `${b.id}:${e.id}`;
+        const extRefused = (b, e) => !!(state.badExt || {})[extKey(b, e)];
+        const refuseExt = (b, e) => { state.badExt = { ...(state.badExt || {}), [extKey(b, e)]: Date.now() }; };
 
         // Building page: parking "Voertuigen: 29 van maximaal 29" and the extensions
         // that can still be bought, with what they unlock.
@@ -925,7 +947,16 @@ MKS.module({
             const reasons = [];
             for (const { b, d } of near) {
                 const info = await buildingInfo(b.id);
-                const gate = info.exts.find((e) => unlocks(e.text, c.vt));
+                const gate = info.exts.find((e) => unlocks(e.text, c.vt) && !extRefused(b, e));
+                if (gate && isSmall(b)) {
+                    // Small station: no extension until it is a full one. Upgrade first; the
+                    // shortage is planned again once that is done.
+                    if (info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && ctx.cfg.doExtensions && !projects().some((p) => p.building === b.id)) {
+                        return upgradeStep(b, info.smallExpand, `daarna uitbreiding "${extName(gate.text)}" voor ${v[0]}`);
+                    }
+                    reasons.push(`${b.caption}: klein station, uitbreiding kan pas na uitbouwen tot groot`);
+                    continue;
+                }
                 if (gate) {
                     // An extension takes days to build. When the vehicle has a building type of
                     // its own (an ambulance post for an ambulance), a new one of those is ready
@@ -940,6 +971,7 @@ MKS.module({
                     if (ctx.cfg.doExtensions && gate.cost) {
                         return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
                             run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id),
+                            onFail: () => refuseExt(b, gate),
                             projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, c.vt, c.name) };
                     }
                     reasons.push(`${b.caption}: uitbreiding nodig`);
@@ -1113,10 +1145,16 @@ MKS.module({
                 .map((b) => ({ b, d: km(posOf(b), ref) })).sort((a, b) => a.d - b.d).slice(0, tries);
             const why = [];
             const fits = [];
+            let upgrade = null; // nearest small station that could become a full one
             for (const { b, d } of own) {
                 const info = await buildingInfo(b.id);
-                const ext = info.exts.find((e) => c.match.test(e.text));
+                const ext = info.exts.find((e) => c.match.test(e.text) && !extRefused(b, e));
                 if (!ext || !ext.cost || !ctx.cfg.doExtensions) continue;
+                if (isSmall(b)) {
+                    if (!upgrade && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
+                    why.push(`${b.caption}: klein station, eerst uitbouwen`);
+                    continue;
+                }
                 const vt = extVehicle(ext.text);
                 // The vehicle needs people: this building must have them to spare. Four
                 // extensions went to Veenendaal (15 people needed) because it was nearest.
@@ -1134,8 +1172,9 @@ MKS.module({
             if (f) {
                 return { label: `uitbreiding "${extName(f.ext.text)}" in ${f.b.caption}`, cost: f.ext.cost,
                     run: () => hit(f.ext.href, true), check: async () => !(await buildingInfo(f.b.id)).exts.some((e) => e.id === f.ext.id),
-                    projects: prepProject(f.b, f.vt, c.name) };
+                    onFail: () => refuseExt(f.b, f.ext), projects: prepProject(f.b, f.vt, c.name) };
             }
+            if (upgrade) return upgradeStep(upgrade.b, upgrade.se, `daarna uitbreiding "${extName(upgrade.ext.text)}"`);
             return { skip: `${c.name}: ${why.join('; ') || 'geen gebouw in de buurt om uit te breiden'}` };
         }
 
@@ -1253,7 +1292,8 @@ MKS.module({
          * income per building. After building it, a project buys its first vehicle. */
         // The small kinds (Brandweerkazerne (klein), Politieopkomstbureau (klein)) are
         // cheaper: fewer parking spots, but more new areas for the money. Both go into the
-        // ranking; the better return wins, and one build per kind per 2 hours.
+        // ranking; the better return wins. No wait between builds: a spot just built on is
+        // skipped for 30 minutes instead (recentSpots), as the API can lag behind.
         const GROW = [
             { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
@@ -1267,9 +1307,34 @@ MKS.module({
             ambulancepost: { levels: 1, first: 16 },
             politiebureau: { levels: 0, first: 22 },
         };
+        // Spots built on in the last 30 minutes: the API can take a while to list the new
+        // building, and without this the next round could build on the same post again.
+        function recentSpots() {
+            state.recentSpots = (state.recentSpots || []).filter((x) => Date.now() - x[2] < 30 * 60000);
+            return state.recentSpots.map((x) => [x[0], x[1]]);
+        }
+        // A city name -> its centre and outline box (OpenStreetMap Nominatim), kept for a week.
+        async function cityArea(name) {
+            const key = name.toLowerCase();
+            state.cities = state.cities || {};
+            let c = state.cities[key];
+            if (!c || Date.now() - c.at > 7 * 86400000) {
+                try {
+                    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=nl,be,de&q=${encodeURIComponent(name)}`;
+                    const r = (await (await fetch(url)).json())[0];
+                    c = r ? { at: Date.now(), center: [Number(r.lat), Number(r.lon)], box: r.boundingbox.map(Number), name: r.display_name.split(',')[0] } : null;
+                } catch (e) { c = null; }
+                if (!c) { skipped.push(`Bouwmodus: stad "${name}" niet gevonden`); return null; }
+                state.cities[key] = c;
+            }
+            // boundingbox = [south, north, west, east]; a little margin for posts on the edge.
+            const [s, n, w, e] = c.box;
+            const m = 0.005;
+            return { name: c.name, center: c.center, inside: (p) => p[0] >= s - m && p[0] <= n + m && p[1] >= w - m && p[1] <= e + m };
+        }
         async function planGrow(data) {
             const out = [];
-            if ((!ctx.cfg.doGrow && !ctx.cfg.buildMode) || !ctx.cfg.doBuild) return out;
+            if (!ctx.cfg.buildMode && (!ctx.cfg.doGrow || !ctx.cfg.doBuild)) return out;
             const rate = incomeRate();
             if (!rate || !rate.perHour) return out;
             const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
@@ -1283,14 +1348,27 @@ MKS.module({
                 seen.add(key);
                 for (const p of await postsNear(posOf(b))) posts.push(p);
             }
+            // Build mode with a city: its free real posts first, nearest to its centre.
+            const city = ctx.cfg.buildMode && String(ctx.cfg.buildCity || '').trim() ? await cityArea(String(ctx.cfg.buildCity).trim()) : null;
+            if (city) for (const p of await postsNear(city.center)) posts.push(p);
             const uniq = [...new Set(posts)]; // neighbouring tiles overlap
-            const owned = data.buildings.map(posOf);
+            const owned = [...data.buildings.map(posOf), ...recentSpots()];
             for (const g of GROW) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
                 const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
                 let best = null;
-                for (const p of uniq) {
+                if (city) {
+                    for (const p of uniq) {
+                        if (p[2] !== CAT_OF[g.types[0]] || !city.inside(p)) continue;
+                        const at = [p[0], p[1]];
+                        if (owned.some((o) => km(o, at) < 0.3)) continue;
+                        const mid = km(city.center, at);
+                        if (!best || mid < best.mid) best = { at, mid, why: `${city.name}: ${mid.toFixed(1)} km van het centrum` };
+                    }
+                    if (!best) skipped.push(`Groei: ${g.name}: geen vrije echte post meer in ${city.name}, verder rond je gebouwen`);
+                }
+                if (!best) for (const p of uniq) {
                     if (p[2] !== CAT_OF[g.types[0]]) continue;
                     const at = [p[0], p[1]];
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
@@ -1300,13 +1378,13 @@ MKS.module({
                     const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
                     if (gap < 3) continue;
                     const near = Math.min(...owned.map((o) => km(o, at)));
-                    if (!best || near < best.near) best = { at, gap, near };
+                    if (!best || near < best.near) best = { at, gap, near, why: `groei: ${near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}` };
                 }
                 if (!best) continue;
                 // Full-size and small for the same spot: only the better return goes on the list.
                 let pick = null;
                 for (const type of g.types) {
-                    const plan = await planBuilding({ name: need, at: best.at }, [type], `groei: ${best.near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${best.gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`, data, 0.5);
+                    const plan = await planBuilding({ name: need, at: best.at }, [type], best.why, data, 0.5);
                     if (plan.skip) { skipped.push(plan.skip); continue; }
                     if (pick && plan.cost >= pick.cost) continue;
                     const run = plan.run;
@@ -1317,7 +1395,6 @@ MKS.module({
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
-                            state.cool[need] = Date.now() + (ctx.cfg.buildMode ? 0 : 2 * 3600000);
                             state.growLast = g.name;
                             await sleep(1500);
                             // Its first vehicle as a project: bought as soon as the game sells it.
@@ -1346,7 +1423,7 @@ MKS.module({
             if (NO_NEW_BUILDING.has(type)) return { skip: `${c.name}: geen nieuw gebouw voor dit type (helikopter/berger), alleen bestaande uitbreiden` };
             const cat = opts.cat || CAT_OF[type];
             if (!cat) return { skip: `${c.name}: geen echte post voor gebouwtype ${type}` };
-            const owned = data.buildings.map(posOf);
+            const owned = [...data.buildings.map(posOf), ...recentSpots()];
             const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
                 .map((p) => ({ p, d: km([p[0], p[1]], c.at) }))
                 .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3))
@@ -1371,6 +1448,7 @@ MKS.module({
                     const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
+                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now()]];
                     return hit('/buildings', new URLSearchParams(fd));
                 },
                 // One building more than before (the price check failed for the VWS-post,
@@ -1547,7 +1625,8 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     // A new building: plan its vehicle again soon, not after half an hour.
-                    state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
+                    // Growth has no wait: the next post may follow at once (recentSpots keeps it off this one).
+                    if (!String(next.need).startsWith('Groei:')) state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
                     if (next.cost) {
                         state.bought = state.bought || {};
                         const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
@@ -1574,6 +1653,7 @@ MKS.module({
                     }
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
+                    if (next.onFail) next.onFail();
                     addLog(`niet gelukt: ${next.label}`, 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }

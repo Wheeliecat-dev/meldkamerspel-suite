@@ -16,7 +16,8 @@
  *   live:     true = run() may return { stop() }; on/off works without reload
  *   warning:  big red callout in the dashboard (HTML)
  *   confirmOn: text of a confirm() shown before the module is turned on
- *   settings: [{ key, label, type, default, help, min, max, step, unit, options }]
+ *   settings: [{ key, label, type, default, help, min, max, step, unit, options, group, advanced }]
+ *             group: sub-heading above the first setting of a group; advanced: under "Geavanceerd"
  *             type: bool | number | range | select | text
  *
  * ctx (passed to run):
@@ -284,6 +285,9 @@ const MKS = (() => {
         padding:11px 0; border-bottom:1px solid var(--m-bd); max-width:820px; }
     #mks-dash .mks-set:last-of-type { border-bottom:0; }
     #mks-dash .mks-set .l { font-weight:500; }
+    #mks-dash .mks-sg { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); padding:14px 0 2px; }
+    #mks-dash .mks-adv { margin-top:10px; }
+    #mks-dash .mks-adv > summary { cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
     #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
@@ -727,7 +731,21 @@ const MKS = (() => {
             const list = def.settings || [];
             if (!list.length) { box.innerHTML = ''; return; }
             const cfg = settingsOf(def);
-            box.innerHTML = `<h4 class="mks-h">Instellingen</h4>` + list.map((s, i) => {
+            // s.group: a sub-heading above the first setting of each group.
+            // s.advanced: tucked away under "Geavanceerd" (fine-tuning).
+            let lastGroup = null;
+            const rows = (items) => items.map(([s, i]) => {
+                const head = s.group && s.group !== lastGroup ? `<div class="mks-sg">${esc(s.group)}</div>` : '';
+                if (s.group) lastGroup = s.group;
+                return head + rowHtml(s, i);
+            }).join('');
+            const indexed = list.map((s, i) => [s, i]);
+            const main = indexed.filter(([s]) => !s.advanced);
+            const adv = indexed.filter(([s]) => s.advanced);
+            box.innerHTML = `<h4 class="mks-h">Instellingen</h4>` + rows(main)
+                + (adv.length ? `<details class="mks-adv"><summary>Geavanceerd (${adv.length})</summary>${(lastGroup = null, rows(adv))}</details>` : '')
+                + `<div class="mks-reset"><a class="mks-link">Standaardwaarden herstellen</a></div>`;
+            function rowHtml(s, i) {
                 const v = cfg[s.key];
                 let control;
                 if (s.type === 'bool') control = switchHtml(!!v);
@@ -744,7 +762,7 @@ const MKS = (() => {
                     control = `<input type="text" value="${esc(v)}" placeholder="${esc(s.placeholder || '')}">`;
                 }
                 return `<div class="mks-set" data-i="${i}"><div class="l">${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`;
-            }).join('') + `<div class="mks-reset"><a class="mks-link">Standaardwaarden herstellen</a></div>`;
+            }
 
             box.querySelectorAll('.mks-set').forEach((row) => {
                 const s = list[Number(row.dataset.i)];
