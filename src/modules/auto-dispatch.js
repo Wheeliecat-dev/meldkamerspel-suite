@@ -854,9 +854,10 @@ MKS.module({
                 report('skip', { reason: `eigen voertuig: ${clean(cells).slice(0, 80)}`, joined: true });
                 return;
             }
-            // A planned event that has not started yet (or any page without a vehicle list or
-            // Alarmeren button) cannot take a car: skip it quietly, it is not "no car free".
-            if (!document.getElementById('alert_btn') || !document.querySelector('input.vehicle_checkbox')) {
+            // An event that has not started yet has no Alarmeren button: skip it quietly. An
+            // empty vehicle list with the button there only means all our cars are busy: that
+            // goes on to "geen noodhulp vrij", which ends the round.
+            if (!document.getElementById('alert_btn')) {
                 report('skip', { reason: 'kan (nog) geen voertuigen ontvangen', notYet: true });
                 return;
             }
@@ -1130,7 +1131,7 @@ MKS.module({
                 clearTimeout(eventsTimer);
                 eventsTimer = setTimeout(() => { try { GM_setValue(EVENTS_KEY, JSON.stringify(events)); } catch (x) { ctx.warn('events not saved', x); } }, 2000);
             }
-            // Team missions and team events ("geplande inzetten" of the team): both get one noodhulp.
+            // Team missions and team events (#mission_list_alliance_event): both get one noodhulp.
             const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id]';
             const isEvent = (e) => !!e.closest('#mission_list_alliance_event');
             W.mksAutoData = {
