@@ -287,7 +287,7 @@ const MKS = (() => {
     #mks-dash .mks-set .l { font-weight:500; }
     #mks-dash .mks-sg { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); padding:14px 0 2px; }
     #mks-dash .mks-adv { margin-top:10px; }
-    #mks-dash .mks-adv > summary { cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
+    #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
     #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }

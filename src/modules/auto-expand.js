@@ -32,12 +32,14 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
             help: 'Meer parkeerplaatsen. Een kleine post wordt een gewone post (24 uur) als hij vol is, '
                 + 'of als een uitbreiding daar niet lukte omdat hij klein is.' },
-        { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen voor tekorten', type: 'bool', default: true,
-            help: 'Op een echte post (Plaatsingsadvies) als er in de buurt geen geschikt gebouw is.' },
+        { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen', type: 'bool', default: true,
+            help: 'Op een echte post (Plaatsingsadvies): voor tekorten als er in de buurt geen geschikt gebouw is, en om te groeien. '
+                + 'Uit = nooit een nieuw gebouw, behalve in Bouwmodus.' },
 
         { group: 'Groeien', key: 'doGrow', label: 'Nieuwe posten in lege gebieden', type: 'bool', default: true,
             help: 'Een brandweerkazerne, politiebureau of ambulancepost op de vrije echte post die het dichtst bij je gebouwen ligt '
-                + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw.' },
+                + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw. '
+                + 'Alleen als "Nieuwe gebouwen" aan staat.' },
         { group: 'Groeien', key: 'buildMode', label: 'Bouwmodus: vooral nieuwe posten', type: 'bool', default: false,
             help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (brandweer, politie en ambulance om de beurt), en maakt elke post af: '
                 + 'brandweer level 2 met een TST 4/5, ambulancepost level 1 met een ambulance, politie met noodhulp; de rest van de plekken '
@@ -378,7 +380,8 @@ MKS.module({
                 let small = isSmall(b);
                 try { small = small && !!(await buildingInfo(b.id)).smallExpand; } catch (e) { /* keep the API's answer */ }
                 state.extFailed = { ...(state.extFailed || {}), [extKey(b, ext)]: { at: Date.now(), small } };
-                return small ? 'klein station: deze uitbreiding kan daar waarschijnlijk pas na uitbouwen tot groot station' : 'niet opnieuw geprobeerd in dit gebouw voor 24 uur';
+                return small ? { known: true, note: 'klein station: deze uitbreiding kan daar waarschijnlijk pas na uitbouwen tot groot station' }
+                    : { note: 'niet opnieuw geprobeerd in dit gebouw voor 24 uur' };
             }, ...extra });
 
         // Building page: parking "Voertuigen: 29 van maximaal 29" and the extensions
@@ -1187,7 +1190,9 @@ MKS.module({
                 if (!ext || !ext.cost || !ctx.cfg.doExtensions) continue;
                 const blockedHow = extBlocked(b, ext);
                 if (blockedHow === 'small') {
-                    if (!upgrade && !upgrading(b) && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
+                    const evt = extVehicle(ext.text);
+                    const crewOk = evt == null || staffLeft(b, data) >= crewOf(evt);
+                    if (!upgrade && crewOk && !upgrading(b) && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
                     why.push(`${b.caption}: uitbreiding lukte niet, klein station${upgrading(b) ? ' (wordt uitgebouwd)' : ', eerst uitbouwen tot groot'}`);
                     continue;
                 }
@@ -1369,7 +1374,8 @@ MKS.module({
         }
         async function planGrow(data) {
             const out = [];
-            if (!ctx.cfg.buildMode && (!ctx.cfg.doGrow || !ctx.cfg.doBuild)) return out;
+            if (!ctx.cfg.buildMode && !ctx.cfg.doGrow) return out;
+            if (!ctx.cfg.buildMode && !ctx.cfg.doBuild) { skipped.push('Groei: "Nieuwe gebouwen" staat uit'); return out; }
             const rate = incomeRate();
             if (!rate || !rate.perHour) return out;
             const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
@@ -1391,7 +1397,9 @@ MKS.module({
             for (const g of GROW) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
-                const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
+                // Plus ones of this kind built in the last 30 minutes that the API may not list yet.
+                const mine = [...data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf),
+                    ...(state.recentSpots || []).filter((x) => x[3] === CAT_OF[g.types[0]]).map((x) => [x[0], x[1]])];
                 let best = null;
                 if (city) {
                     for (const p of uniq) {
@@ -1483,7 +1491,8 @@ MKS.module({
                     const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
-                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now()]];
+                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2]]];
+                    save(); // a reload during the purchase must not lose it
                     return hit('/buildings', new URLSearchParams(fd));
                 },
                 // One building more than before (the price check failed for the VWS-post,
@@ -1689,10 +1698,12 @@ MKS.module({
                     }
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
-                    const note = next.onFail ? await next.onFail() : '';
-                    addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${note ? ` — ${note}` : ''}`, 'error');
+                    const why = (next.onFail && await next.onFail()) || {};
+                    addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
-                    if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
+                    // A failure the script understands (an extension a small station cannot
+                    // have yet) is handled, not a reason to stop everything.
+                    if (!why.known && ++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
                 }
             } catch (e) {
                 ctx.err(e);
