@@ -60,7 +60,7 @@ MKS.module({
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
-            help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, binnen de maximale afstand), '
+            help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
                 + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Je eigen inzetten gaan voor. '
                 + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
@@ -787,7 +787,7 @@ MKS.module({
          * ==================================================================== */
         /* ========================================================================
          * TEAM MISSION — another player's mission shared with the team. Exactly one
-         * noodhulp (the game's own "fustw" slot, nearest first), and only when none
+         * noodhulp (the game's own "fustw" slot, nearest first, any distance), and only when none
          * of our own vehicles is driving there or on scene: those rows have a
          * "terug naar post" (backalarm) button, which only your own vehicles get.
          * ==================================================================== */
@@ -812,8 +812,7 @@ MKS.module({
             if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij' }); return; }
             // Never more than one, whatever the game picked.
             picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
-            const km = dist(picked[0]);
-            if (km > job.maxKm) { reset(); report('skip', { reason: `dichtstbijzijnde noodhulp op ${km.toFixed(1)} km` }); return; }
+            const km = dist(picked[0]); // no distance limit for team missions
             const btn = document.getElementById('alert_btn');
             if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
             try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
@@ -1414,7 +1413,7 @@ MKS.module({
                     const name = `Team: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
                     status(`Bezig: ${name}`, 'busy');
-                    const res = await runJob({ id, token: Date.now(), team: true, maxKm: ctx.cfg.maxKm, me: W.user_id != null ? String(W.user_id) : '' });
+                    const res = await runJob({ id, token: Date.now(), team: true, me: W.user_id != null ? String(W.user_id) : '' });
                     if (res.result === 'sent' || res.result === 'unconfirmed') {
                         teamDone.add(id);
                         stats.sent++;

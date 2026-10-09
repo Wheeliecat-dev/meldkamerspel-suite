@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009070932 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009091008 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009070932';
+    const VERSION = '1.7.0.20261009091008';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -289,7 +289,7 @@ const MKS = (() => {
     #mks-dash .mks-set .l { font-weight:500; }
     #mks-dash .mks-sg { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); padding:14px 0 2px; }
     #mks-dash .mks-adv { margin-top:10px; }
-    #mks-dash .mks-adv > summary { cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
+    #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
     #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
@@ -10432,6 +10432,10 @@ MKS.module({
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
+        { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
+            help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
+                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Je eigen inzetten gaan voor. '
+                + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -10885,6 +10889,8 @@ MKS.module({
                     await sleep(300);
                 }
 
+                if (job.team) { await teamWorker(job, report, doneKey); return; }
+
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
                 // anything is still driving there.
@@ -11152,6 +11158,41 @@ MKS.module({
          * Red buttons are full; team cells add "Afdrachtpercentage: 0%". Same
          * choice as a spraakaanvraag. One car per job: the click loads another page.
          * ==================================================================== */
+        /* ========================================================================
+         * TEAM MISSION — another player's mission shared with the team. Exactly one
+         * noodhulp (the game's own "fustw" slot, nearest first, any distance), and only when none
+         * of our own vehicles is driving there or on scene: those rows have a
+         * "terug naar post" (backalarm) button, which only your own vehicles get.
+         * ==================================================================== */
+        async function teamWorker(job, report, doneKey) {
+            const rows = [...document.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')];
+            const mine = (tr) => !!tr.querySelector('a[href*="/backalarm"]') || (job.me && !!tr.querySelector(`a[href$="/profile/${job.me}"]`));
+            if (rows.some(mine)) { report('skip', { reason: 'doet al mee', joined: true }); return; }
+            const el = document.createElement('a');
+            el.id = 'aao_mks_team';
+            el.className = 'aao_btn';
+            el.style.display = 'none';
+            for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', fustw: '1' })) el.setAttribute(k, v);
+            document.body.appendChild(el);
+            const realAlert = W.alert;
+            W.alert = () => {}; // "Niet beschikbaar: 1 noodhulp": no popup in the hidden window
+            try { W.aaoClickHandler(el); } catch (e) { ctx.warn('aaoClickHandler', e); } finally { W.alert = realAlert; el.remove(); }
+            await sleep(400);
+            const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
+            const picked = [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()]
+                .sort((a, b) => dist(a) - dist(b));
+            const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
+            if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij' }); return; }
+            // Never more than one, whatever the game picked.
+            picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
+            const km = dist(picked[0]); // no distance limit for team missions
+            const btn = document.getElementById('alert_btn');
+            if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
+            try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
+            report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp') });
+            btn.click();
+        }
+
         function prisonerCell(job, block, report, doneKey) {
             // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
             const vid = block.getAttribute('data-vehicle-id');
@@ -11717,6 +11758,56 @@ MKS.module({
                 location.reload();
             }
 
+            /* --------------------------------------------------------------------
+             * TEAM MISSIONS — after our own missions: one noodhulp to each shared
+             * team mission we are not in yet. Joined (sent, or found our own
+             * vehicle there) = never looked at again while it is in the list.
+             * ------------------------------------------------------------------ */
+            const teamDone = new Set();
+            async function teamRound() {
+                const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
+                const live = new Set(entries.map((e) => e.getAttribute('mission_id')));
+                for (const id of [...teamDone]) if (!live.has(id)) teamDone.delete(id);
+                const now = Date.now();
+                const todo = entries.filter((e) => {
+                    const id = e.getAttribute('mission_id');
+                    if (teamDone.has(id)) return false;
+                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    const t = tried.get(id);
+                    return !t || now - t > ctx.cfg.retryMin * 60000;
+                }).sort((a, b) => creditsOf(b) - creditsOf(a));
+                for (const entry of todo) {
+                    await transports();
+                    if (!running || stopped) return;
+                    const hourAgo = Date.now() - 3600000;
+                    while (sent.length && sent[0] < hourAgo) sent.shift();
+                    if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
+                    const id = entry.getAttribute('mission_id');
+                    const name = `Team: ${titleOf(entry)}`;
+                    tried.set(id, Date.now());
+                    status(`Bezig: ${name}`, 'busy');
+                    const res = await runJob({ id, token: Date.now(), team: true, me: W.user_id != null ? String(W.user_id) : '' });
+                    if (res.result === 'sent' || res.result === 'unconfirmed') {
+                        teamDone.add(id);
+                        stats.sent++;
+                        errorStreak = 0;
+                        sent.push(Date.now());
+                        addLog(name, `${res.result === 'sent' ? '' : '(niet bevestigd) '}1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'ok');
+                    } else if (res.result === 'skip' && res.joined) {
+                        teamDone.add(id); // already in: nothing to log
+                        continue;
+                    } else if (res.result === 'skip') {
+                        errorStreak = 0;
+                        addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                    } else {
+                        stats.errors++;
+                        addLog(name, `fout: ${res.reason}`, 'error');
+                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
+                    }
+                    await sleep(ctx.cfg.pauseSec * 1000);
+                }
+            }
+
             async function cycle() {
                 if (!running || busy || stopped) return;
                 busy = true;
@@ -11813,6 +11904,7 @@ MKS.module({
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
+                    if (ctx.cfg.teamMissions && running && !stopped) await teamRound();
                     if (running) status();
                 } catch (e) {
                     ctx.err(e);
@@ -12017,12 +12109,14 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
             help: 'Meer parkeerplaatsen. Een kleine post wordt een gewone post (24 uur) als hij vol is, '
                 + 'of als een uitbreiding daar niet lukte omdat hij klein is.' },
-        { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen voor tekorten', type: 'bool', default: true,
-            help: 'Op een echte post (Plaatsingsadvies) als er in de buurt geen geschikt gebouw is.' },
+        { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen', type: 'bool', default: true,
+            help: 'Op een echte post (Plaatsingsadvies): voor tekorten als er in de buurt geen geschikt gebouw is, en om te groeien. '
+                + 'Uit = nooit een nieuw gebouw, behalve in Bouwmodus.' },
 
         { group: 'Groeien', key: 'doGrow', label: 'Nieuwe posten in lege gebieden', type: 'bool', default: true,
             help: 'Een brandweerkazerne, politiebureau of ambulancepost op de vrije echte post die het dichtst bij je gebouwen ligt '
-                + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw.' },
+                + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw. '
+                + 'Alleen als "Nieuwe gebouwen" aan staat.' },
         { group: 'Groeien', key: 'buildMode', label: 'Bouwmodus: vooral nieuwe posten', type: 'bool', default: false,
             help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (brandweer, politie en ambulance om de beurt), en maakt elke post af: '
                 + 'brandweer level 2 met een TST 4/5, ambulancepost level 1 met een ambulance, politie met noodhulp; de rest van de plekken '
@@ -12363,7 +12457,8 @@ MKS.module({
                 let small = isSmall(b);
                 try { small = small && !!(await buildingInfo(b.id)).smallExpand; } catch (e) { /* keep the API's answer */ }
                 state.extFailed = { ...(state.extFailed || {}), [extKey(b, ext)]: { at: Date.now(), small } };
-                return small ? 'klein station: deze uitbreiding kan daar waarschijnlijk pas na uitbouwen tot groot station' : 'niet opnieuw geprobeerd in dit gebouw voor 24 uur';
+                return small ? { known: true, note: 'klein station: deze uitbreiding kan daar waarschijnlijk pas na uitbouwen tot groot station' }
+                    : { note: 'niet opnieuw geprobeerd in dit gebouw voor 24 uur' };
             }, ...extra });
 
         // Building page: parking "Voertuigen: 29 van maximaal 29" and the extensions
@@ -13172,7 +13267,9 @@ MKS.module({
                 if (!ext || !ext.cost || !ctx.cfg.doExtensions) continue;
                 const blockedHow = extBlocked(b, ext);
                 if (blockedHow === 'small') {
-                    if (!upgrade && !upgrading(b) && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
+                    const evt = extVehicle(ext.text);
+                    const crewOk = evt == null || staffLeft(b, data) >= crewOf(evt);
+                    if (!upgrade && crewOk && !upgrading(b) && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
                     why.push(`${b.caption}: uitbreiding lukte niet, klein station${upgrading(b) ? ' (wordt uitgebouwd)' : ', eerst uitbouwen tot groot'}`);
                     continue;
                 }
@@ -13354,7 +13451,8 @@ MKS.module({
         }
         async function planGrow(data) {
             const out = [];
-            if (!ctx.cfg.buildMode && (!ctx.cfg.doGrow || !ctx.cfg.doBuild)) return out;
+            if (!ctx.cfg.buildMode && !ctx.cfg.doGrow) return out;
+            if (!ctx.cfg.buildMode && !ctx.cfg.doBuild) { skipped.push('Groei: "Nieuwe gebouwen" staat uit'); return out; }
             const rate = incomeRate();
             if (!rate || !rate.perHour) return out;
             const withVehicles = data.buildings.filter((b) => !NO_VEHICLES.has(b.building_type)).length || 1;
@@ -13376,7 +13474,9 @@ MKS.module({
             for (const g of GROW) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
-                const mine = data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf);
+                // Plus ones of this kind built in the last 30 minutes that the API may not list yet.
+                const mine = [...data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf),
+                    ...(state.recentSpots || []).filter((x) => x[3] === CAT_OF[g.types[0]]).map((x) => [x[0], x[1]])];
                 let best = null;
                 if (city) {
                     for (const p of uniq) {
@@ -13468,7 +13568,8 @@ MKS.module({
                     const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
-                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now()]];
+                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2]]];
+                    save(); // a reload during the purchase must not lose it
                     return hit('/buildings', new URLSearchParams(fd));
                 },
                 // One building more than before (the price check failed for the VWS-post,
@@ -13674,10 +13775,12 @@ MKS.module({
                     }
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
-                    const note = next.onFail ? await next.onFail() : '';
-                    addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${note ? ` — ${note}` : ''}`, 'error');
+                    const why = (next.onFail && await next.onFail()) || {};
+                    addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
-                    if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
+                    // A failure the script understands (an extension a small station cannot
+                    // have yet) is handled, not a reason to stop everything.
+                    if (!why.known && ++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
                 }
             } catch (e) {
                 ctx.err(e);
@@ -13696,7 +13799,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009070932' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009091008' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13836,7 +13939,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009070932',
+                version: '1.7.0.20261009091008',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
