@@ -61,7 +61,8 @@ MKS.module({
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
             help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
-                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Je eigen inzetten gaan voor. '
+                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
+                + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
                 + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
@@ -506,6 +507,7 @@ MKS.module({
                 // A team mission first checks whether we are in already (nothing to load then).
                 if (job.team) { await teamWorker(job, report, doneKey); return; }
                 await loadMissing(); // all vehicles, not only the nearest listed
+                dropAvoided(job.avoid);
 
 
                 // The red "Missende voertuigen" box is what the mission still needs
@@ -757,7 +759,7 @@ MKS.module({
                 const btn = document.getElementById('alert_btn');
                 if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
                 try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote });
+                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value) });
                 btn.click();
             } catch (e) {
                 ctx.err(e);
@@ -790,6 +792,15 @@ MKS.module({
             }
         }
 
+        // Own missions and team missions run side by side, each in its own hidden window. A
+        // car one of them sent seconds ago can still look free in the other's window: those
+        // (job.avoid) are taken out of the list before anything is chosen.
+        function dropAvoided(ids) {
+            if (!ids || !ids.length) return;
+            const avoid = new Set(ids.map(String));
+            document.querySelectorAll('input.vehicle_checkbox').forEach((c) => { if (avoid.has(c.value)) (c.closest('tr') || c).remove(); });
+        }
+
         // One of our own vehicles driving to or at the mission: their rows have a "terug naar
         // post" (backalarm) button, which only your own vehicles get, or link your profile.
         function ownRowOn(doc, me) {
@@ -820,9 +831,10 @@ MKS.module({
                 return [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()]
                     .sort((a, b) => dist(a) - dist(b));
             }
+            dropAvoided(job.avoid);
             let picked = await select();
             // None among the nearest listed: any distance counts, so load the rest and look again.
-            if (!picked.length) { await loadMissing(); picked = await select(); }
+            if (!picked.length) { await loadMissing(); dropAvoided(job.avoid); picked = await select(); }
             const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
             if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij', noCar: true }); return; }
             // Never more than one, whatever the game picked.
@@ -831,7 +843,7 @@ MKS.module({
             const btn = document.getElementById('alert_btn');
             if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
             try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-            report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp') });
+            report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp'), ids: [picked[0].value] });
             btn.click();
         }
 
@@ -1254,6 +1266,7 @@ MKS.module({
                         if (ev.origin !== location.origin || ev.source !== frame.contentWindow || !ev.data || !ev.data[MSG]) return;
                         result = ev.data;
                         if (result.result !== 'sending') return cleanup(result);
+                        (result.ids || []).forEach((v) => recentCars.set(String(v), Date.now()));
                         // Confirmed by our own list (mission no longer red, vehicle no longer
                         // status 5) or by the page the frame lands on afterwards. A top-up
                         // starts from a mission that is not red, so it waits for the page.
@@ -1418,7 +1431,20 @@ MKS.module({
                 teamNoted.set(text, Date.now());
                 addLog('Teaminzetten', text, 'idle');
             };
-            const TEAM_PER_CYCLE = 5;
+            // Cars either loop sent in the last 2 minutes: vehicle id -> when.
+            const recentCars = new Map();
+            function avoidCars() {
+                const now = Date.now();
+                for (const [v, t] of recentCars) if (now - t > 120000) recentCars.delete(v);
+                return [...recentCars.keys()];
+            }
+            // The team loop runs next to cycle(), in its own hidden window, on its own timer.
+            let teamBusy = false, teamTimer = null, teamErrors = 0, teamPauseUntil = 0;
+            async function teamCycle() {
+                if (!running || stopped || teamBusy || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
+                teamBusy = true;
+                try { await teamRound(); } catch (e) { ctx.err(e); addLog('Teaminzetten', `fout: ${e.message}`, 'error'); } finally { teamBusy = false; saveSession(); }
+            }
             async function teamRound() {
                 const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
                 const live = new Set(entries.map((e) => e.getAttribute('mission_id')));
@@ -1438,15 +1464,8 @@ MKS.module({
                     else if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
                     return;
                 }
-                // A few per cycle, so our own missions are looked at again soon. Only a brand-new
-                // own mission (never tried) interrupts: own missions that keep being skipped are
-                // due again every few minutes and would otherwise keep the team round from ever running.
-                let done = 0;
                 for (const entry of todo) {
-                    await transports();
-                    if (!running || stopped) return;
-                    if (done >= TEAM_PER_CYCLE) return;
-                    if (candidates().some((e) => !tried.has(e.getAttribute('mission_id')))) return;
+                    if (!running || stopped || !ctx.cfg.teamMissions) return;
                     const hourAgo = Date.now() - 3600000;
                     while (sent.length && sent[0] < hourAgo) sent.shift();
                     if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
@@ -1455,35 +1474,39 @@ MKS.module({
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `Team: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
-                    done++;
-                    status(`Bezig: ${name}`, 'busy');
-                    const res = await runJob({ id, token: Date.now(), team: true, me: W.user_id != null ? String(W.user_id) : '' });
+                    const res = await runJob({ id, token: Date.now(), team: true, avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
                     if (res.result === 'sent') {
                         teamDone.set(id, Date.now());
                         stats.sent++;
-                        errorStreak = 0;
+                        teamErrors = 0;
                         sent.push(Date.now());
                         addLog(name, `1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'ok');
                     } else if (res.result === 'unconfirmed') {
                         // Not seen on the mission, so not marked joined. The retry after retryMin
                         // looks for our own vehicle first, so it never sends a second one.
-                        errorStreak = 0;
+                        teamErrors = 0;
                         addLog(name, `niet bevestigd: 1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'warn');
                     } else if (res.result === 'skip' && res.joined) {
                         teamDone.set(id, Date.now()); // already in: nothing to log
                         continue;
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
-                        errorStreak = 0;
-                        addLog('Teaminzetten', 'geen noodhulp vrij, de rest volgt later', 'idle');
+                        teamErrors = 0;
+                        teamNote('geen noodhulp vrij, de teaminzetten volgen later');
                         return;
                     } else if (res.result === 'skip') {
-                        errorStreak = 0;
+                        teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
                     } else {
+                        // Errors here pause only the team loop; own missions go on.
                         stats.errors++;
                         addLog(name, `fout: ${res.reason}`, 'error');
-                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
+                        if (++teamErrors >= 3) {
+                            teamErrors = 0;
+                            teamPauseUntil = Date.now() + 10 * 60000;
+                            addLog('Teaminzetten', '3 fouten op rij: teaminzetten 10 minuten gepauzeerd', 'warn');
+                            return;
+                        }
                     }
                     await sleep(ctx.cfg.pauseSec * 1000);
                 }
@@ -1540,7 +1563,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
@@ -1585,7 +1608,6 @@ MKS.module({
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
-                    if (ctx.cfg.teamMissions && running && !stopped) await teamRound();
                     if (running) status();
                 } catch (e) {
                     ctx.err(e);
@@ -1620,12 +1642,17 @@ MKS.module({
                 status();
                 cycle();
                 timer = setInterval(cycle, ctx.cfg.scanSec * 1000);
+                // Team missions side by side with our own, a few seconds later so the two hidden
+                // windows do not load at the same moment.
+                setTimeout(teamCycle, 5000);
+                teamTimer = setInterval(teamCycle, ctx.cfg.scanSec * 1000);
             }
 
             function stop(text) {
                 if (!running) return;
                 running = false;
                 clearInterval(timer);
+                clearInterval(teamTimer);
                 clearInterval(heartbeat);
                 releaseLock();
                 addLog('—', text || 'gestopt', text ? 'error' : 'idle');
