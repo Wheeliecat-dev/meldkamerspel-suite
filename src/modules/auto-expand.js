@@ -30,7 +30,8 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
-            help: 'Meer parkeerplaatsen. Een kleine post die vol is of een uitbreiding nodig heeft, wordt eerst een gewone post (24 uur).' },
+            help: 'Meer parkeerplaatsen. Een kleine post wordt een gewone post (24 uur) als hij vol is, '
+                + 'of als een uitbreiding daar niet lukte omdat hij klein is.' },
         { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen voor tekorten', type: 'bool', default: true,
             help: 'Op een echte post (Plaatsingsadvies) als er in de buurt geen geschikt gebouw is.' },
 
@@ -298,6 +299,7 @@ MKS.module({
         let unlocksAt = 0;
         let skipped = [];       // why other needs were passed over this round
         let failStreak = 0;
+        let lastSaid = ''; // the game's message after the last purchase
         let stopped = false;
         let busy = false;
         W.mksAutoExpand = {
@@ -338,16 +340,46 @@ MKS.module({
         };
         const posOf = (b) => [Number(b.latitude), Number(b.longitude)];
         // Brandweerkazerne (klein) and Politieopkomstbureau (klein): the API lists them as the
-        // normal kind with small_building set. Most extensions cannot be built there (the game
-        // refuses the purchase) until the station is upgraded to a full one (24 hours).
+        // normal kind with small_building set. Some extensions cannot be built there: the
+        // game refuses the purchase until the station is upgraded to a full one (24 hours).
+        // Extensions are tried as usual; only when one fails at a small station does that
+        // extension wait for an upgrade there (extFailed).
         const isSmall = (b) => !!b.small_building || [17, 18].includes(b.building_type);
-        // Upgrade a small station to a full one, so an extension fits there later.
-        const upgradeStep = (b, se, why) => ({ label: `${b.caption} uitbouwen tot groot station (24 uur, ${why})`, cost: se.cost,
-            run: () => hit(se.href, true), check: async () => !(await buildingInfo(b.id)).smallExpand });
-        // Extensions the game refused for a building: not tried there again.
+        // Upgrading: still small for the API for a while, so no extension tries for 25 hours.
+        const upgrading = (b) => Date.now() - ((state.upgrading || {})[b.id] || 0) < 25 * 3600000;
+        const upgradeStep = (b, se, why, extra = {}) => ({ label: `${b.caption} uitbouwen tot groot station (24 uur, ${why})`, cost: se.cost,
+            run: () => hit(se.href, true), check: async () => !(await buildingInfo(b.id)).smallExpand,
+            done: () => { state.upgrading = { ...(state.upgrading || {}), [b.id]: Date.now() }; }, ...extra });
+        // Extensions that failed at a building: { "building:extension": { at, small } }. At a
+        // small station it waits for the upgrade; elsewhere it is left alone for a day.
         const extKey = (b, e) => `${b.id}:${e.id}`;
-        const extRefused = (b, e) => !!(state.badExt || {})[extKey(b, e)];
-        const refuseExt = (b, e) => { state.badExt = { ...(state.badExt || {}), [extKey(b, e)]: Date.now() }; };
+        function extBlocked(b, e) {
+            const f = (state.extFailed || {})[extKey(b, e)];
+            if (!f) return '';
+            if (f.small) {
+                if (isSmall(b) || upgrading(b)) return 'small';
+                delete state.extFailed[extKey(b, e)]; // a full station now: try again
+                return '';
+            }
+            return Date.now() - f.at < 24 * 3600000 ? 'failed' : '';
+        }
+        // The game's message after a purchase (the page it redirects to), for the log.
+        async function gameSays(r) {
+            try {
+                const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+                return [...doc.querySelectorAll('.alert-danger, .alert-warning')].map((a) => a.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' | ').slice(0, 200);
+            } catch (e) { return ''; }
+        }
+        // An extension purchase: on failure, note whether the station being small is why.
+        const extStep = (b, ext, label, extra) => ({ label, cost: ext.cost,
+            run: async () => { lastSaid = await gameSays(await hit(ext.href, true)); },
+            check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === ext.id),
+            onFail: async () => {
+                let small = isSmall(b);
+                try { small = small && !!(await buildingInfo(b.id)).smallExpand; } catch (e) { /* keep the API's answer */ }
+                state.extFailed = { ...(state.extFailed || {}), [extKey(b, ext)]: { at: Date.now(), small } };
+                return small ? 'klein station: deze uitbreiding kan daar waarschijnlijk pas na uitbouwen tot groot station' : 'niet opnieuw geprobeerd in dit gebouw voor 24 uur';
+            }, ...extra });
 
         // Building page: parking "Voertuigen: 29 van maximaal 29" and the extensions
         // that can still be bought, with what they unlock.
@@ -945,18 +977,22 @@ MKS.module({
             const near = own.filter((o) => !c.at || o.d <= ctx.cfg.nearKm)
                 .sort((x, y) => hasRoom(y.b) - hasRoom(x.b) || x.d - y.d).slice(0, 3);
             const reasons = [];
+            let upgradeOpt = null; // a small station whose extension failed: upgrade it if nothing else fits
             for (const { b, d } of near) {
                 const info = await buildingInfo(b.id);
-                const gate = info.exts.find((e) => unlocks(e.text, c.vt) && !extRefused(b, e));
-                if (gate && isSmall(b)) {
-                    // Small station: no extension until it is a full one. Upgrade first; the
-                    // shortage is planned again once that is done.
-                    if (info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && ctx.cfg.doExtensions && !projects().some((p) => p.building === b.id)) {
-                        return upgradeStep(b, info.smallExpand, `daarna uitbreiding "${extName(gate.text)}" voor ${v[0]}`);
+                const gate = info.exts.find((e) => unlocks(e.text, c.vt));
+                const blockedHow = gate ? extBlocked(b, gate) : '';
+                if (blockedHow === 'small') {
+                    // The extension failed here because the station is small: upgrade it first
+                    // (when allowed), unless a later building in the list can take the vehicle.
+                    if (!upgradeOpt && !upgrading(b) && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && ctx.cfg.doExtensions
+                        && staffLeft(b, data) >= crewOf(c.vt) && !projects().some((p) => p.building === b.id)) {
+                        upgradeOpt = upgradeStep(b, info.smallExpand, `uitbreiding "${extName(gate.text)}" voor ${v[0]} lukte niet in de kleine post`);
                     }
-                    reasons.push(`${b.caption}: klein station, uitbreiding kan pas na uitbouwen tot groot`);
+                    reasons.push(`${b.caption}: uitbreiding lukte niet, klein station${upgrading(b) ? ' (wordt uitgebouwd)' : ', eerst uitbouwen tot groot'}`);
                     continue;
                 }
+                if (blockedHow === 'failed') { reasons.push(`${b.caption}: uitbreiding "${extName(gate.text)}" lukte eerder niet`); continue; }
                 if (gate) {
                     // An extension takes days to build. When the vehicle has a building type of
                     // its own (an ambulance post for an ambulance), a new one of those is ready
@@ -969,10 +1005,8 @@ MKS.module({
                     }
                     if (staffLeft(b, data) < crewOf(c.vt)) { reasons.push(`${b.caption}: uitbreiding nodig, maar personeel ${Math.max(0, staffLeft(b, data))}/${crewOf(c.vt)} over`); continue; }
                     if (ctx.cfg.doExtensions && gate.cost) {
-                        return { label: `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`, cost: gate.cost,
-                            run: () => hit(gate.href, true), check: async () => !(await buildingInfo(b.id)).exts.some((e) => e.id === gate.id),
-                            onFail: () => refuseExt(b, gate),
-                            projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, c.vt, c.name) };
+                        return extStep(b, gate, `uitbreiding "${extName(gate.text)}" in ${b.caption} (voor ${v[0]})`,
+                            { projects: projects().some((p) => p.building === b.id) ? [] : prepProject(b, c.vt, c.name) });
                     }
                     reasons.push(`${b.caption}: uitbreiding nodig`);
                     continue;
@@ -1075,6 +1109,7 @@ MKS.module({
                 if (buy.skip) { reasons.push(buy.skip); continue; }
                 return buy;
             }
+            if (upgradeOpt) return upgradeOpt;
             if (!near.length && ctx.cfg.doBuild && c.at) return planBuilding(c, v[3], `voor ${v[0]}`, data);
             return { skip: `${c.name} (${v[0]}): ${reasons.join('; ') || 'geen geschikt gebouw'}` };
         }
@@ -1145,16 +1180,18 @@ MKS.module({
                 .map((b) => ({ b, d: km(posOf(b), ref) })).sort((a, b) => a.d - b.d).slice(0, tries);
             const why = [];
             const fits = [];
-            let upgrade = null; // nearest small station that could become a full one
+            let upgrade = null; // a small station where this extension failed: upgrade it if nothing else fits
             for (const { b, d } of own) {
                 const info = await buildingInfo(b.id);
-                const ext = info.exts.find((e) => c.match.test(e.text) && !extRefused(b, e));
+                const ext = info.exts.find((e) => c.match.test(e.text));
                 if (!ext || !ext.cost || !ctx.cfg.doExtensions) continue;
-                if (isSmall(b)) {
-                    if (!upgrade && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
-                    why.push(`${b.caption}: klein station, eerst uitbouwen`);
+                const blockedHow = extBlocked(b, ext);
+                if (blockedHow === 'small') {
+                    if (!upgrade && !upgrading(b) && info.smallExpand && info.smallExpand.cost && ctx.cfg.doLevels && !projects().some((p) => p.building === b.id)) upgrade = { b, se: info.smallExpand, ext };
+                    why.push(`${b.caption}: uitbreiding lukte niet, klein station${upgrading(b) ? ' (wordt uitgebouwd)' : ', eerst uitbouwen tot groot'}`);
                     continue;
                 }
+                if (blockedHow === 'failed') { why.push(`${b.caption}: lukte eerder niet`); continue; }
                 const vt = extVehicle(ext.text);
                 // The vehicle needs people: this building must have them to spare. Four
                 // extensions went to Veenendaal (15 people needed) because it was nearest.
@@ -1170,11 +1207,9 @@ MKS.module({
             fits.sort((x, y) => (y.left - x.left) || (x.d - y.d));
             const f = fits[0];
             if (f) {
-                return { label: `uitbreiding "${extName(f.ext.text)}" in ${f.b.caption}`, cost: f.ext.cost,
-                    run: () => hit(f.ext.href, true), check: async () => !(await buildingInfo(f.b.id)).exts.some((e) => e.id === f.ext.id),
-                    onFail: () => refuseExt(f.b, f.ext), projects: prepProject(f.b, f.vt, c.name) };
+                return extStep(f.b, f.ext, `uitbreiding "${extName(f.ext.text)}" in ${f.b.caption}`, { projects: prepProject(f.b, f.vt, c.name) });
             }
-            if (upgrade) return upgradeStep(upgrade.b, upgrade.se, `daarna uitbreiding "${extName(upgrade.ext.text)}"`);
+            if (upgrade) return upgradeStep(upgrade.b, upgrade.se, `uitbreiding "${extName(upgrade.ext.text)}" lukte niet in de kleine post`);
             return { skip: `${c.name}: ${why.join('; ') || 'geen gebouw in de buurt om uit te breiden'}` };
         }
 
@@ -1617,6 +1652,7 @@ MKS.module({
                     return;
                 }
                 ctx.status(`Bezig: ${next.label}`, { tone: 'busy', dock: true });
+                lastSaid = '';
                 await next.run();
                 await sleep(1500);
                 // Checked on the game's pages: /api/buildings and /api/credits lag behind
@@ -1653,8 +1689,8 @@ MKS.module({
                     }
                 } else {
                     state.cool[next.need] = Date.now() + 60 * 60000;
-                    if (next.onFail) next.onFail();
-                    addLog(`niet gelukt: ${next.label}`, 'error');
+                    const note = next.onFail ? await next.onFail() : '';
+                    addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${note ? ` — ${note}` : ''}`, 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
                 }
