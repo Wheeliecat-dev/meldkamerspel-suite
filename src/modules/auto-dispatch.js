@@ -59,6 +59,10 @@ MKS.module({
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
+        { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
+            help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, binnen de maximale afstand), '
+                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Je eigen inzetten gaan voor. '
+                + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -512,6 +516,8 @@ MKS.module({
                     await sleep(300);
                 }
 
+                if (job.team) { await teamWorker(job, report, doneKey); return; }
+
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
                 // anything is still driving there.
@@ -779,6 +785,42 @@ MKS.module({
          * Red buttons are full; team cells add "Afdrachtpercentage: 0%". Same
          * choice as a spraakaanvraag. One car per job: the click loads another page.
          * ==================================================================== */
+        /* ========================================================================
+         * TEAM MISSION — another player's mission shared with the team. Exactly one
+         * noodhulp (the game's own "fustw" slot, nearest first), and only when none
+         * of our own vehicles is driving there or on scene: those rows have a
+         * "terug naar post" (backalarm) button, which only your own vehicles get.
+         * ==================================================================== */
+        async function teamWorker(job, report, doneKey) {
+            const rows = [...document.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')];
+            const mine = (tr) => !!tr.querySelector('a[href*="/backalarm"]') || (job.me && !!tr.querySelector(`a[href$="/profile/${job.me}"]`));
+            if (rows.some(mine)) { report('skip', { reason: 'doet al mee', joined: true }); return; }
+            const el = document.createElement('a');
+            el.id = 'aao_mks_team';
+            el.className = 'aao_btn';
+            el.style.display = 'none';
+            for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', fustw: '1' })) el.setAttribute(k, v);
+            document.body.appendChild(el);
+            const realAlert = W.alert;
+            W.alert = () => {}; // "Niet beschikbaar: 1 noodhulp": no popup in the hidden window
+            try { W.aaoClickHandler(el); } catch (e) { ctx.warn('aaoClickHandler', e); } finally { W.alert = realAlert; el.remove(); }
+            await sleep(400);
+            const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
+            const picked = [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()]
+                .sort((a, b) => dist(a) - dist(b));
+            const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
+            if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij' }); return; }
+            // Never more than one, whatever the game picked.
+            picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
+            const km = dist(picked[0]);
+            if (km > job.maxKm) { reset(); report('skip', { reason: `dichtstbijzijnde noodhulp op ${km.toFixed(1)} km` }); return; }
+            const btn = document.getElementById('alert_btn');
+            if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
+            try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
+            report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp') });
+            btn.click();
+        }
+
         function prisonerCell(job, block, report, doneKey) {
             // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
             const vid = block.getAttribute('data-vehicle-id');
@@ -1344,6 +1386,56 @@ MKS.module({
                 location.reload();
             }
 
+            /* --------------------------------------------------------------------
+             * TEAM MISSIONS — after our own missions: one noodhulp to each shared
+             * team mission we are not in yet. Joined (sent, or found our own
+             * vehicle there) = never looked at again while it is in the list.
+             * ------------------------------------------------------------------ */
+            const teamDone = new Set();
+            async function teamRound() {
+                const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
+                const live = new Set(entries.map((e) => e.getAttribute('mission_id')));
+                for (const id of [...teamDone]) if (!live.has(id)) teamDone.delete(id);
+                const now = Date.now();
+                const todo = entries.filter((e) => {
+                    const id = e.getAttribute('mission_id');
+                    if (teamDone.has(id)) return false;
+                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    const t = tried.get(id);
+                    return !t || now - t > ctx.cfg.retryMin * 60000;
+                }).sort((a, b) => creditsOf(b) - creditsOf(a));
+                for (const entry of todo) {
+                    await transports();
+                    if (!running || stopped) return;
+                    const hourAgo = Date.now() - 3600000;
+                    while (sent.length && sent[0] < hourAgo) sent.shift();
+                    if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
+                    const id = entry.getAttribute('mission_id');
+                    const name = `Team: ${titleOf(entry)}`;
+                    tried.set(id, Date.now());
+                    status(`Bezig: ${name}`, 'busy');
+                    const res = await runJob({ id, token: Date.now(), team: true, maxKm: ctx.cfg.maxKm, me: W.user_id != null ? String(W.user_id) : '' });
+                    if (res.result === 'sent' || res.result === 'unconfirmed') {
+                        teamDone.add(id);
+                        stats.sent++;
+                        errorStreak = 0;
+                        sent.push(Date.now());
+                        addLog(name, `${res.result === 'sent' ? '' : '(niet bevestigd) '}1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'ok');
+                    } else if (res.result === 'skip' && res.joined) {
+                        teamDone.add(id); // already in: nothing to log
+                        continue;
+                    } else if (res.result === 'skip') {
+                        errorStreak = 0;
+                        addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                    } else {
+                        stats.errors++;
+                        addLog(name, `fout: ${res.reason}`, 'error');
+                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
+                    }
+                    await sleep(ctx.cfg.pauseSec * 1000);
+                }
+            }
+
             async function cycle() {
                 if (!running || busy || stopped) return;
                 busy = true;
@@ -1440,6 +1532,7 @@ MKS.module({
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
+                    if (ctx.cfg.teamMissions && running && !stopped) await teamRound();
                     if (running) status();
                 } catch (e) {
                     ctx.err(e);
