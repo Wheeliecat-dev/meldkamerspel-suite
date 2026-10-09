@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009072512 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009092310 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009072512';
+    const VERSION = '1.7.0.20261009092310';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10432,6 +10432,10 @@ MKS.module({
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Inzetten die je met de missiefilters verbergt, worden overgeslagen.' },
+        { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
+            help: 'Ook de gedeelde teaminzetten van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
+                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Je eigen inzetten gaan voor. '
+                + 'Met Teamfilter op rood (verborgen) en "Alleen zichtbare inzetten" aan worden ze overgeslagen.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -10875,15 +10879,10 @@ MKS.module({
                 // The window lists only the nearest vehicles; "Laad ontbrekende voertuigen"
                 // adds the rest. Without it, free horse trucks 26.6 km away were never seen
                 // ("te weinig: 5 Police Horses" with two full trucks free in Harderwijk).
-                const shownEl = (el) => el.style.display !== 'none' && getComputedStyle(el).display !== 'none' && !el.closest('[style*="display: none"]');
-                for (let i = 0; i < 3; i++) {
-                    const more = document.querySelector('a[href*="/missing_vehicles"]');
-                    if (!more || !shownEl(more)) break;
-                    const before = document.querySelectorAll('input.vehicle_checkbox').length;
-                    more.click();
-                    for (let t = 0; t < 40 && document.querySelectorAll('input.vehicle_checkbox').length === before; t++) await sleep(200);
-                    await sleep(300);
-                }
+                // A team mission first checks whether we are in already (nothing to load then).
+                if (job.team) { await teamWorker(job, report, doneKey); return; }
+                await loadMissing();
+
 
                 // The red "Missende voertuigen" box is what the mission still needs
                 // now. It only counts vehicles that have arrived, so wait while
@@ -11152,6 +11151,66 @@ MKS.module({
          * Red buttons are full; team cells add "Afdrachtpercentage: 0%". Same
          * choice as a spraakaanvraag. One car per job: the click loads another page.
          * ==================================================================== */
+        // The window lists only the nearest vehicles; "Laad ontbrekende voertuigen" adds the rest.
+        // Without it, free horse trucks 26.6 km away were never seen ("te weinig: 5 Police
+        // Horses" with two full trucks free in Harderwijk).
+        async function loadMissing() {
+            const shownEl = (el) => el.style.display !== 'none' && getComputedStyle(el).display !== 'none' && !el.closest('[style*="display: none"]');
+            for (let i = 0; i < 3; i++) {
+                const more = document.querySelector('a[href*="/missing_vehicles"]');
+                if (!more || !shownEl(more)) break;
+                const before = document.querySelectorAll('input.vehicle_checkbox').length;
+                more.click();
+                for (let t = 0; t < 40 && document.querySelectorAll('input.vehicle_checkbox').length === before; t++) await sleep(200);
+                await sleep(300);
+            }
+        }
+
+        // One of our own vehicles driving to or at the mission: their rows have a "terug naar
+        // post" (backalarm) button, which only your own vehicles get, or link your profile.
+        function ownRowOn(doc, me) {
+            return [...doc.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')]
+                .some((tr) => !!tr.querySelector('a[href*="/backalarm"]') || (!!me && !!tr.querySelector(`a[href$="/profile/${me}"]`)));
+        }
+
+        /* ========================================================================
+         * TEAM MISSION — another player's mission shared with the team. Exactly one
+         * noodhulp (the game's own "fustw" slot, nearest first, any distance), and only when none
+         * of our own vehicles is driving there or on scene: those rows have a
+         * "terug naar post" (backalarm) button, which only your own vehicles get.
+         * ==================================================================== */
+        async function teamWorker(job, report, doneKey) {
+            if (ownRowOn(document, job.me)) { report('skip', { reason: 'doet al mee', joined: true }); return; }
+            const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
+            async function select() {
+                const el = document.createElement('a');
+                el.id = 'aao_mks_team';
+                el.className = 'aao_btn';
+                el.style.display = 'none';
+                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', fustw: '1' })) el.setAttribute(k, v);
+                document.body.appendChild(el);
+                const realAlert = W.alert;
+                W.alert = () => {}; // "Niet beschikbaar: 1 noodhulp": no popup in the hidden window
+                try { W.aaoClickHandler(el); } catch (e) { ctx.warn('aaoClickHandler', e); } finally { W.alert = realAlert; el.remove(); }
+                await sleep(400);
+                return [...new Map([...document.querySelectorAll('input.vehicle_checkbox:checked')].map((c) => [c.value, c])).values()]
+                    .sort((a, b) => dist(a) - dist(b));
+            }
+            let picked = await select();
+            // None among the nearest listed: any distance counts, so load the rest and look again.
+            if (!picked.length) { await loadMissing(); picked = await select(); }
+            const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
+            if (!picked.length) { report('skip', { reason: 'geen noodhulp vrij', noCar: true }); return; }
+            // Never more than one, whatever the game picked.
+            picked.slice(1).forEach((c) => document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click()));
+            const km = dist(picked[0]); // no distance limit for team missions
+            const btn = document.getElementById('alert_btn');
+            if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
+            try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
+            report('sending', { mode: 'team', n: 1, km, car: (picked[0].closest('tr')?.getAttribute('vehicle_type') || 'noodhulp') });
+            btn.click();
+        }
+
         function prisonerCell(job, block, report, doneKey) {
             // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
             const vid = block.getAttribute('data-vehicle-id');
@@ -11237,6 +11296,9 @@ MKS.module({
             try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch (e) { saved = null; }
             saved = saved || {};
             const tried = new Map(saved.tried || []); // mission id or v<vehicle id> -> time of last attempt
+            // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
+            // Kept over reloads: our car may have left for a cell while the mission goes on.
+            const teamDone = new Map(saved.teamDone || []);
             const sent = saved.sent || [];            // send times, for the hourly cap
             const log = (saved.log || []).map((l) => ({ ...l, at: new Date(l.at) }));
             const stats = { sent: 0, skipped: 0, errors: 0, transports: 0, ...(saved.stats || {}) };
@@ -11253,6 +11315,7 @@ MKS.module({
                         tried: [...tried].filter(([, t]) => now - t < 3 * 3600000),
                         holds: [...holds].filter(([, h]) => h.until > now),
                         holdExpired: [...holdExpired].filter(([, t]) => now - t < 3 * 3600000),
+                        teamDone: [...teamDone].filter(([, t]) => now - t < 12 * 3600000),
                         log: log.slice(0, 100),
                     }));
                 } catch (e) { /* ignore */ }
@@ -11581,9 +11644,11 @@ MKS.module({
                         frame.addEventListener('load', () => {
                             let ok = false;
                             try {
+                                // A team mission always has other players' rows: only our own counts.
                                 ok = result.mode === 'cell' || (transport
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
-                                    : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
+                                    : result.mode === 'team' ? ownRowOn(frame.contentDocument, job.me)
+                                        : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
                         }, { once: true });
@@ -11717,6 +11782,69 @@ MKS.module({
                 location.reload();
             }
 
+            /* --------------------------------------------------------------------
+             * TEAM MISSIONS — after our own missions: one noodhulp to each shared
+             * team mission we are not in yet. Joined (sent, or found our own
+             * vehicle there) = never looked at again while it is in the list.
+             * ------------------------------------------------------------------ */
+            async function teamRound() {
+                const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
+                const live = new Set(entries.map((e) => e.getAttribute('mission_id')));
+                for (const id of [...teamDone.keys()]) if (!live.has(id)) teamDone.delete(id);
+                const now = Date.now();
+                const todo = entries.filter((e) => {
+                    const id = e.getAttribute('mission_id');
+                    if (teamDone.has(id)) return false;
+                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    const t = tried.get(id);
+                    return !t || now - t > ctx.cfg.retryMin * 60000;
+                }).sort((a, b) => creditsOf(b) - creditsOf(a));
+                for (const entry of todo) {
+                    await transports();
+                    if (!running || stopped) return;
+                    // Own missions first: a new one ends the team round (the next cycle takes it).
+                    if (candidates().length) return;
+                    const hourAgo = Date.now() - 3600000;
+                    while (sent.length && sent[0] < hourAgo) sent.shift();
+                    if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
+                    const id = entry.getAttribute('mission_id');
+                    // Ended while the round ran (other players' missions finish all the time).
+                    if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
+                    const name = `Team: ${titleOf(entry)}`;
+                    tried.set(id, Date.now());
+                    status(`Bezig: ${name}`, 'busy');
+                    const res = await runJob({ id, token: Date.now(), team: true, me: W.user_id != null ? String(W.user_id) : '' });
+                    if (res.result === 'sent') {
+                        teamDone.set(id, Date.now());
+                        stats.sent++;
+                        errorStreak = 0;
+                        sent.push(Date.now());
+                        addLog(name, `1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'ok');
+                    } else if (res.result === 'unconfirmed') {
+                        // Not seen on the mission, so not marked joined. The retry after retryMin
+                        // looks for our own vehicle first, so it never sends a second one.
+                        errorStreak = 0;
+                        addLog(name, `niet bevestigd: 1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'warn');
+                    } else if (res.result === 'skip' && res.joined) {
+                        teamDone.set(id, Date.now()); // already in: nothing to log
+                        continue;
+                    } else if (res.result === 'skip' && res.noCar) {
+                        // No noodhulp free anywhere: the same for every other team mission now.
+                        errorStreak = 0;
+                        addLog('Teaminzetten', 'geen noodhulp vrij, de rest volgt later', 'idle');
+                        return;
+                    } else if (res.result === 'skip') {
+                        errorStreak = 0;
+                        addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                    } else {
+                        stats.errors++;
+                        addLog(name, `fout: ${res.reason}`, 'error');
+                        if (++errorStreak >= 3) { threeErrors(res.reason); return; }
+                    }
+                    await sleep(ctx.cfg.pauseSec * 1000);
+                }
+            }
+
             async function cycle() {
                 if (!running || busy || stopped) return;
                 busy = true;
@@ -11813,6 +11941,7 @@ MKS.module({
                         }
                         await sleep(ctx.cfg.pauseSec * 1000);
                     }
+                    if (ctx.cfg.teamMissions && running && !stopped) await teamRound();
                     if (running) status();
                 } catch (e) {
                     ctx.err(e);
@@ -13707,7 +13836,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009072512' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009092310' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13847,7 +13976,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009072512',
+                version: '1.7.0.20261009092310',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
