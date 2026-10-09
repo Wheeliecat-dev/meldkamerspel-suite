@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009092322 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009144809 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261009092322';
+    const VERSION = '1.7.0.20261009144809';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11784,23 +11784,42 @@ MKS.module({
              * team mission we are not in yet. Joined (sent, or found our own
              * vehicle there) = never looked at again while it is in the list.
              * ------------------------------------------------------------------ */
+            // Why no team mission gets a car, in the log at most once per 10 minutes.
+            const teamNoted = new Map();
+            const teamNote = (text) => {
+                if (Date.now() - (teamNoted.get(text) || 0) < 10 * 60000) return;
+                teamNoted.set(text, Date.now());
+                addLog('Teaminzetten', text, 'idle');
+            };
+            const TEAM_PER_CYCLE = 5;
             async function teamRound() {
                 const entries = [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')];
                 const live = new Set(entries.map((e) => e.getAttribute('mission_id')));
                 for (const id of [...teamDone.keys()]) if (!live.has(id)) teamDone.delete(id);
+                if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
                 const now = Date.now();
+                let hidden = 0, joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
-                    if (teamDone.has(id)) return false;
-                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    if (teamDone.has(id)) { joined++; return false; }
+                    if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') { hidden++; return false; }
                     const t = tried.get(id);
                     return !t || now - t > ctx.cfg.retryMin * 60000;
                 }).sort((a, b) => creditsOf(b) - creditsOf(a));
+                if (!todo.length) {
+                    if (hidden && hidden + joined === entries.length) teamNote(`alle ${hidden} open teaminzetten zijn verborgen (Teamfilter of missiefilter) en "Alleen zichtbare inzetten" staat aan`);
+                    else if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
+                    return;
+                }
+                // A few per cycle, so our own missions are looked at again soon. Only a brand-new
+                // own mission (never tried) interrupts: own missions that keep being skipped are
+                // due again every few minutes and would otherwise keep the team round from ever running.
+                let done = 0;
                 for (const entry of todo) {
                     await transports();
                     if (!running || stopped) return;
-                    // Own missions first: a new one ends the team round (the next cycle takes it).
-                    if (candidates().length) return;
+                    if (done >= TEAM_PER_CYCLE) return;
+                    if (candidates().some((e) => !tried.has(e.getAttribute('mission_id')))) return;
                     const hourAgo = Date.now() - 3600000;
                     while (sent.length && sent[0] < hourAgo) sent.shift();
                     if (sent.length >= ctx.cfg.maxPerHour) { status(`Maximum van ${ctx.cfg.maxPerHour} per uur bereikt, wacht…`, 'warn'); return; }
@@ -11809,6 +11828,7 @@ MKS.module({
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `Team: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
+                    done++;
                     status(`Bezig: ${name}`, 'busy');
                     const res = await runJob({ id, token: Date.now(), team: true, me: W.user_id != null ? String(W.user_id) : '' });
                     if (res.result === 'sent') {
@@ -13833,7 +13853,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009092322' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009144809' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -13973,7 +13993,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261009092322',
+                version: '1.7.0.20261009144809',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
