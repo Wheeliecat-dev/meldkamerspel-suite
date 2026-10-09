@@ -74,7 +74,8 @@ MKS.module({
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
                     needs: read('mks.autoDispatch.needs.v1', {}),
-                    live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, holds: dispatch.holds }) : null,
+                    live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, holds: dispatch.holds, team: dispatch.team,
+                        log: (dispatch.log || []).slice(0, 200) }) : null,
                 },
                 expand: {
                     state: read('mks.autoExpand.state.v1', {}),

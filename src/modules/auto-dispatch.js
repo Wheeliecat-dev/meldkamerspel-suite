@@ -829,11 +829,16 @@ MKS.module({
             document.querySelectorAll('input.vehicle_checkbox').forEach((c) => { if (avoid.has(c.value)) (c.closest('tr') || c).remove(); });
         }
 
-        // One of our own vehicles driving to or at the mission: their rows have a "terug naar
-        // post" (backalarm) button, which only your own vehicles get, or link your profile.
+        // One of our own vehicles driving to or at the mission. The owner column links the
+        // owner's profile: with our user id known, only that counts (a team admin may also
+        // see "terug naar post" on other players' cars). A row without any profile link
+        // falls back to the "terug naar post" (backalarm) button.
         function ownRowOn(doc, me) {
-            return [...doc.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')]
-                .some((tr) => !!tr.querySelector('a[href*="/backalarm"]') || (!!me && !!tr.querySelector(`a[href$="/profile/${me}"]`)));
+            return [...doc.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')].some((tr) => {
+                const profile = tr.querySelector('a[href*="/profile/"]');
+                if (me && profile) return /\/profile\/(\d+)/.exec(profile.getAttribute('href'))?.[1] === String(me);
+                return !!tr.querySelector('a[href*="/backalarm"]');
+            });
         }
 
         /* ========================================================================
@@ -843,7 +848,12 @@ MKS.module({
          * "terug naar post" (backalarm) button, which only your own vehicles get.
          * ==================================================================== */
         async function teamWorker(job, report, doneKey) {
-            if (ownRowOn(document, job.me)) { report('skip', { reason: 'doet al mee', joined: true }); return; }
+            if (ownRowOn(document, job.me)) {
+                const row = [...document.querySelectorAll('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')].find((tr) => ownRowOn({ querySelectorAll: () => [tr] }, job.me));
+                const cells = row ? [...row.cells].map((c) => c.textContent.trim()).filter(Boolean).join(' · ') : '';
+                report('skip', { reason: `eigen voertuig: ${clean(cells).slice(0, 80)}`, joined: true });
+                return;
+            }
             const dist = (c) => Number(c.getAttribute('data-distance')) || 0;
             async function select() {
                 const el = document.createElement('a');
@@ -972,7 +982,7 @@ MKS.module({
             const tried = new Map(saved.tried || []); // mission id or v<vehicle id> -> time of last attempt
             // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
             // Kept over reloads: our car may have left for a cell while the mission goes on.
-            const teamDone = new Map(saved.teamDone || []);
+            const teamDone = new Map(saved.teamJoined || []); // (teamDone of older versions is not trusted)
             const sent = saved.sent || [];            // send times, for the hourly cap
             const log = (saved.log || []).map((l) => ({ ...l, at: new Date(l.at) }));
             const stats = { sent: 0, skipped: 0, errors: 0, transports: 0, ...(saved.stats || {}) };
@@ -989,7 +999,7 @@ MKS.module({
                         tried: [...tried].filter(([, t]) => now - t < 3 * 3600000),
                         holds: [...holds].filter(([, h]) => h.until > now),
                         holdExpired: [...holdExpired].filter(([, t]) => now - t < 3 * 3600000),
-                        teamDone: [...teamDone].filter(([, t]) => now - t < 12 * 3600000),
+                        teamJoined: [...teamDone].filter(([, t]) => now - t < 12 * 3600000),
                         log: log.slice(0, 100),
                     }));
                 } catch (e) { /* ignore */ }
@@ -1120,6 +1130,12 @@ MKS.module({
                 get stats() { return stats; },
                 get holds() { return [...holds].map(([id, h]) => ({ id, ...h })); },
                 get running() { return running; },
+                get log() { return log; },
+                get team() {
+                    return { on: !!ctx.cfg.teamMissions, busy: teamBusy, pausedUntil: teamPauseUntil || null, joined: teamDone.size,
+                        listed: document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]').length,
+                        hidden: [...document.querySelectorAll('#mission_list_alliance .missionSideBarEntry[mission_id]')].filter((e) => getComputedStyle(e).display === 'none').length };
+                },
             };
 
             // "Niet beschikbaar: 1 AT-Commandant. Niet beschikbaar: 2 TS 8/9. "
@@ -1536,6 +1552,8 @@ MKS.module({
                     const name = `Team: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
                     const res = await runJob({ id, token: Date.now(), team: true, avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
+                    recordEvent({ kind: 'team', id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
+                        result: res.result, km: res.km, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
                         teamDone.set(id, Date.now());
                         stats.sent++;
@@ -1548,7 +1566,8 @@ MKS.module({
                         teamErrors = 0;
                         addLog(name, `niet bevestigd: 1 ${res.car || 'noodhulp'}, ${Number(res.km).toFixed(1)} km`, 'warn');
                     } else if (res.result === 'skip' && res.joined) {
-                        teamDone.set(id, Date.now()); // already in: nothing to log
+                        teamDone.set(id, Date.now());
+                        addLog(name, `doet al mee (${res.reason})`, 'idle');
                         continue;
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
