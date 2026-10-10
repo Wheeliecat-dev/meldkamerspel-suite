@@ -1599,7 +1599,10 @@ MKS.module({
                 let joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
-                    if (teamDone.has(id)) { joined++; return false; }
+                    // "Joined" is checked again after 30 minutes: a car can be called back (by
+                    // hand, or the recall of 10 Oct), and the window then sees it is gone.
+                    const at = teamDone.get(id);
+                    if (at && now - at < 30 * 60000) { joined++; return false; }
                     const t = tried.get(id);
                     return !t || now - t > ctx.cfg.retryMin * 60000;
                 }).sort((a, b) => creditsOf(b) - creditsOf(a));
