@@ -12,7 +12,7 @@ MKS.module({
         + 'betaalt nooit met coins en houdt altijd je buffer over. Eén aankoop tegelijk.',
     tagline: 'Gebruikt de tekortlijst van Automatisch alarmeren',
     warning: '<b>Dit geeft je credits uit, zonder dat jij elke aankoop ziet.</b> Gebouwen, uitbreidingen, levels en voertuigen '
-        + 'kosten veel en zijn niet terug te draaien. Het houdt altijd de buffer over (standaard 100.000, nooit minder) en betaalt nooit met coins. '
+        + 'kosten veel en zijn niet terug te draaien. Het houdt altijd de buffer over (standaard 100.000, instelbaar) en betaalt nooit met coins. '
         + 'Elke aankoop staat in het logboek. Automatisch spelen kan tegen de spelregels zijn; je account is je eigen risico.',
     confirmOn: 'Let op: deze module koopt automatisch gebouwen, uitbreidingen, levels en voertuigen met je credits.\n\n'
         + 'Dat kan niet ongedaan worden gemaakt. Het houdt je buffer over en gebruikt nooit coins.\n\nAanzetten?',
@@ -23,8 +23,8 @@ MKS.module({
     live: true,
     settings: [
         // Same keys as before, so saved values stay; only order, groups and texts changed.
-        { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 100000, max: 100000000, step: 50000, unit: 'credits',
-            help: 'Zoveel blijft altijd staan. Minimaal 100.000.' },
+        { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 0, max: 100000000, step: 10000, unit: 'credits',
+            help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
         { group: 'Geld', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
 
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
