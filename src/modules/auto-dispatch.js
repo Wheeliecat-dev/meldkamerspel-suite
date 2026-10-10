@@ -526,7 +526,9 @@ MKS.module({
                 await sleep(300);
                 // A team mission first checks whether we are in already (nothing to load then).
                 if (job.team) { await teamWorker(job, report, doneKey); return; }
-                await loadMissing(); // all vehicles, not only the nearest listed
+                // The quick lane first tries with the nearest vehicles the window lists: for one
+                // unit those are enough, and loading the full list costs seconds per mission.
+                if (!job.fast) await loadMissing(); // all vehicles, not only the nearest listed
                 dropAvoided(job.avoid);
 
 
@@ -574,7 +576,7 @@ MKS.module({
                     report('skip', { reason: `patiënten, kan niet sturen: ${pNeed.unknown.join(', ')}`, unknownNeeds: pNeed.unknown.map((u) => `Patiënt: ${u}`) });
                     return;
                 }
-                await loadAllVehicles();
+                if (!job.fast) await loadAllVehicles();
                 dropAvoided(job.avoid); // loadAllVehicles can add rows again
 
                 let plan = mode === 'patients' ? { slots: {}, vt: {}, vtCaptions: {} }
@@ -1688,11 +1690,14 @@ MKS.module({
                             const top = isTopUp(entry);
                             const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
                             tried.set(id, Date.now());
-                            const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                            const quickJob = (fast) => runJob({ id, token: Date.now(), fast, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
                                 ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            let res = await quickJob(true);
+                            // Nothing near enough in the short list: try once more with all vehicles loaded.
+                            if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
                             const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
                             recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
