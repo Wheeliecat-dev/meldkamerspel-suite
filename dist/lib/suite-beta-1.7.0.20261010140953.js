@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:dist/lib/suite-beta-1.7.0.20261009173409.js
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261009173409 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
-========
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261010104825 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
->>>>>>>> ac2d56c (Beta: Automatisch alarmeren also handles planned missions (Geplande inzetten): after the normal ones, from 25 minutes before the start, only when they pay at least 400 credits per vehicle per hour and need none of the rare units; their shortages do not count for Uitbreiden):dist/lib/suite-beta-1.7.0.20261010104825.js
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261010140953 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -44,11 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-<<<<<<<< HEAD:dist/lib/suite-beta-1.7.0.20261009173409.js
-    const VERSION = '1.7.0.20261009173409';
-========
-    const VERSION = '1.7.0.20261010104825';
->>>>>>>> ac2d56c (Beta: Automatisch alarmeren also handles planned missions (Geplande inzetten): after the normal ones, from 25 minutes before the start, only when they pay at least 400 credits per vehicle per hour and need none of the rare units; their shortages do not count for Uitbreiden):dist/lib/suite-beta-1.7.0.20261010104825.js
+    const VERSION = '1.7.0.20261010140953';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10449,7 +10441,7 @@ MKS.module({
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
-        { key: 'maxPerHour', label: 'Maximaal per uur', type: 'number', default: 100, min: 1, max: 1000, step: 1 },
+        { key: 'maxPerHour', label: 'Maximaal per uur', type: 'number', default: 500, min: 1, max: 2000, step: 10 },
         { key: 'transport', label: 'Spraakaanvragen afhandelen', type: 'bool', default: true,
             help: 'Patiënten naar het beste passende ziekenhuis, gevangenen naar de beste cel: goedkoopst, dan dichtstbij. '
                 + 'Volle, te dure of te verre bestemmingen en ziekenhuizen zonder de juiste afdeling vallen af.' },
@@ -12338,7 +12330,7 @@ MKS.module({
         + 'betaalt nooit met coins en houdt altijd je buffer over. Eén aankoop tegelijk.',
     tagline: 'Gebruikt de tekortlijst van Automatisch alarmeren',
     warning: '<b>Dit geeft je credits uit, zonder dat jij elke aankoop ziet.</b> Gebouwen, uitbreidingen, levels en voertuigen '
-        + 'kosten veel en zijn niet terug te draaien. Het houdt altijd de buffer over (standaard 100.000, nooit minder) en betaalt nooit met coins. '
+        + 'kosten veel en zijn niet terug te draaien. Het houdt altijd de buffer over (standaard 100.000, instelbaar) en betaalt nooit met coins. '
         + 'Elke aankoop staat in het logboek. Automatisch spelen kan tegen de spelregels zijn; je account is je eigen risico.',
     confirmOn: 'Let op: deze module koopt automatisch gebouwen, uitbreidingen, levels en voertuigen met je credits.\n\n'
         + 'Dat kan niet ongedaan worden gemaakt. Het houdt je buffer over en gebruikt nooit coins.\n\nAanzetten?',
@@ -12349,8 +12341,8 @@ MKS.module({
     live: true,
     settings: [
         // Same keys as before, so saved values stay; only order, groups and texts changed.
-        { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 100000, max: 100000000, step: 50000, unit: 'credits',
-            help: 'Zoveel blijft altijd staan. Minimaal 100.000.' },
+        { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 0, max: 100000000, step: 10000, unit: 'credits',
+            help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
         { group: 'Geld', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
 
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
@@ -14048,11 +14040,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-<<<<<<<< HEAD:dist/lib/suite-beta-1.7.0.20261009173409.js
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261009173409' })); } catch (e) { /* ignore */ } };
-========
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261010104825' })); } catch (e) { /* ignore */ } };
->>>>>>>> ac2d56c (Beta: Automatisch alarmeren also handles planned missions (Geplande inzetten): after the normal ones, from 25 minutes before the start, only when they pay at least 400 credits per vehicle per hour and need none of the rare units; their shortages do not count for Uitbreiden):dist/lib/suite-beta-1.7.0.20261010104825.js
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261010140953' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14192,11 +14180,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-<<<<<<<< HEAD:dist/lib/suite-beta-1.7.0.20261009173409.js
-                version: '1.7.0.20261009173409',
-========
-                version: '1.7.0.20261010104825',
->>>>>>>> ac2d56c (Beta: Automatisch alarmeren also handles planned missions (Geplande inzetten): after the normal ones, from 25 minutes before the start, only when they pay at least 400 credits per vehicle per hour and need none of the rare units; their shortages do not count for Uitbreiden):dist/lib/suite-beta-1.7.0.20261010104825.js
+                version: '1.7.0.20261010140953',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

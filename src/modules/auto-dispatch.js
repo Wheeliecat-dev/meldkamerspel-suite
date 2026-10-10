@@ -68,7 +68,7 @@ MKS.module({
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
-        { key: 'maxPerHour', label: 'Maximaal per uur', type: 'number', default: 100, min: 1, max: 1000, step: 1 },
+        { key: 'maxPerHour', label: 'Maximaal per uur', type: 'number', default: 500, min: 1, max: 2000, step: 10 },
         { key: 'transport', label: 'Spraakaanvragen afhandelen', type: 'bool', default: true,
             help: 'Patiënten naar het beste passende ziekenhuis, gevangenen naar de beste cel: goedkoopst, dan dichtstbij. '
                 + 'Volle, te dure of te verre bestemmingen en ziekenhuizen zonder de juiste afdeling vallen af.' },
