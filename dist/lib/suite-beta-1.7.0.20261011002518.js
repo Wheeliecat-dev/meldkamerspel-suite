@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011001638 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011002518 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011001638';
+    const VERSION = '1.7.0.20261011002518';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10489,6 +10489,11 @@ MKS.module({
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
+        { key: 'quickLane', label: 'Snelle baan voor kleine inzetten', type: 'bool', default: true,
+            help: 'Een extra onzichtbaar venster voor kleine inzetten (onder de grens hieronder, één of twee voertuigen) en rode inzetten die nog maar zoveel missen, '
+                + 'elke paar seconden, los van de grote ronde door de hele lijst. Een auto die de ene kant net stuurde, kiest de andere niet.' },
+        { key: 'quickMax', label: 'Snelle baan: tot', type: 'number', default: 1000, min: 0, max: 20000, step: 100, unit: 'credits' },
+        { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
             help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
                 + 'naar een teamevenement één noodhulp óf ambulance (wat het dichtstbij vrij is), '
@@ -11732,7 +11737,8 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
+                }).filter((e) => !(ctx.cfg.quickLane && (isQuick(e) || isTopUp(e))))
+                    .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
             }
@@ -12013,7 +12019,7 @@ MKS.module({
             let reloadWanted = false;
             function reloadWhenIdle() {
                 reloadWanted = true;
-                if (busy || teamBusy) return;
+                if (busy || teamBusy || quickBusy) return;
                 onPageHide();
                 location.reload();
             }
@@ -12037,6 +12043,93 @@ MKS.module({
                 for (const [v, t] of recentCars) if (now - t > 120000) recentCars.delete(v);
                 return [...recentCars.keys()];
             }
+            /* QUICK LANE — small own missions (under quickMax credits, quickUnits vehicles or
+             * fewer, nothing red yet) in a third hidden window every few seconds, so they do
+             * not wait for the main round through the whole list. Cars just sent by another
+             * window are avoided (claimCars), so no car goes twice. */
+            const quickUnitsOf = (p) => Object.entries(p.slots).filter(([k]) => !/_amount$|_value$/.test(k)).reduce((sum, [, v]) => sum + Number(v || 0), 0)
+                + Object.values(p.vt).reduce((sum, v) => sum + Number(v || 0), 0);
+            function isQuick(e) {
+                if (!missions || isPlanned(e)) return false;
+                if (e.getAttribute('data-mission-state-filter') !== 'unattended' || sidebarMissing(e) || (ctx.cfg.patients && sidebarPatients(e))) return false;
+                if (creditsOf(e) >= ctx.cfg.quickMax) return false;
+                const r = missions[keyOf(e)];
+                if (!r) return false;
+                const p = plan(r);
+                if (p.unknown.length) return false;
+                const n = quickUnitsOf(p);
+                return n >= 1 && n <= ctx.cfg.quickUnits;
+            }
+            // A red mission that only misses one unit (one OvD-P, "2x Verzorger" = one DB-VZ):
+            // the quick lane tops it up too. Not arrestants, water or patients: those stay
+            // with the main round.
+            function topUpPlan(e) {
+                const t = sidebarMissing(e);
+                if (!t || /arrestanten|we missen/i.test(t)) return null;
+                if (ctx.cfg.patients && sidebarPatients(e)) return null;
+                const [veh, pers] = t.split(/Missende personeel:/i);
+                const p = /Missende voertuigen/i.test(veh) ? fromMissing(veh.trim()) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
+                if (pers) addPersonnel(p, personnelItems(`Missende personeel:${pers}`));
+                return p.unknown.length ? null : p;
+            }
+            function isTopUp(e) {
+                if (!missions || isPlanned(e) || !ctx.cfg.topUp) return false;
+                const p = topUpPlan(e);
+                if (!p) return false;
+                const n = quickUnitsOf(p);
+                return n >= 1 && n <= ctx.cfg.quickUnits;
+            }
+            let quickBusy = false, quickTimer = null;
+            async function quickCycle() {
+                if (!running || stopped || quickBusy || reloadWanted || !ctx.cfg.quickLane || !missions) return;
+                quickBusy = true;
+                try {
+                    const now = Date.now();
+                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
+                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                        const t = tried.get(e.getAttribute('mission_id'));
+                        return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
+                    });
+                    for (const entry of list.slice(0, 10)) {
+                        if (!running || stopped || reloadWanted || !ctx.cfg.quickLane) break;
+                        while (sent.length && sent[0] < Date.now() - 3600000) sent.shift();
+                        if (sent.length + inFlight >= ctx.cfg.maxPerHour) break;
+                        if (!entry.isConnected) continue;
+                        const id = entry.getAttribute('mission_id');
+                        const name = titleOf(entry);
+                        const top = isTopUp(entry);
+                        const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
+                        tried.set(id, Date.now());
+                        const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: '', topUp: ctx.cfg.topUp,
+                            ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
+                            ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                        const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
+                        const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                        recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
+                            result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
+                        if (res.result === 'sent' || res.result === 'unconfirmed') {
+                            stats.sent++;
+                            sent.push(Date.now());
+                            addLog(name, `snel ${top ? 'bijgestuurd' : 'gealarmeerd'}${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), ${Number(res.km).toFixed(1)} km`, 'ok');
+                        } else if (res.result === 'skip') {
+                            stats.skipped++;
+                            curPos = pos;
+                            curCredits = creditsOf(entry);
+                            recordResult(res, id, name);
+                            addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
+                        } else if (res.result === 'wait') {
+                            tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                        } else {
+                            stats.errors++;
+                            addLog(name, `snel fout: ${res.reason}`, 'error');
+                        }
+                    }
+                } catch (e) { ctx.err(e); addLog('Snelle baan', `fout: ${e.message}`, 'error'); } finally { quickBusy = false; saveSession(); }
+                if (reloadWanted && !busy && !teamBusy) reloadWhenIdle();
+            }
+
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
             let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
             async function teamCycle() {
@@ -12097,6 +12190,9 @@ MKS.module({
                         continue;
                     } else if (res.result === 'skip' && res.notYet) {
                         teamNote(`${titleOf(entry)}: kan nog geen voertuigen ontvangen, later opnieuw`);
+                        // Not open yet: look again in 30 minutes, not every few (934 such
+                        // checks in one evening, each loading a mission window).
+                        tried.set(id, Date.now() + 30 * 60000 - ctx.cfg.retryMin * 60000);
                         continue;
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
@@ -12260,6 +12356,7 @@ MKS.module({
                 // windows do not load at the same moment.
                 teamKick = setTimeout(teamCycle, 5000);
                 teamTimer = setInterval(teamCycle, ctx.cfg.scanSec * 1000);
+                quickTimer = setInterval(quickCycle, 6000);
             }
 
             function stop(text) {
@@ -12268,6 +12365,7 @@ MKS.module({
                 clearInterval(timer);
                 clearInterval(teamTimer);
                 clearTimeout(teamKick);
+                clearInterval(quickTimer);
                 clearInterval(heartbeat);
                 releaseLock();
                 addLog('—', text || 'gestopt', text ? 'error' : 'idle');
@@ -12393,6 +12491,7 @@ MKS.module({
                     clearInterval(timer);
                     clearInterval(teamTimer);
                     clearTimeout(teamKick);
+                    clearInterval(quickTimer);
                     clearInterval(heartbeat);
                     saveSession();
                     releaseLock();
@@ -14130,7 +14229,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011001638' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011002518' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14270,7 +14369,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011001638',
+                version: '1.7.0.20261011002518',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

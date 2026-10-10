@@ -60,7 +60,7 @@ MKS.module({
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
         { key: 'quickLane', label: 'Snelle baan voor kleine inzetten', type: 'bool', default: true,
-            help: 'Een tweede onzichtbaar venster dat alleen kleine inzetten doet (onder de grens hieronder, één of twee voertuigen), '
+            help: 'Een extra onzichtbaar venster voor kleine inzetten (onder de grens hieronder, één of twee voertuigen) en rode inzetten die nog maar zoveel missen, '
                 + 'elke paar seconden, los van de grote ronde door de hele lijst. Een auto die de ene kant net stuurde, kiest de andere niet.' },
         { key: 'quickMax', label: 'Snelle baan: tot', type: 'number', default: 1000, min: 0, max: 20000, step: 100, unit: 'credits' },
         { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
@@ -1307,7 +1307,7 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).filter((e) => !(ctx.cfg.quickLane && isQuick(e)))
+                }).filter((e) => !(ctx.cfg.quickLane && (isQuick(e) || isTopUp(e))))
                     .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
@@ -1630,6 +1630,25 @@ MKS.module({
                 const n = quickUnitsOf(p);
                 return n >= 1 && n <= ctx.cfg.quickUnits;
             }
+            // A red mission that only misses one unit (one OvD-P, "2x Verzorger" = one DB-VZ):
+            // the quick lane tops it up too. Not arrestants, water or patients: those stay
+            // with the main round.
+            function topUpPlan(e) {
+                const t = sidebarMissing(e);
+                if (!t || /arrestanten|we missen/i.test(t)) return null;
+                if (ctx.cfg.patients && sidebarPatients(e)) return null;
+                const [veh, pers] = t.split(/Missende personeel:/i);
+                const p = /Missende voertuigen/i.test(veh) ? fromMissing(veh.trim()) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
+                if (pers) addPersonnel(p, personnelItems(`Missende personeel:${pers}`));
+                return p.unknown.length ? null : p;
+            }
+            function isTopUp(e) {
+                if (!missions || isPlanned(e) || !ctx.cfg.topUp) return false;
+                const p = topUpPlan(e);
+                if (!p) return false;
+                const n = quickUnitsOf(p);
+                return n >= 1 && n <= ctx.cfg.quickUnits;
+            }
             let quickBusy = false, quickTimer = null;
             async function quickCycle() {
                 if (!running || stopped || quickBusy || reloadWanted || !ctx.cfg.quickLane || !missions) return;
@@ -1639,7 +1658,7 @@ MKS.module({
                     const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
                         if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
                         const t = tried.get(e.getAttribute('mission_id'));
-                        return (!t || now - t > ctx.cfg.retryMin * 60000) && isQuick(e);
+                        return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
                     });
                     for (const entry of list.slice(0, 10)) {
                         if (!running || stopped || reloadWanted || !ctx.cfg.quickLane) break;
@@ -1648,7 +1667,8 @@ MKS.module({
                         if (!entry.isConnected) continue;
                         const id = entry.getAttribute('mission_id');
                         const name = titleOf(entry);
-                        const p = plan(missions[keyOf(entry)]);
+                        const top = isTopUp(entry);
+                        const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
                         tried.set(id, Date.now());
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: '', topUp: ctx.cfg.topUp,
@@ -1657,12 +1677,12 @@ MKS.module({
                             ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
                         const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
                         const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
-                        recordEvent({ kind: 'mission', lane: 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
+                        recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
                             result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
                         if (res.result === 'sent' || res.result === 'unconfirmed') {
                             stats.sent++;
                             sent.push(Date.now());
-                            addLog(name, `snel gealarmeerd${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), ${Number(res.km).toFixed(1)} km`, 'ok');
+                            addLog(name, `snel ${top ? 'bijgestuurd' : 'gealarmeerd'}${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), ${Number(res.km).toFixed(1)} km`, 'ok');
                         } else if (res.result === 'skip') {
                             stats.skipped++;
                             curPos = pos;
