@@ -626,6 +626,17 @@ MKS.module({
                     }
                 }
 
+                // The red box of an Interfacilitair Transport asks for "1 Ambulance" too: its
+                // patient needs the MICU, so the ambulance slot becomes that vehicle.
+                if (job.patientVt) {
+                    for (const k of ['rtw', 'ktw_or_rtw', 'any_rtw']) {
+                        if (!plan.slots[k]) continue;
+                        plan.vt = { ...plan.vt, [job.patientVt]: Math.max((plan.vt || {})[job.patientVt] || 0, plan.slots[k]) };
+                        plan.slots = { ...plan.slots };
+                        delete plan.slots[k];
+                        plan.vtCaptions = { ...(plan.vtCaptions || {}), [job.patientVt]: 'MICU' };
+                    }
+                }
                 const attrs = { ...plan.slots };
                 if (job.patients) {
                     const m = (document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+onbehandelde/i);
@@ -1767,7 +1778,11 @@ MKS.module({
                             // does not fit, the hidden window as before.
                             let res = null;
                             // A patient-only mission (no vehicle requirements) needs its ambulance.
-                            const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
+                            const pvt = PATIENT_VT[entry.getAttribute('mission_type_id')];
+                            const tp = top ? topUpPlan(entry) || { slots: {}, vt: {} } : null;
+                            // A MICU mission's red box also says "Ambulance": send the MICU.
+                            if (tp && pvt) for (const k of ['rtw', 'ktw_or_rtw']) if (tp.slots[k]) { tp.vt = { ...tp.vt, [pvt]: tp.slots[k] }; delete tp.slots[k]; }
+                            const dp = top ? tp
                                 : quickUnitsOf(p) ? p
                                     : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
                                     : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
