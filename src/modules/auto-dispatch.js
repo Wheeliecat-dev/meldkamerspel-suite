@@ -337,9 +337,13 @@ MKS.module({
         // Patient needs: "We benodigen: MMT-Arts, OvD-G" per patient (mission list)
         // or "5x We benodigen: OvD-G" for five patients (mission window).
         // One OvD-G leads all patients; MMT and ambulance are one per patient.
-        const PATIENT_NEED = { 'ovd-g': 'ovdg', 'mmt-arts': 'mmt', 'mmt': 'mmt', 'ambulance': 'amb', 'ambulances': 'amb' };
+        const PATIENT_NEED = { 'ovd-g': 'ovdg', 'mmt-arts': 'mmt', 'mmt': 'mmt', 'ambulance': 'amb', 'ambulances': 'amb', 'micu': 'micu' };
+        // Patient-only missions whose patient needs a special vehicle instead of an ambulance.
+        // The mission data does not say so (only the patient line does): Interfacilitair
+        // Transport (1103) = MICU (vehicle type 103).
+        const PATIENT_VT = { 1103: '103' };
         function patientNeeds(text) {
-            const out = { ovdg: false, mmt: 0, amb: 0, unknown: [] };
+            const out = { ovdg: false, mmt: 0, amb: 0, micu: 0, unknown: [] };
             const re = /(?:(\d+)\s*x\s*)?We benodigen:\s*(.+?)(?=(?:\d+\s*x\s*)?We benodigen:|$)/gi;
             for (const m of String(text).replace(/\s+/g, ' ').matchAll(re)) {
                 const n = Number(m[1] || 1);
@@ -630,7 +634,11 @@ MKS.module({
                     // do not always say "ambulance"). With vehicles there, only what the
                     // lines ask for: "1x We benodigen: OvD-G, ambulance" with 7 untreated = 1.
                     const amb = Math.max(Number(attrs.rtw) || 0, pNeed.amb, mode === 'full' ? untreated : 0);
-                    if (amb) attrs.rtw = amb;
+                    if (job.patientVt) {
+                        // Its patient needs that vehicle (a MICU), not an ambulance.
+                        if (amb) plan.vt[job.patientVt] = Math.max(plan.vt[job.patientVt] || 0, amb);
+                        delete attrs.rtw;
+                    } else if (amb) attrs.rtw = amb;
                     // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
                     // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
                     // Never more than one OvD-G per mission.
@@ -1754,13 +1762,15 @@ MKS.module({
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
-                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] });
                             // One unit: straight through the alarm form, no window. Else, or when that
                             // does not fit, the hidden window as before.
                             let res = null;
                             // A patient-only mission (no vehicle requirements) needs its ambulance.
                             const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
-                                : quickUnitsOf(p) ? p : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
+                                : quickUnitsOf(p) ? p
+                                    : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
+                                    : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
                             try { res = await directSend(id, dp); } catch (x) { res = null; }
                             if (!res) res = await quickJob(true);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
@@ -1933,7 +1943,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,

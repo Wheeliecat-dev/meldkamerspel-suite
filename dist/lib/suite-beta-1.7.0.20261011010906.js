@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011003819 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011010906 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011003819';
+    const VERSION = '1.7.0.20261011010906';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10712,6 +10712,16 @@ MKS.module({
         const addPrisonerCar = (plan) => { plan.slots.fustw = Math.max(plan.slots.fustw || 0, 1); };
 
         // Text of the red box -> { slots, vt, vtCaptions, unknown }.
+        // Horses go by truck: a VW-BB carries 4, so "8 Police Horses" = 2 VW-BB (type 73).
+        // Selecting by the horse count of the trucks kept failing ("te weinig: 2 Police Horses").
+        function horsesToTrucks(out) {
+            const n = Number(out.slots.police_horse_count) || 0;
+            if (!n) return out;
+            delete out.slots.police_horse_count;
+            out.vt['73'] = Math.max(out.vt['73'] || 0, Math.ceil(n / 4));
+            out.vtCaptions['73'] = 'VW-BB';
+            return out;
+        }
         // "Missende voertuigen: 1 DB-PC-LOG, 2 SB-BA, SB-IB of AS, 2.000 Water"
         // Items start with a number; names can contain commas themselves.
         function fromMissing(text, typeIds) {
@@ -10732,7 +10742,7 @@ MKS.module({
                     out.vtCaptions[id] = VT_CAPTION[id] || m[2].trim();
                 } else out.slots[to] = (out.slots[to] || 0) + count;
             }
-            return out;
+            return horsesToTrucks(out);
         }
 
         // "Missende personeel: 2x Verzorger, 7x Handcrew" -> [[name, count]].
@@ -10757,9 +10767,13 @@ MKS.module({
         // Patient needs: "We benodigen: MMT-Arts, OvD-G" per patient (mission list)
         // or "5x We benodigen: OvD-G" for five patients (mission window).
         // One OvD-G leads all patients; MMT and ambulance are one per patient.
-        const PATIENT_NEED = { 'ovd-g': 'ovdg', 'mmt-arts': 'mmt', 'mmt': 'mmt', 'ambulance': 'amb', 'ambulances': 'amb' };
+        const PATIENT_NEED = { 'ovd-g': 'ovdg', 'mmt-arts': 'mmt', 'mmt': 'mmt', 'ambulance': 'amb', 'ambulances': 'amb', 'micu': 'micu' };
+        // Patient-only missions whose patient needs a special vehicle instead of an ambulance.
+        // The mission data does not say so (only the patient line does): Interfacilitair
+        // Transport (1103) = MICU (vehicle type 103).
+        const PATIENT_VT = { 1103: '103' };
         function patientNeeds(text) {
-            const out = { ovdg: false, mmt: 0, amb: 0, unknown: [] };
+            const out = { ovdg: false, mmt: 0, amb: 0, micu: 0, unknown: [] };
             const re = /(?:(\d+)\s*x\s*)?We benodigen:\s*(.+?)(?=(?:\d+\s*x\s*)?We benodigen:|$)/gi;
             for (const m of String(text).replace(/\s+/g, ' ').matchAll(re)) {
                 const n = Number(m[1] || 1);
@@ -11050,7 +11064,11 @@ MKS.module({
                     // do not always say "ambulance"). With vehicles there, only what the
                     // lines ask for: "1x We benodigen: OvD-G, ambulance" with 7 untreated = 1.
                     const amb = Math.max(Number(attrs.rtw) || 0, pNeed.amb, mode === 'full' ? untreated : 0);
-                    if (amb) attrs.rtw = amb;
+                    if (job.patientVt) {
+                        // Its patient needs that vehicle (a MICU), not an ambulance.
+                        if (amb) plan.vt[job.patientVt] = Math.max(plan.vt[job.patientVt] || 0, amb);
+                        delete attrs.rtw;
+                    } else if (amb) attrs.rtw = amb;
                     // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
                     // DA OVDG-RR went and the patients kept asking. MMT-Auto and Lifeliner are "nef".
                     // Never more than one OvD-G per mission.
@@ -11442,7 +11460,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v5'; // v5: guards, care flags and patient-only missions stored next to it
+            const DATA_KEY = 'mks.autoDispatch.missions.v6'; // v6: guards, care flags, patient-only and Zorgambulance missions stored next to it
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -11674,6 +11692,7 @@ MKS.module({
                     // Ambulance-only missions: no requirements, just patients (Hyperventilatie,
                     // Klaplong, …). How many ambulances at least.
                     if (e.additional && e.additional.possible_patient && !Object.keys(e.requirements || {}).length) care[`p:${e.id}`] = e.additional.possible_patient_min || 1;
+                    if (e.additional && e.additional.allow_ktw_instead_of_rtw) care[`k:${e.id}`] = 1; // a Zorgambulance may go too
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -11720,7 +11739,7 @@ MKS.module({
                 const out = { slots, vt, vtCaptions, unknown };
                 // Trained personnel last, so a vehicle already required counts toward it.
                 addPersonnel(out, trained, (e, n) => `Opleiding ${EDUCATION[e] || e} (${n} pers.)`);
-                return out;
+                return horsesToTrucks(out);
             }
 
             // The red "Missende voertuigen" box the game also shows in the mission list.
@@ -12145,8 +12164,10 @@ MKS.module({
                 quickBusy = true;
                 try {
                     const now = Date.now();
-                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
-                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    // Also "Besteld vervoer" (its own list, often folded away: not held to
+                    // "Alleen zichtbare inzetten").
+                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id], #mission_list_krankentransporte .missionSideBarEntry[mission_type_id]')].filter((e) => {
+                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !e.closest('#mission_list_krankentransporte')) return false;
                         const t = tried.get(e.getAttribute('mission_id'));
                         return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
                     });
@@ -12171,13 +12192,15 @@ MKS.module({
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
-                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] });
                             // One unit: straight through the alarm form, no window. Else, or when that
                             // does not fit, the hidden window as before.
                             let res = null;
                             // A patient-only mission (no vehicle requirements) needs its ambulance.
                             const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
-                                : quickUnitsOf(p) ? p : { slots: { rtw: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
+                                : quickUnitsOf(p) ? p
+                                    : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
+                                    : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
                             try { res = await directSend(id, dp); } catch (x) { res = null; }
                             if (!res) res = await quickJob(true);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
@@ -12350,7 +12373,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
@@ -14307,7 +14330,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011003819' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011010906' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14447,7 +14470,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011003819',
+                version: '1.7.0.20261011010906',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
