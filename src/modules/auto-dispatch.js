@@ -63,6 +63,8 @@ MKS.module({
             help: 'Een extra onzichtbaar venster voor kleine inzetten (onder de grens hieronder, één of twee voertuigen) en rode inzetten die nog maar zoveel missen, '
                 + 'elke paar seconden, los van de grote ronde door de hele lijst. Een auto die de ene kant net stuurde, kiest de andere niet.' },
         { key: 'quickMax', label: 'Snelle baan: tot', type: 'number', default: 1000, min: 0, max: 20000, step: 100, unit: 'credits' },
+        { key: 'quickWindows', label: 'Snelle baan: vensters', type: 'number', default: 2, min: 1, max: 3, step: 1,
+            help: 'Zoveel onzichtbare vensters werken tegelijk de kleine inzetten af.' },
         { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
             help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
@@ -1660,42 +1662,50 @@ MKS.module({
                         const t = tried.get(e.getAttribute('mission_id'));
                         return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
                     });
-                    for (const entry of list.slice(0, 10)) {
-                        if (!running || stopped || reloadWanted || !ctx.cfg.quickLane) break;
-                        while (sent.length && sent[0] < Date.now() - 3600000) sent.shift();
-                        if (sent.length + inFlight >= ctx.cfg.maxPerHour) break;
-                        if (!entry.isConnected) continue;
-                        const id = entry.getAttribute('mission_id');
-                        const name = titleOf(entry);
-                        const top = isTopUp(entry);
-                        const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
-                        tried.set(id, Date.now());
-                        const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: '', topUp: ctx.cfg.topUp,
-                            ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
-                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
-                        const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
-                        const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
-                        recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
-                            result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
-                        if (res.result === 'sent' || res.result === 'unconfirmed') {
-                            stats.sent++;
-                            sent.push(Date.now());
-                            addLog(name, `snel ${top ? 'bijgestuurd' : 'gealarmeerd'}${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), ${Number(res.km).toFixed(1)} km`, 'ok');
-                        } else if (res.result === 'skip') {
-                            stats.skipped++;
-                            curPos = pos;
-                            curCredits = creditsOf(entry);
-                            recordResult(res, id, name);
-                            addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
-                        } else if (res.result === 'wait') {
-                            tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
-                        } else {
-                            stats.errors++;
-                            addLog(name, `snel fout: ${res.reason}`, 'error');
+                    // Several hidden windows side by side, each taking the next mission from one
+                    // queue (a few seconds apart so they do not load at the same moment).
+                    const lanes = Math.max(1, Math.min(3, Number(ctx.cfg.quickWindows) || 1));
+                    const queue = list.slice(0, 10 * lanes);
+                    await Promise.all(Array.from({ length: lanes }, (_, k) => (async () => {
+                        await sleep(k * 1500);
+                        while (queue.length) {
+                            const entry = queue.shift();
+                            if (!running || stopped || reloadWanted || !ctx.cfg.quickLane) return;
+                            while (sent.length && sent[0] < Date.now() - 3600000) sent.shift();
+                            if (sent.length + inFlight >= ctx.cfg.maxPerHour) return;
+                            if (!entry.isConnected) continue;
+                            const id = entry.getAttribute('mission_id');
+                            const name = titleOf(entry);
+                            const top = isTopUp(entry);
+                            const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
+                            tried.set(id, Date.now());
+                            const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                                maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: '', topUp: ctx.cfg.topUp,
+                                ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
+                                bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
+                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
+                            const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                            recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
+                                result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
+                            if (res.result === 'sent' || res.result === 'unconfirmed') {
+                                stats.sent++;
+                                sent.push(Date.now());
+                                addLog(name, `snel ${top ? 'bijgestuurd' : 'gealarmeerd'}${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), ${Number(res.km).toFixed(1)} km`, 'ok');
+                            } else if (res.result === 'skip') {
+                                stats.skipped++;
+                                curPos = pos;
+                                curCredits = creditsOf(entry);
+                                recordResult(res, id, name);
+                                addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
+                            } else if (res.result === 'wait') {
+                                tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                            } else {
+                                stats.errors++;
+                                addLog(name, `snel fout: ${res.reason}`, 'error');
+                            }
                         }
-                    }
+                    })()));
                 } catch (e) { ctx.err(e); addLog('Snelle baan', `fout: ${e.message}`, 'error'); } finally { quickBusy = false; saveSession(); }
                 if (reloadWanted && !busy && !teamBusy) reloadWhenIdle();
             }
