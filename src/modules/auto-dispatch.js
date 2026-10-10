@@ -1740,6 +1740,9 @@ MKS.module({
                         continue;
                     } else if (res.result === 'skip' && res.notYet) {
                         teamNote(`${titleOf(entry)}: kan nog geen voertuigen ontvangen, later opnieuw`);
+                        // Not open yet: look again in 30 minutes, not every few (934 such
+                        // checks in one evening, each loading a mission window).
+                        tried.set(id, Date.now() + 30 * 60000 - ctx.cfg.retryMin * 60000);
                         continue;
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
