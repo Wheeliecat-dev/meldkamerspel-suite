@@ -59,6 +59,11 @@ MKS.module({
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
         { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
+        { key: 'quickLane', label: 'Snelle baan voor kleine inzetten', type: 'bool', default: true,
+            help: 'Een tweede onzichtbaar venster dat alleen kleine inzetten doet (onder de grens hieronder, één of twee voertuigen), '
+                + 'elke paar seconden, los van de grote ronde door de hele lijst. Een auto die de ene kant net stuurde, kiest de andere niet.' },
+        { key: 'quickMax', label: 'Snelle baan: tot', type: 'number', default: 1000, min: 0, max: 20000, step: 100, unit: 'credits' },
+        { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
         { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
             help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
                 + 'naar een teamevenement één noodhulp óf ambulance (wat het dichtstbij vrij is), '
@@ -1302,7 +1307,8 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
+                }).filter((e) => !(ctx.cfg.quickLane && isQuick(e)))
+                    .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
             }
@@ -1583,7 +1589,7 @@ MKS.module({
             let reloadWanted = false;
             function reloadWhenIdle() {
                 reloadWanted = true;
-                if (busy || teamBusy) return;
+                if (busy || teamBusy || quickBusy) return;
                 onPageHide();
                 location.reload();
             }
@@ -1607,6 +1613,73 @@ MKS.module({
                 for (const [v, t] of recentCars) if (now - t > 120000) recentCars.delete(v);
                 return [...recentCars.keys()];
             }
+            /* QUICK LANE — small own missions (under quickMax credits, quickUnits vehicles or
+             * fewer, nothing red yet) in a third hidden window every few seconds, so they do
+             * not wait for the main round through the whole list. Cars just sent by another
+             * window are avoided (claimCars), so no car goes twice. */
+            const quickUnitsOf = (p) => Object.entries(p.slots).filter(([k]) => !/_amount$|_value$/.test(k)).reduce((sum, [, v]) => sum + Number(v || 0), 0)
+                + Object.values(p.vt).reduce((sum, v) => sum + Number(v || 0), 0);
+            function isQuick(e) {
+                if (!missions || isPlanned(e)) return false;
+                if (e.getAttribute('data-mission-state-filter') !== 'unattended' || sidebarMissing(e) || (ctx.cfg.patients && sidebarPatients(e))) return false;
+                if (creditsOf(e) >= ctx.cfg.quickMax) return false;
+                const r = missions[keyOf(e)];
+                if (!r) return false;
+                const p = plan(r);
+                if (p.unknown.length) return false;
+                const n = quickUnitsOf(p);
+                return n >= 1 && n <= ctx.cfg.quickUnits;
+            }
+            let quickBusy = false, quickTimer = null;
+            async function quickCycle() {
+                if (!running || stopped || quickBusy || reloadWanted || !ctx.cfg.quickLane || !missions) return;
+                quickBusy = true;
+                try {
+                    const now = Date.now();
+                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
+                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                        const t = tried.get(e.getAttribute('mission_id'));
+                        return (!t || now - t > ctx.cfg.retryMin * 60000) && isQuick(e);
+                    });
+                    for (const entry of list.slice(0, 10)) {
+                        if (!running || stopped || reloadWanted || !ctx.cfg.quickLane) break;
+                        while (sent.length && sent[0] < Date.now() - 3600000) sent.shift();
+                        if (sent.length + inFlight >= ctx.cfg.maxPerHour) break;
+                        if (!entry.isConnected) continue;
+                        const id = entry.getAttribute('mission_id');
+                        const name = titleOf(entry);
+                        const p = plan(missions[keyOf(entry)]);
+                        tried.set(id, Date.now());
+                        const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: '', topUp: ctx.cfg.topUp,
+                            ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
+                            ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                        const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
+                        const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                        recordEvent({ kind: 'mission', lane: 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
+                            result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
+                        if (res.result === 'sent' || res.result === 'unconfirmed') {
+                            stats.sent++;
+                            sent.push(Date.now());
+                            addLog(name, `snel gealarmeerd${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), ${Number(res.km).toFixed(1)} km`, 'ok');
+                        } else if (res.result === 'skip') {
+                            stats.skipped++;
+                            curPos = pos;
+                            curCredits = creditsOf(entry);
+                            recordResult(res, id, name);
+                            addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
+                        } else if (res.result === 'wait') {
+                            tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                        } else {
+                            stats.errors++;
+                            addLog(name, `snel fout: ${res.reason}`, 'error');
+                        }
+                    }
+                } catch (e) { ctx.err(e); addLog('Snelle baan', `fout: ${e.message}`, 'error'); } finally { quickBusy = false; saveSession(); }
+                if (reloadWanted && !busy && !teamBusy) reloadWhenIdle();
+            }
+
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
             let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
             async function teamCycle() {
@@ -1830,6 +1903,7 @@ MKS.module({
                 // windows do not load at the same moment.
                 teamKick = setTimeout(teamCycle, 5000);
                 teamTimer = setInterval(teamCycle, ctx.cfg.scanSec * 1000);
+                quickTimer = setInterval(quickCycle, 6000);
             }
 
             function stop(text) {
@@ -1838,6 +1912,7 @@ MKS.module({
                 clearInterval(timer);
                 clearInterval(teamTimer);
                 clearTimeout(teamKick);
+                clearInterval(quickTimer);
                 clearInterval(heartbeat);
                 releaseLock();
                 addLog('—', text || 'gestopt', text ? 'error' : 'idle');
@@ -1963,6 +2038,7 @@ MKS.module({
                     clearInterval(timer);
                     clearInterval(teamTimer);
                     clearTimeout(teamKick);
+                    clearInterval(quickTimer);
                     clearInterval(heartbeat);
                     saveSession();
                     releaseLock();
