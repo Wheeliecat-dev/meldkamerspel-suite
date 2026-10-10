@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011003342 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011004220 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011003342';
+    const VERSION = '1.7.0.20261011004220';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11442,7 +11442,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v4'; // v4: guards and care flags stored next to it
+            const DATA_KEY = 'mks.autoDispatch.missions.v6'; // v6: guards, care flags, patient-only and Zorgambulance missions stored next to it
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -11671,6 +11671,10 @@ MKS.module({
                     if (e.additional && e.additional.guard_mission) g[e.id] = { hours: (e.additional.duration || 0) / 3600 };
                     // Missions whose responders need care: Verzorgers will be asked for.
                     if (e.additional && e.additional.care_includes_staff_members) care[e.id] = 1;
+                    // Ambulance-only missions: no requirements, just patients (Hyperventilatie,
+                    // Klaplong, …). How many ambulances at least.
+                    if (e.additional && e.additional.possible_patient && !Object.keys(e.requirements || {}).length) care[`p:${e.id}`] = e.additional.possible_patient_min || 1;
+                    if (e.additional && e.additional.allow_ktw_instead_of_rtw) care[`k:${e.id}`] = 1; // a Zorgambulance may go too
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -12070,7 +12074,7 @@ MKS.module({
                 if (p.unknown.length) return false;
                 // A mission without vehicle requirements that only has a patient (shown as
                 // 0 credits, needs one ambulance) counts its ambulances.
-                const n = quickUnitsOf(p) || (ctx.cfg.patients ? Math.max(patientsOf(e), pn ? pn.amb : 0) : 0);
+                const n = quickUnitsOf(p) || (ctx.cfg.patients ? Math.max(patientsOf(e), pn ? pn.amb : 0, careTypes[`p:${keyOf(e)}`] || 0) : 0);
                 return n >= 1 && n <= ctx.cfg.quickUnits;
             }
             // A red mission that only misses one unit (one OvD-P, "2x Verzorger" = one DB-VZ):
@@ -12092,14 +12096,60 @@ MKS.module({
                 const n = quickUnitsOf(p);
                 return n >= 1 && n <= ctx.cfg.quickUnits;
             }
+            /* DIRECT SEND — a mission that needs exactly one unit: read the mission page as
+             * text (about half a second, no window to render), take the nearest free unit
+             * that fits, and post the game's own alarm form. Anything unusual (units already
+             * driving or on scene, a hold, nothing near enough) returns null and the hidden
+             * window handles it as before. */
+            const AIR_TYPES = new Set(['23', '28', '80', '85']);
+            async function directSend(id, p) {
+                const keys = Object.entries(p.slots).filter(([k, v]) => v > 0 && !/_amount$|_value$/.test(k));
+                const vts = Object.entries(p.vt).filter(([, v]) => v > 0);
+                if (keys.length + vts.length !== 1) return null;
+                const [key, n] = keys[0] || [];
+                const [vtId, m] = vts[0] || [];
+                if ((n || m) !== 1) return null;
+                if (key && reservedFor(id, 0)[key]) return null;
+                const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
+                if (!r.ok) return null;
+                const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return null;
+                const form = [...doc.forms].find((f) => /\/missions\/\d+\/alarm$/.test(f.getAttribute('action') || ''));
+                if (!form) return null;
+                const avoid = new Set(avoidCars());
+                const own = new Set(ownJobOnly().map(String));
+                const fits = [...doc.querySelectorAll('input.vehicle_checkbox')].filter((c) => {
+                    if (avoid.has(c.value)) return false;
+                    const vt = c.getAttribute('vehicle_type_id');
+                    if (vtId) return vt === String(vtId);
+                    if (own.has(vt)) return false; // kept for their own job (TS-BO, TS-GO, …)
+                    return Number(c.getAttribute(key)) > 0;
+                }).map((c) => ({ c, km: Number(c.getAttribute('data-distance')) || 0 }))
+                    .filter((x) => x.km <= (AIR_TYPES.has(x.c.getAttribute('vehicle_type_id')) ? ctx.cfg.airKm : ctx.cfg.maxKm))
+                    .sort((a, b) => a.km - b.km);
+                const best = fits[0];
+                if (!best) return null;
+                // Same check-and-mark as the windows (claimCars): never the same car twice.
+                avoidCars();
+                if (recentCars.has(best.c.value)) return null;
+                recentCars.set(best.c.value, Date.now());
+                const fd = new FormData(form);
+                fd.delete('vehicle_ids[]');
+                fd.append('vehicle_ids[]', best.c.value);
+                const res = await fetch(form.getAttribute('action'), { method: 'POST', body: new URLSearchParams(fd), credentials: 'same-origin' });
+                if (!res.ok) return null;
+                return { result: 'sent', mode: 'direct', n: 1, km: best.km, ids: [best.c.value] };
+            }
             let quickBusy = false, quickTimer = null;
             async function quickCycle() {
                 if (!running || stopped || quickBusy || reloadWanted || !ctx.cfg.quickLane || !missions) return;
                 quickBusy = true;
                 try {
                     const now = Date.now();
-                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
-                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    // Also "Besteld vervoer" (its own list, often folded away: not held to
+                    // "Alleen zichtbare inzetten").
+                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id], #mission_list_krankentransporte .missionSideBarEntry[mission_type_id]')].filter((e) => {
+                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !e.closest('#mission_list_krankentransporte')) return false;
                         const t = tried.get(e.getAttribute('mission_id'));
                         return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
                     });
@@ -12125,7 +12175,14 @@ MKS.module({
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
                                 ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
-                            let res = await quickJob(true);
+                            // One unit: straight through the alarm form, no window. Else, or when that
+                            // does not fit, the hidden window as before.
+                            let res = null;
+                            // A patient-only mission (no vehicle requirements) needs its ambulance.
+                            const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
+                                : quickUnitsOf(p) ? p : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
+                            try { res = await directSend(id, dp); } catch (x) { res = null; }
+                            if (!res) res = await quickJob(true);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
@@ -14253,7 +14310,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011003342' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011004220' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14393,7 +14450,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011003342',
+                version: '1.7.0.20261011004220',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

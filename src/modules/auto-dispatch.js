@@ -1012,7 +1012,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v5'; // v5: guards, care flags and patient-only missions stored next to it
+            const DATA_KEY = 'mks.autoDispatch.missions.v6'; // v6: guards, care flags, patient-only and Zorgambulance missions stored next to it
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -1244,6 +1244,7 @@ MKS.module({
                     // Ambulance-only missions: no requirements, just patients (Hyperventilatie,
                     // Klaplong, …). How many ambulances at least.
                     if (e.additional && e.additional.possible_patient && !Object.keys(e.requirements || {}).length) care[`p:${e.id}`] = e.additional.possible_patient_min || 1;
+                    if (e.additional && e.additional.allow_ktw_instead_of_rtw) care[`k:${e.id}`] = 1; // a Zorgambulance may go too
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -1715,8 +1716,10 @@ MKS.module({
                 quickBusy = true;
                 try {
                     const now = Date.now();
-                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')].filter((e) => {
-                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none') return false;
+                    // Also "Besteld vervoer" (its own list, often folded away: not held to
+                    // "Alleen zichtbare inzetten").
+                    const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id], #mission_list_krankentransporte .missionSideBarEntry[mission_type_id]')].filter((e) => {
+                        if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !e.closest('#mission_list_krankentransporte')) return false;
                         const t = tried.get(e.getAttribute('mission_id'));
                         return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
                     });
@@ -1747,7 +1750,7 @@ MKS.module({
                             let res = null;
                             // A patient-only mission (no vehicle requirements) needs its ambulance.
                             const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
-                                : quickUnitsOf(p) ? p : { slots: { rtw: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
+                                : quickUnitsOf(p) ? p : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
                             try { res = await directSend(id, dp); } catch (x) { res = null; }
                             if (!res) res = await quickJob(true);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
