@@ -1621,15 +1621,24 @@ MKS.module({
              * window are avoided (claimCars), so no car goes twice. */
             const quickUnitsOf = (p) => Object.entries(p.slots).filter(([k]) => !/_amount$|_value$/.test(k)).reduce((sum, [, v]) => sum + Number(v || 0), 0)
                 + Object.values(p.vt).reduce((sum, v) => sum + Number(v || 0), 0);
+            // Patients on a mission ("patients_count" in the list's sort data).
+            const patientsOf = (e) => { try { return Number(JSON.parse(e.getAttribute('data-sortable-by') || '{}').patients_count) || 0; } catch (x) { return 0; } };
             function isQuick(e) {
                 if (!missions || isPlanned(e)) return false;
-                if (e.getAttribute('data-mission-state-filter') !== 'unattended' || sidebarMissing(e) || (ctx.cfg.patients && sidebarPatients(e))) return false;
+                if (e.getAttribute('data-mission-state-filter') !== 'unattended' || sidebarMissing(e)) return false;
                 if (creditsOf(e) >= ctx.cfg.quickMax) return false;
+                // Patients that only need an ambulance are fine; an OvD-G or MMT stays with
+                // the main round.
+                const pt = ctx.cfg.patients ? sidebarPatients(e) : '';
+                const pn = pt ? patientNeeds(pt) : null;
+                if (pn && (pn.ovdg || pn.mmt || pn.unknown.length)) return false;
                 const r = missions[keyOf(e)];
                 if (!r) return false;
                 const p = plan(r);
                 if (p.unknown.length) return false;
-                const n = quickUnitsOf(p);
+                // A mission without vehicle requirements that only has a patient (shown as
+                // 0 credits, needs one ambulance) counts its ambulances.
+                const n = quickUnitsOf(p) || (ctx.cfg.patients ? Math.max(patientsOf(e), pn ? pn.amb : 0) : 0);
                 return n >= 1 && n <= ctx.cfg.quickUnits;
             }
             // A red mission that only misses one unit (one OvD-P, "2x Verzorger" = one DB-VZ):
@@ -1680,7 +1689,7 @@ MKS.module({
                             const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
                             tried.set(id, Date.now());
                             const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                                maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: '', topUp: ctx.cfg.topUp,
+                                maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
                                 ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
