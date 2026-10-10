@@ -83,6 +83,16 @@ MKS.module({
         { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
             help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
+        { key: 'planned', label: 'Geplande inzetten meedoen', type: 'bool', default: true,
+            help: 'Bewakingen en evenementen uit de lijst "Geplande inzetten": alleen als ze genoeg opleveren per voertuig per uur, '
+                + 'kort voor de start, na de gewone inzetten, en nooit met zeldzame eenheden.' },
+        { key: 'plannedMin', label: 'Gepland: minimaal per voertuig per uur', type: 'number', default: 400, min: 0, max: 5000, step: 50, unit: 'credits',
+            help: 'Credits van de inzet gedeeld door voertuigen x duur. Je gemiddelde over al je voertuigen ligt rond de 200.' },
+        { key: 'plannedLead', label: 'Gepland: sturen vanaf', type: 'number', default: 25, min: 5, max: 180, step: 5, unit: 'min voor de start',
+            help: 'Eerder sturen houdt voertuigen langer vast; te laat en ze zijn er niet op tijd.' },
+        { key: 'plannedSkip', label: 'Gepland: nooit met', type: 'text',
+            default: 'drone_police, at_o, at_c, at_m, bike_police, police_horse, ovdp, polizeihubschrauber, kdow_orgl, fire_aviation, wildfire_command',
+            help: 'Eisen (spelnamen) waarvoor je eenheden te zeldzaam zijn om uren vast te zitten.' },
         { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
             help: 'Een lang open spelpagina wordt traag en zwaar. Ververst tussen twee rondes door en gaat daarna vanzelf verder. 0 = nooit '
                 + '(behalve als het geheugen bijna vol is).' },
@@ -974,7 +984,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v2';
+            const DATA_KEY = 'mks.autoDispatch.missions.v3'; // v3: guards stored next to it
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -984,6 +994,9 @@ MKS.module({
             let timer = null;
             let heartbeat = null;
             let missions = null;
+            const GUARD_KEY = 'mks.autoDispatch.guards.v1';
+            let guards;
+            try { guards = JSON.parse(GM_getValue(GUARD_KEY, 'null')); } catch (e) { guards = null; }
             let errorStreak = 0;
 
             /* --------------------------------------------------------------------
@@ -1190,7 +1203,10 @@ MKS.module({
                 const res = await fetch('/einsaetze.json', { credentials: 'same-origin' });
                 if (!res.ok) throw new Error(`/einsaetze.json: ${res.status}`);
                 const m = {};
+                const g = {};
                 for (const e of await res.json()) {
+                    // Planned missions (guard_mission): how long they keep the units.
+                    if (e.additional && e.additional.guard_mission) g[e.id] = { hours: (e.additional.duration || 0) / 3600 };
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -1200,6 +1216,8 @@ MKS.module({
                     m[e.id] = r;
                 }
                 GM_setValue(DATA_KEY, JSON.stringify({ at: Date.now(), m }));
+                GM_setValue(GUARD_KEY, JSON.stringify(g));
+                guards = g;
                 return (missions = m);
             }
 
@@ -1258,7 +1276,32 @@ MKS.module({
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
                 }).sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
-                    || creditsOf(b) - creditsOf(a)); // arrestants first (a cell takes seconds), then big missions
+                    || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
+                    .concat(plannedCandidates(now));
+            }
+            // "Geplande inzetten": after the normal ones, shortly before their start, when
+            // they pay enough per unit per hour and need none of the rare units.
+            const startsIn = (e) => {
+                const t = (e.textContent.match(/Begint in:\s*(?:(\d+):)?(\d+):(\d+)/) || []);
+                return t[0] ? ((Number(t[1] || 0) * 60 + Number(t[2])) * 60 + Number(t[3])) * 1000 : 0;
+            };
+            const isPlanned = (e) => !!e.closest('#mission_list_sicherheitswache');
+            function plannedCandidates(now) {
+                if (!ctx.cfg.planned || !missions || !guards) return [];
+                const skip = String(ctx.cfg.plannedSkip || '').split(',').map((x) => x.trim()).filter(Boolean);
+                return [...document.querySelectorAll('#mission_list_sicherheitswache .missionSideBarEntry[mission_type_id]')].filter((e) => {
+                    if (e.getAttribute('data-mission-state-filter') !== 'unattended' && !sidebarMissing(e)) return false;
+                    const t = tried.get(e.getAttribute('mission_id'));
+                    if (t && now - t < ctx.cfg.retryMin * 60000) return false;
+                    if (startsIn(e) > ctx.cfg.plannedLead * 60000) return false;
+                    const type = e.getAttribute('mission_type_id');
+                    const r = missions[keyOf(e)] || missions[type];
+                    const gd = guards[keyOf(e)] || guards[type];
+                    if (!r || !gd || !gd.hours) return false;
+                    if (Object.keys(r).some((k) => skip.includes(k) && r[k])) return false;
+                    const units = Object.entries(r).filter(([k, v]) => typeof v === 'number' && !/_needed|_amount|pump/.test(k)).reduce((sum, [, v]) => sum + v, 0) || 1;
+                    return creditsOf(e) / (units * gd.hours) >= ctx.cfg.plannedMin;
+                }).sort((a, b) => startsIn(a) - startsIn(b));
             }
 
             const titleOf = (e) => {
@@ -1672,11 +1715,11 @@ MKS.module({
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
                             ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
                         // Sent short (needAll off) or skipped: both say what to buy.
-                        recordResult(res, id, name);
+                        if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
-                        if (res.mode !== 'cell') updateHold(id, name, credits, res);
+                        if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
                             stats.transports++;
