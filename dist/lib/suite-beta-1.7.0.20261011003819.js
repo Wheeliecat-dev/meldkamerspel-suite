@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011002915 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011003819 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011002915';
+    const VERSION = '1.7.0.20261011003819';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10956,7 +10956,9 @@ MKS.module({
                 await sleep(300);
                 // A team mission first checks whether we are in already (nothing to load then).
                 if (job.team) { await teamWorker(job, report, doneKey); return; }
-                await loadMissing(); // all vehicles, not only the nearest listed
+                // The quick lane first tries with the nearest vehicles the window lists: for one
+                // unit those are enough, and loading the full list costs seconds per mission.
+                if (!job.fast) await loadMissing(); // all vehicles, not only the nearest listed
                 dropAvoided(job.avoid);
 
 
@@ -11004,7 +11006,7 @@ MKS.module({
                     report('skip', { reason: `patiënten, kan niet sturen: ${pNeed.unknown.join(', ')}`, unknownNeeds: pNeed.unknown.map((u) => `Patiënt: ${u}`) });
                     return;
                 }
-                await loadAllVehicles();
+                if (!job.fast) await loadAllVehicles();
                 dropAvoided(job.avoid); // loadAllVehicles can add rows again
 
                 let plan = mode === 'patients' ? { slots: {}, vt: {}, vtCaptions: {} }
@@ -11440,7 +11442,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v4'; // v4: guards and care flags stored next to it
+            const DATA_KEY = 'mks.autoDispatch.missions.v5'; // v5: guards, care flags and patient-only missions stored next to it
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -11669,6 +11671,9 @@ MKS.module({
                     if (e.additional && e.additional.guard_mission) g[e.id] = { hours: (e.additional.duration || 0) / 3600 };
                     // Missions whose responders need care: Verzorgers will be asked for.
                     if (e.additional && e.additional.care_includes_staff_members) care[e.id] = 1;
+                    // Ambulance-only missions: no requirements, just patients (Hyperventilatie,
+                    // Klaplong, …). How many ambulances at least.
+                    if (e.additional && e.additional.possible_patient && !Object.keys(e.requirements || {}).length) care[`p:${e.id}`] = e.additional.possible_patient_min || 1;
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -12068,7 +12073,7 @@ MKS.module({
                 if (p.unknown.length) return false;
                 // A mission without vehicle requirements that only has a patient (shown as
                 // 0 credits, needs one ambulance) counts its ambulances.
-                const n = quickUnitsOf(p) || (ctx.cfg.patients ? Math.max(patientsOf(e), pn ? pn.amb : 0) : 0);
+                const n = quickUnitsOf(p) || (ctx.cfg.patients ? Math.max(patientsOf(e), pn ? pn.amb : 0, careTypes[`p:${keyOf(e)}`] || 0) : 0);
                 return n >= 1 && n <= ctx.cfg.quickUnits;
             }
             // A red mission that only misses one unit (one OvD-P, "2x Verzorger" = one DB-VZ):
@@ -12089,6 +12094,50 @@ MKS.module({
                 if (!p) return false;
                 const n = quickUnitsOf(p);
                 return n >= 1 && n <= ctx.cfg.quickUnits;
+            }
+            /* DIRECT SEND — a mission that needs exactly one unit: read the mission page as
+             * text (about half a second, no window to render), take the nearest free unit
+             * that fits, and post the game's own alarm form. Anything unusual (units already
+             * driving or on scene, a hold, nothing near enough) returns null and the hidden
+             * window handles it as before. */
+            const AIR_TYPES = new Set(['23', '28', '80', '85']);
+            async function directSend(id, p) {
+                const keys = Object.entries(p.slots).filter(([k, v]) => v > 0 && !/_amount$|_value$/.test(k));
+                const vts = Object.entries(p.vt).filter(([, v]) => v > 0);
+                if (keys.length + vts.length !== 1) return null;
+                const [key, n] = keys[0] || [];
+                const [vtId, m] = vts[0] || [];
+                if ((n || m) !== 1) return null;
+                if (key && reservedFor(id, 0)[key]) return null;
+                const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
+                if (!r.ok) return null;
+                const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return null;
+                const form = [...doc.forms].find((f) => /\/missions\/\d+\/alarm$/.test(f.getAttribute('action') || ''));
+                if (!form) return null;
+                const avoid = new Set(avoidCars());
+                const own = new Set(ownJobOnly().map(String));
+                const fits = [...doc.querySelectorAll('input.vehicle_checkbox')].filter((c) => {
+                    if (avoid.has(c.value)) return false;
+                    const vt = c.getAttribute('vehicle_type_id');
+                    if (vtId) return vt === String(vtId);
+                    if (own.has(vt)) return false; // kept for their own job (TS-BO, TS-GO, …)
+                    return Number(c.getAttribute(key)) > 0;
+                }).map((c) => ({ c, km: Number(c.getAttribute('data-distance')) || 0 }))
+                    .filter((x) => x.km <= (AIR_TYPES.has(x.c.getAttribute('vehicle_type_id')) ? ctx.cfg.airKm : ctx.cfg.maxKm))
+                    .sort((a, b) => a.km - b.km);
+                const best = fits[0];
+                if (!best) return null;
+                // Same check-and-mark as the windows (claimCars): never the same car twice.
+                avoidCars();
+                if (recentCars.has(best.c.value)) return null;
+                recentCars.set(best.c.value, Date.now());
+                const fd = new FormData(form);
+                fd.delete('vehicle_ids[]');
+                fd.append('vehicle_ids[]', best.c.value);
+                const res = await fetch(form.getAttribute('action'), { method: 'POST', body: new URLSearchParams(fd), credentials: 'same-origin' });
+                if (!res.ok) return null;
+                return { result: 'sent', mode: 'direct', n: 1, km: best.km, ids: [best.c.value] };
             }
             let quickBusy = false, quickTimer = null;
             async function quickCycle() {
@@ -12118,11 +12167,21 @@ MKS.module({
                             const top = isTopUp(entry);
                             const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
                             tried.set(id, Date.now());
-                            const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                            const quickJob = (fast) => runJob({ id, token: Date.now(), fast, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
                                 ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            // One unit: straight through the alarm form, no window. Else, or when that
+                            // does not fit, the hidden window as before.
+                            let res = null;
+                            // A patient-only mission (no vehicle requirements) needs its ambulance.
+                            const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
+                                : quickUnitsOf(p) ? p : { slots: { rtw: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
+                            try { res = await directSend(id, dp); } catch (x) { res = null; }
+                            if (!res) res = await quickJob(true);
+                            // Nothing near enough in the short list: try once more with all vehicles loaded.
+                            if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
                             const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
                             recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
@@ -14248,7 +14307,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011002915' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011003819' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14388,7 +14447,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011002915',
+                version: '1.7.0.20261011003819',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
