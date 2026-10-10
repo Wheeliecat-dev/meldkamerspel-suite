@@ -282,6 +282,16 @@ MKS.module({
         const addPrisonerCar = (plan) => { plan.slots.fustw = Math.max(plan.slots.fustw || 0, 1); };
 
         // Text of the red box -> { slots, vt, vtCaptions, unknown }.
+        // Horses go by truck: a VW-BB carries 4, so "8 Police Horses" = 2 VW-BB (type 73).
+        // Selecting by the horse count of the trucks kept failing ("te weinig: 2 Police Horses").
+        function horsesToTrucks(out) {
+            const n = Number(out.slots.police_horse_count) || 0;
+            if (!n) return out;
+            delete out.slots.police_horse_count;
+            out.vt['73'] = Math.max(out.vt['73'] || 0, Math.ceil(n / 4));
+            out.vtCaptions['73'] = 'VW-BB';
+            return out;
+        }
         // "Missende voertuigen: 1 DB-PC-LOG, 2 SB-BA, SB-IB of AS, 2.000 Water"
         // Items start with a number; names can contain commas themselves.
         function fromMissing(text, typeIds) {
@@ -302,7 +312,7 @@ MKS.module({
                     out.vtCaptions[id] = VT_CAPTION[id] || m[2].trim();
                 } else out.slots[to] = (out.slots[to] || 0) + count;
             }
-            return out;
+            return horsesToTrucks(out);
         }
 
         // "Missende personeel: 2x Verzorger, 7x Handcrew" -> [[name, count]].
@@ -1291,7 +1301,7 @@ MKS.module({
                 const out = { slots, vt, vtCaptions, unknown };
                 // Trained personnel last, so a vehicle already required counts toward it.
                 addPersonnel(out, trained, (e, n) => `Opleiding ${EDUCATION[e] || e} (${n} pers.)`);
-                return out;
+                return horsesToTrucks(out);
             }
 
             // The red "Missende voertuigen" box the game also shows in the mission list.
