@@ -187,7 +187,7 @@ MKS.module({
             'crashtender': 'arff', 'afo/osc': 'elw_airport', 'bootaanhanger (woa of ba-rb)': 'boats', 'verkenningseenheden': 'gwmess',
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
-            'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse',
+            'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse', 'bereden brigade eenheden (paarden)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
             'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
@@ -244,7 +244,8 @@ MKS.module({
         };
 
         // Lower case, no " - ", and the long words the game abbreviates in type names.
-        const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').trim()
+        // "DB-BO, TS-BO or BOH-DC": the game sometimes writes "or" for "of".
+        const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').replace(/ or /g, ' of ').trim()
             .replace(/^dienstbus\b/, 'db').replace(/^dienstauto\b/, 'da').replace(/^dienstmotor\b/, 'dm');
         const VT_BY_NAME = new Map(Object.entries(VT_NAMES).map(([n, id]) => [normName(n), id]));
 
@@ -613,8 +614,11 @@ MKS.module({
                         const t = p.textContent.replace(/\s+/g, ' ').trim();
                         // "We missen: 34000 L. water"
                         const amount = t.match(/([\d.]+)\s*l\.?\s*(water|svm|schuim)/i);
+                        // "We missen: Pomp Capaciteit: 2.000"
+                        const pump = t.match(/pomp\s*capaciteit:?\s*([\d.]+)/i);
                         if (PRISONERS.test(t)) addPrisonerCar(plan);
                         else if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
+                        else if (pump) plan.slots.water_damage_pump_value = (plan.slots.water_damage_pump_value || 0) + Number(pump[1].replace(/\./g, ''));
                         else if (amount) {
                             const k = /water/i.test(amount[2]) ? 'wasser_amount' : 'foam_amount';
                             plan.slots[k] = (plan.slots[k] || 0) + Number(amount[1].replace(/\./g, ''));
@@ -1727,7 +1731,7 @@ MKS.module({
                     .filter((x) => x.km <= (AIR_TYPES.has(x.c.getAttribute('vehicle_type_id')) ? ctx.cfg.airKm : ctx.cfg.maxKm))
                     .sort((a, b) => a.km - b.km);
                 const best = fits[0];
-                if (!best) return null;
+                if (!best) return { noFit: true };
                 // Same check-and-mark as the windows (claimCars): never the same car twice.
                 avoidCars();
                 if (recentCars.has(best.c.value)) return null;
@@ -1787,7 +1791,11 @@ MKS.module({
                                     : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
                                     : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
                             try { res = await directSend(id, dp); } catch (x) { res = null; }
-                            if (!res) res = await quickJob(true);
+                            // Nothing fitting among the nearest: one window with the full list, not
+                            // a quick one first (521 "te weinig: 1 Ambulance" a night, two windows each).
+                            const noFit = res && res.noFit;
+                            if (noFit) res = null;
+                            if (!res) res = await quickJob(!noFit);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
