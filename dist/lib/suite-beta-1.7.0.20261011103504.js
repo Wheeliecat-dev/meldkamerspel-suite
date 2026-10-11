@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011010906 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011103504 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011010906';
+    const VERSION = '1.7.0.20261011103504';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10517,8 +10517,8 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
-            help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+            help: 'Is de voortgangsbalk van een inzet leeg (0%, het werk is gedaan) en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'planned', label: 'Geplande inzetten meedoen', type: 'bool', default: true,
             help: 'Bewakingen en evenementen uit de lijst "Geplande inzetten": alleen als ze genoeg opleveren per voertuig per uur, '
@@ -10617,7 +10617,7 @@ MKS.module({
             'crashtender': 'arff', 'afo/osc': 'elw_airport', 'bootaanhanger (woa of ba-rb)': 'boats', 'verkenningseenheden': 'gwmess',
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
-            'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse',
+            'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse', 'bereden brigade eenheden (paarden)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
             'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
@@ -10674,7 +10674,8 @@ MKS.module({
         };
 
         // Lower case, no " - ", and the long words the game abbreviates in type names.
-        const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').trim()
+        // "DB-BO, TS-BO or BOH-DC": the game sometimes writes "or" for "of".
+        const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').replace(/ or /g, ' of ').trim()
             .replace(/^dienstbus\b/, 'db').replace(/^dienstauto\b/, 'da').replace(/^dienstmotor\b/, 'dm');
         const VT_BY_NAME = new Map(Object.entries(VT_NAMES).map(([n, id]) => [normName(n), id]));
 
@@ -11043,8 +11044,11 @@ MKS.module({
                         const t = p.textContent.replace(/\s+/g, ' ').trim();
                         // "We missen: 34000 L. water"
                         const amount = t.match(/([\d.]+)\s*l\.?\s*(water|svm|schuim)/i);
+                        // "We missen: Pomp Capaciteit: 2.000"
+                        const pump = t.match(/pomp\s*capaciteit:?\s*([\d.]+)/i);
                         if (PRISONERS.test(t)) addPrisonerCar(plan);
                         else if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
+                        else if (pump) plan.slots.water_damage_pump_value = (plan.slots.water_damage_pump_value || 0) + Number(pump[1].replace(/\./g, ''));
                         else if (amount) {
                             const k = /water/i.test(amount[2]) ? 'wasser_amount' : 'foam_amount';
                             plan.slots[k] = (plan.slots[k] || 0) + Number(amount[1].replace(/\./g, ''));
@@ -11056,6 +11060,17 @@ MKS.module({
                     }
                 }
 
+                // The red box of an Interfacilitair Transport asks for "1 Ambulance" too: its
+                // patient needs the MICU, so the ambulance slot becomes that vehicle.
+                if (job.patientVt) {
+                    for (const k of ['rtw', 'ktw_or_rtw', 'any_rtw']) {
+                        if (!plan.slots[k]) continue;
+                        plan.vt = { ...plan.vt, [job.patientVt]: Math.max((plan.vt || {})[job.patientVt] || 0, plan.slots[k]) };
+                        plan.slots = { ...plan.slots };
+                        delete plan.slots[k];
+                        plan.vtCaptions = { ...(plan.vtCaptions || {}), [job.patientVt]: 'MICU' };
+                    }
+                }
                 const attrs = { ...plan.slots };
                 if (job.patients) {
                     const m = (document.getElementById('patient_button_text')?.textContent || '').match(/(\d+)\s+onbehandelde/i);
@@ -11966,14 +11981,13 @@ MKS.module({
             // the way are only waiting, so send them back to their posts. Patient units
             // (ambulances, OvD-G, MMT, Lifeliner, rapid responders) stay. Missions with
             // arrestants are left alone: the police cars there carry them.
-            const PATIENT_VT = new Set(Object.entries(VT_NAMES)
+            const KEEP_ON_SCENE = new Set(Object.entries(VT_NAMES)
                 .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
             const sentBack = new Map(); // mission id -> when we last looked
-            // A full bar is not enough: a red (progress-bar-danger) bar is also 100% wide when
-            // units are missing (Rietkapbrand, 8 TS short, had 40 units sent back). Only a
-            // full bar that is not red counts as done.
-            const isDone = (bar) => !!bar && parseFloat(bar.style.width) >= 100
-                && !/progress-bar-(danger|warning)/.test(bar.className) && /progress-bar-success/.test(bar.className);
+            // The bar shows the work still to do: 100% = not started, 0% = done. A mission
+            // whose bar is at 0% and is still open only waits for its patients (Brand in
+            // hotel: 0%, 6 ambulances on the way). An empty width (just created) is not 0%.
+            const isDone = (bar) => !!bar && /^\s*0(\.0+)?%\s*$/.test(bar.style.width || '');
             async function sendBackDone() {
                 if (!ctx.cfg.sendBack) return;
                 const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
@@ -11998,7 +12012,7 @@ MKS.module({
                         const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
                             .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
                                 name: (tr.querySelector('a[href^="/vehicles/"]')?.textContent || '').trim() }))
-                            .filter((x) => x.a && x.vt && !PATIENT_VT.has(x.vt));
+                            .filter((x) => x.a && x.vt && !KEEP_ON_SCENE.has(x.vt));
                         if (!back.length) continue;
                         for (const x of back) {
                             await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
@@ -12146,7 +12160,7 @@ MKS.module({
                     .filter((x) => x.km <= (AIR_TYPES.has(x.c.getAttribute('vehicle_type_id')) ? ctx.cfg.airKm : ctx.cfg.maxKm))
                     .sort((a, b) => a.km - b.km);
                 const best = fits[0];
-                if (!best) return null;
+                if (!best) return { noFit: true };
                 // Same check-and-mark as the windows (claimCars): never the same car twice.
                 avoidCars();
                 if (recentCars.has(best.c.value)) return null;
@@ -12197,12 +12211,20 @@ MKS.module({
                             // does not fit, the hidden window as before.
                             let res = null;
                             // A patient-only mission (no vehicle requirements) needs its ambulance.
-                            const dp = top ? topUpPlan(entry) || { slots: {}, vt: {} }
+                            const pvt = PATIENT_VT[entry.getAttribute('mission_type_id')];
+                            const tp = top ? topUpPlan(entry) || { slots: {}, vt: {} } : null;
+                            // A MICU mission's red box also says "Ambulance": send the MICU.
+                            if (tp && pvt) for (const k of ['rtw', 'ktw_or_rtw']) if (tp.slots[k]) { tp.vt = { ...tp.vt, [pvt]: tp.slots[k] }; delete tp.slots[k]; }
+                            const dp = top ? tp
                                 : quickUnitsOf(p) ? p
                                     : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
                                     : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
                             try { res = await directSend(id, dp); } catch (x) { res = null; }
-                            if (!res) res = await quickJob(true);
+                            // Nothing fitting among the nearest: one window with the full list, not
+                            // a quick one first (521 "te weinig: 1 Ambulance" a night, two windows each).
+                            const noFit = res && res.noFit;
+                            if (noFit) res = null;
+                            if (!res) res = await quickJob(!noFit);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
@@ -14330,7 +14352,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011010906' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011103504' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14470,7 +14492,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011010906',
+                version: '1.7.0.20261011103504',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

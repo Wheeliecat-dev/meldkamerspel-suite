@@ -87,8 +87,8 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
-            help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+            help: 'Is de voortgangsbalk van een inzet leeg (0%, het werk is gedaan) en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'planned', label: 'Geplande inzetten meedoen', type: 'bool', default: true,
             help: 'Bewakingen en evenementen uit de lijst "Geplande inzetten": alleen als ze genoeg opleveren per voertuig per uur, '
@@ -1551,14 +1551,13 @@ MKS.module({
             // the way are only waiting, so send them back to their posts. Patient units
             // (ambulances, OvD-G, MMT, Lifeliner, rapid responders) stay. Missions with
             // arrestants are left alone: the police cars there carry them.
-            const PATIENT_VT = new Set(Object.entries(VT_NAMES)
+            const KEEP_ON_SCENE = new Set(Object.entries(VT_NAMES)
                 .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
             const sentBack = new Map(); // mission id -> when we last looked
-            // A full bar is not enough: a red (progress-bar-danger) bar is also 100% wide when
-            // units are missing (Rietkapbrand, 8 TS short, had 40 units sent back). Only a
-            // full bar that is not red counts as done.
-            const isDone = (bar) => !!bar && parseFloat(bar.style.width) >= 100
-                && !/progress-bar-(danger|warning)/.test(bar.className) && /progress-bar-success/.test(bar.className);
+            // The bar shows the work still to do: 100% = not started, 0% = done. A mission
+            // whose bar is at 0% and is still open only waits for its patients (Brand in
+            // hotel: 0%, 6 ambulances on the way). An empty width (just created) is not 0%.
+            const isDone = (bar) => !!bar && /^\s*0(\.0+)?%\s*$/.test(bar.style.width || '');
             async function sendBackDone() {
                 if (!ctx.cfg.sendBack) return;
                 const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
@@ -1583,7 +1582,7 @@ MKS.module({
                         const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
                             .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
                                 name: (tr.querySelector('a[href^="/vehicles/"]')?.textContent || '').trim() }))
-                            .filter((x) => x.a && x.vt && !PATIENT_VT.has(x.vt));
+                            .filter((x) => x.a && x.vt && !KEEP_ON_SCENE.has(x.vt));
                         if (!back.length) continue;
                         for (const x of back) {
                             await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
