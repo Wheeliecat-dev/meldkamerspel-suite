@@ -651,7 +651,10 @@ MKS.module({
                     const amb = Math.max(Number(attrs.rtw) || 0, pNeed.amb, mode === 'full' ? untreated : 0);
                     if (job.patientVt) {
                         // Its patient needs that vehicle (a MICU), not an ambulance.
-                        if (amb) plan.vt[job.patientVt] = Math.max(plan.vt[job.patientVt] || 0, amb);
+                        if (amb) {
+                            plan.vt = { ...plan.vt, [job.patientVt]: Math.max((plan.vt || {})[job.patientVt] || 0, amb) };
+                            plan.vtCaptions = { ...(plan.vtCaptions || {}), [job.patientVt]: 'MICU' }; // else the game says "te weinig: 1 undefined"
+                        }
                         delete attrs.rtw;
                     } else if (amb) attrs.rtw = amb;
                     // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
@@ -1801,6 +1804,11 @@ MKS.module({
                             const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
                             recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
                                 result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
+                            // A mission it just sent stays "open" in the list until its patient is
+                            // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
+                            // minutes instead of opening it again every minute.
+                            if (res.result === 'sent' || res.result === 'unconfirmed') tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) tried.set(id, Date.now() + 10 * 60000 - ctx.cfg.retryMin * 60000);
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
@@ -1812,7 +1820,7 @@ MKS.module({
                                 recordResult(res, id, name);
                                 addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
                             } else if (res.result === 'wait') {
-                                tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                                // backoff set above
                             } else {
                                 stats.errors++;
                                 addLog(name, `snel fout: ${res.reason}`, 'error');
