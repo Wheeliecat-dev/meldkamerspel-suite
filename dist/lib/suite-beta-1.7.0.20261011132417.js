@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011094216 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011132417 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011094216';
+    const VERSION = '1.7.0.20261011132417';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10517,8 +10517,8 @@ MKS.module({
         { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: false,
-            help: 'Staat de voortgangsbalk van een inzet op 100% en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
+        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+            help: 'Is de voortgangsbalk van een inzet leeg (0%, het werk is gedaan) en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
         { key: 'planned', label: 'Geplande inzetten meedoen', type: 'bool', default: true,
             help: 'Bewakingen en evenementen uit de lijst "Geplande inzetten": alleen als ze genoeg opleveren per voertuig per uur, '
@@ -11081,7 +11081,10 @@ MKS.module({
                     const amb = Math.max(Number(attrs.rtw) || 0, pNeed.amb, mode === 'full' ? untreated : 0);
                     if (job.patientVt) {
                         // Its patient needs that vehicle (a MICU), not an ambulance.
-                        if (amb) plan.vt[job.patientVt] = Math.max(plan.vt[job.patientVt] || 0, amb);
+                        if (amb) {
+                            plan.vt = { ...plan.vt, [job.patientVt]: Math.max((plan.vt || {})[job.patientVt] || 0, amb) };
+                            plan.vtCaptions = { ...(plan.vtCaptions || {}), [job.patientVt]: 'MICU' }; // else the game says "te weinig: 1 undefined"
+                        }
                         delete attrs.rtw;
                     } else if (amb) attrs.rtw = amb;
                     // Only a real OvD-G (kdow_orgl) counts for patients: with kdow_orgl_any a
@@ -11981,14 +11984,13 @@ MKS.module({
             // the way are only waiting, so send them back to their posts. Patient units
             // (ambulances, OvD-G, MMT, Lifeliner, rapid responders) stay. Missions with
             // arrestants are left alone: the police cars there carry them.
-            const PATIENT_VT = new Set(Object.entries(VT_NAMES)
+            const KEEP_ON_SCENE = new Set(Object.entries(VT_NAMES)
                 .filter(([n]) => /ambulance|lifeliner|mmt|geneesk|rapid responder|\bnht\b|\bggb\b/i.test(n)).map(([, id]) => String(id)));
             const sentBack = new Map(); // mission id -> when we last looked
-            // A full bar is not enough: a red (progress-bar-danger) bar is also 100% wide when
-            // units are missing (Rietkapbrand, 8 TS short, had 40 units sent back). Only a
-            // full bar that is not red counts as done.
-            const isDone = (bar) => !!bar && parseFloat(bar.style.width) >= 100
-                && !/progress-bar-(danger|warning)/.test(bar.className) && /progress-bar-success/.test(bar.className);
+            // The bar shows the work still to do: 100% = not started, 0% = done. A mission
+            // whose bar is at 0% and is still open only waits for its patients (Brand in
+            // hotel: 0%, 6 ambulances on the way). An empty width (just created) is not 0%.
+            const isDone = (bar) => !!bar && /^\s*0(\.0+)?%\s*$/.test(bar.style.width || '');
             async function sendBackDone() {
                 if (!ctx.cfg.sendBack) return;
                 const done = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')].filter((e) => {
@@ -12013,7 +12015,7 @@ MKS.module({
                         const back = [...doc.querySelectorAll('#mission_vehicle_at_mission tbody tr, #mission_vehicle_driving tbody tr')]
                             .map((tr) => ({ vt: tr.querySelector('a[vehicle_type_id]')?.getAttribute('vehicle_type_id'), a: tr.querySelector('a.btn-backalarm-ajax[href*="/backalarm"]'),
                                 name: (tr.querySelector('a[href^="/vehicles/"]')?.textContent || '').trim() }))
-                            .filter((x) => x.a && x.vt && !PATIENT_VT.has(x.vt));
+                            .filter((x) => x.a && x.vt && !KEEP_ON_SCENE.has(x.vt));
                         if (!back.length) continue;
                         for (const x of back) {
                             await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
@@ -12232,6 +12234,11 @@ MKS.module({
                             const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
                             recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
                                 result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
+                            // A mission it just sent stays "open" in the list until its patient is
+                            // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
+                            // minutes instead of opening it again every minute.
+                            if (res.result === 'sent' || res.result === 'unconfirmed') tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) tried.set(id, Date.now() + (top ? 2 : 10) * 60000 - ctx.cfg.retryMin * 60000); // a top-up looks again soon
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
@@ -12243,7 +12250,7 @@ MKS.module({
                                 recordResult(res, id, name);
                                 addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
                             } else if (res.result === 'wait') {
-                                tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                                // backoff set above
                             } else {
                                 stats.errors++;
                                 addLog(name, `snel fout: ${res.reason}`, 'error');
@@ -14353,7 +14360,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011094216' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011132417' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14493,7 +14500,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011094216',
+                version: '1.7.0.20261011132417',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

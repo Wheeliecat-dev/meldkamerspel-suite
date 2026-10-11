@@ -1808,7 +1808,7 @@ MKS.module({
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
                             if (res.result === 'sent' || res.result === 'unconfirmed') tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
-                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) tried.set(id, Date.now() + 10 * 60000 - ctx.cfg.retryMin * 60000);
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) tried.set(id, Date.now() + (top ? 2 : 10) * 60000 - ctx.cfg.retryMin * 60000); // a top-up looks again soon
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
