@@ -1081,6 +1081,11 @@ MKS.module({
             try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch (e) { saved = null; }
             saved = saved || {};
             const tried = new Map(saved.tried || []); // mission id or v<vehicle id> -> time of last attempt
+            // The quick lane's own "leave it for a while" (after a send, or while units drive
+            // there). Kept apart from tried: when such a mission turns red (its patient needs an
+            // ambulance), the main round must not be held back too.
+            const quickHold = new Map();
+            const onQuickHold = (e) => { const t = quickHold.get(e.getAttribute('mission_id')); return !!t && t > Date.now(); };
             // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
             // Kept over reloads: our car may have left for a cell while the mission goes on.
             const teamDone = new Map(saved.teamJoined || []); // (teamDone of older versions is not trusted)
@@ -1356,7 +1361,7 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).filter((e) => !(ctx.cfg.quickLane && (isQuick(e) || isTopUp(e))))
+                }).filter((e) => !(ctx.cfg.quickLane && !onQuickHold(e) && (isQuick(e) || isTopUp(e))))
                     .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
@@ -1769,7 +1774,7 @@ MKS.module({
                     const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id], #mission_list_krankentransporte .missionSideBarEntry[mission_type_id]')].filter((e) => {
                         if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !e.closest('#mission_list_krankentransporte')) return false;
                         const t = tried.get(e.getAttribute('mission_id'));
-                        return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
+                        return (!t || now - t > ctx.cfg.retryMin * 60000) && !onQuickHold(e) && (isQuick(e) || isTopUp(e));
                     });
                     // Several hidden windows side by side, each taking the next mission from one
                     // queue (a few seconds apart so they do not load at the same moment).
@@ -1814,7 +1819,7 @@ MKS.module({
                             // a top-up still coming): no window for it now, look again later.
                             // (A top-up goes to its window anyway: Verzorgers go while others drive.)
                             if (res && res.busy && !top) {
-                                tried.set(id, Date.now() + 15 * 60000 - ctx.cfg.retryMin * 60000);
+                                quickHold.set(id, Date.now() + 15 * 60000);
                                 continue;
                             }
                             if (res && res.busy) res = null;
@@ -1828,8 +1833,8 @@ MKS.module({
                             // A mission it just sent stays "open" in the list until its patient is
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
-                            if (res.result === 'sent' || res.result === 'unconfirmed') tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
-                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) tried.set(id, Date.now() + (top ? 2 : 10) * 60000 - ctx.cfg.retryMin * 60000); // a top-up looks again soon
+                            if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + (top ? 2 : 10) * 60000); // a top-up looks again soon
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());

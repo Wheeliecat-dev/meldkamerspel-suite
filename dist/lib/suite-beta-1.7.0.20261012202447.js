@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012105249 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012202447 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261012105249';
+    const VERSION = '1.7.0.20261012202447';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11696,7 +11696,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v6'; // v6: guards, care flags, patient-only and Zorgambulance missions stored next to it
+            const DATA_KEY = 'mks.autoDispatch.missions.v7'; // v7: guards, care flags, patient-only, Zorgambulance and patient-from-start missions
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -11727,6 +11727,11 @@ MKS.module({
             try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch (e) { saved = null; }
             saved = saved || {};
             const tried = new Map(saved.tried || []); // mission id or v<vehicle id> -> time of last attempt
+            // The quick lane's own "leave it for a while" (after a send, or while units drive
+            // there). Kept apart from tried: when such a mission turns red (its patient needs an
+            // ambulance), the main round must not be held back too.
+            const quickHold = new Map();
+            const onQuickHold = (e) => { const t = quickHold.get(e.getAttribute('mission_id')); return !!t && t > Date.now(); };
             // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
             // Kept over reloads: our car may have left for a cell while the mission goes on.
             const teamDone = new Map(saved.teamJoined || []); // (teamDone of older versions is not trusted)
@@ -11929,6 +11934,9 @@ MKS.module({
                     // Klaplong, …). How many ambulances at least.
                     if (e.additional && e.additional.possible_patient && !Object.keys(e.requirements || {}).length) care[`p:${e.id}`] = e.additional.possible_patient_min || 1;
                     if (e.additional && e.additional.allow_ktw_instead_of_rtw) care[`k:${e.id}`] = 1; // a Zorgambulance may go too
+                    // Always a patient from the start next to other requirements (Acute buikpijn
+                    // door stomp: 1 police car + 1 patient): an ambulance has to go along.
+                    if (e.additional && e.additional.possible_patient_min && !e.additional.patient_at_end_of_mission && Object.keys(e.requirements || {}).length) care[`m:${e.id}`] = e.additional.possible_patient_min;
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -11999,7 +12007,7 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).filter((e) => !(ctx.cfg.quickLane && (isQuick(e) || isTopUp(e))))
+                }).filter((e) => !(ctx.cfg.quickLane && !onQuickHold(e) && (isQuick(e) || isTopUp(e))))
                     .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
@@ -12355,7 +12363,9 @@ MKS.module({
              * driving or on scene, a hold, nothing near enough) returns null and the hidden
              * window handles it as before. */
             const AIR_TYPES = new Set(['23', '28', '80', '85']);
-            async function directSend(id, p) {
+            async function directSend(id, p, entry) {
+                // A mission that always has a patient besides its car: the window sends both.
+                if (entry && careTypes[`m:${keyOf(entry)}`] && !(p.slots.rtw || p.slots.ktw_or_rtw)) return null;
                 const keys = Object.entries(p.slots).filter(([k, v]) => v > 0 && !/_amount$|_value$/.test(k));
                 const vts = Object.entries(p.vt).filter(([, v]) => v > 0);
                 if (keys.length + vts.length !== 1) return null;
@@ -12366,7 +12376,13 @@ MKS.module({
                 const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
                 if (!r.ok) return null;
                 const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return null;
+                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return { busy: true };
+                // Patients on a mission that also needs a police car or fire engine: they need an
+                // ambulance too, and the window adds one per untreated patient. Only a mission
+                // that is nothing but its patient (one ambulance) goes direct.
+                const patients = doc.querySelectorAll('.mission_patient').length;
+                if (patients && !(key === 'rtw' || key === 'ktw_or_rtw' || vtId)) return null;
+                if (patients > 1) return null;
                 const form = [...doc.forms].find((f) => /\/missions\/\d+\/alarm$/.test(f.getAttribute('action') || ''));
                 if (!form) return null;
                 const avoid = new Set(avoidCars());
@@ -12404,7 +12420,7 @@ MKS.module({
                     const list = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id], #mission_list_krankentransporte .missionSideBarEntry[mission_type_id]')].filter((e) => {
                         if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !e.closest('#mission_list_krankentransporte')) return false;
                         const t = tried.get(e.getAttribute('mission_id'));
-                        return (!t || now - t > ctx.cfg.retryMin * 60000) && (isQuick(e) || isTopUp(e));
+                        return (!t || now - t > ctx.cfg.retryMin * 60000) && !onQuickHold(e) && (isQuick(e) || isTopUp(e));
                     });
                     // Several hidden windows side by side, each taking the next mission from one
                     // queue (a few seconds apart so they do not load at the same moment).
@@ -12440,11 +12456,19 @@ MKS.module({
                                 : quickUnitsOf(p) ? p
                                     : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
                                     : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
-                            try { res = await directSend(id, dp); } catch (x) { res = null; }
+                            try { res = await directSend(id, dp, entry); } catch (x) { res = null; }
                             // Nothing fitting among the nearest: one window with the full list, not
                             // a quick one first (521 "te weinig: 1 Ambulance" a night, two windows each).
                             const noFit = res && res.noFit;
                             if (noFit) res = null;
+                            // Units already on the way or on scene (a Besteld vervoer being transported,
+                            // a top-up still coming): no window for it now, look again later.
+                            // (A top-up goes to its window anyway: Verzorgers go while others drive.)
+                            if (res && res.busy && !top) {
+                                quickHold.set(id, Date.now() + 15 * 60000);
+                                continue;
+                            }
+                            if (res && res.busy) res = null;
                             if (!res) res = await quickJob(!noFit);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
@@ -12455,8 +12479,8 @@ MKS.module({
                             // A mission it just sent stays "open" in the list until its patient is
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
-                            if (res.result === 'sent' || res.result === 'unconfirmed') tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
-                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) tried.set(id, Date.now() + (top ? 2 : 10) * 60000 - ctx.cfg.retryMin * 60000); // a top-up looks again soon
+                            if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + (top ? 2 : 10) * 60000); // a top-up looks again soon
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
@@ -14606,7 +14630,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012105249' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012202447' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14748,7 +14772,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261012105249',
+                version: '1.7.0.20261012202447',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
