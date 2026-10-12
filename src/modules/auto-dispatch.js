@@ -1086,6 +1086,9 @@ MKS.module({
             // ambulance), the main round must not be held back too.
             const quickHold = new Map();
             const onQuickHold = (e) => { const t = quickHold.get(e.getAttribute('mission_id')); return !!t && t > Date.now(); };
+            // How often in a row the quick lane found nothing to send: each time it waits twice
+            // as long (10, 20, 40, 60 min). A sent Besteld vervoer can stay open for hours.
+            const quickEmpty = new Map();
             // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
             // Kept over reloads: our car may have left for a cell while the mission goes on.
             const teamDone = new Map(saved.teamJoined || []); // (teamDone of older versions is not trusted)
@@ -1840,7 +1843,13 @@ MKS.module({
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
                             if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
-                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + (top ? 2 : 10) * 60000); // a top-up looks again soon
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) {
+                                const k = quickEmpty.get(id) || 0;
+                                quickEmpty.set(id, k + 1);
+                                quickHold.set(id, Date.now() + (top ? 2 : Math.min(60, 10 * 2 ** k)) * 60000); // a top-up looks again soon
+                            }
+                            if (res.result === 'sent' || res.result === 'unconfirmed') quickEmpty.delete(id);
+                            if (quickEmpty.size > 2000) quickEmpty.clear();
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
