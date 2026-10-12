@@ -1720,7 +1720,7 @@ MKS.module({
                 const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
                 if (!r.ok) return null;
                 const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return null;
+                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return { busy: true };
                 const form = [...doc.forms].find((f) => /\/missions\/\d+\/alarm$/.test(f.getAttribute('action') || ''));
                 if (!form) return null;
                 const avoid = new Set(avoidCars());
@@ -1799,6 +1799,14 @@ MKS.module({
                             // a quick one first (521 "te weinig: 1 Ambulance" a night, two windows each).
                             const noFit = res && res.noFit;
                             if (noFit) res = null;
+                            // Units already on the way or on scene (a Besteld vervoer being transported,
+                            // a top-up still coming): no window for it now, look again later.
+                            // (A top-up goes to its window anyway: Verzorgers go while others drive.)
+                            if (res && res.busy && !top) {
+                                tried.set(id, Date.now() + 15 * 60000 - ctx.cfg.retryMin * 60000);
+                                continue;
+                            }
+                            if (res && res.busy) res = null;
                             if (!res) res = await quickJob(!noFit);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);

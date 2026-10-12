@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012080607 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012184538 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261012080607';
+    const VERSION = '1.7.0.20261012184538';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10834,6 +10834,8 @@ MKS.module({
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
             'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse', 'bereden brigade eenheden (paarden)': 'police_horse',
+            // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
+            'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
             'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
@@ -12364,7 +12366,7 @@ MKS.module({
                 const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
                 if (!r.ok) return null;
                 const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return null;
+                if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return { busy: true };
                 const form = [...doc.forms].find((f) => /\/missions\/\d+\/alarm$/.test(f.getAttribute('action') || ''));
                 if (!form) return null;
                 const avoid = new Set(avoidCars());
@@ -12443,6 +12445,14 @@ MKS.module({
                             // a quick one first (521 "te weinig: 1 Ambulance" a night, two windows each).
                             const noFit = res && res.noFit;
                             if (noFit) res = null;
+                            // Units already on the way or on scene (a Besteld vervoer being transported,
+                            // a top-up still coming): no window for it now, look again later.
+                            // (A top-up goes to its window anyway: Verzorgers go while others drive.)
+                            if (res && res.busy && !top) {
+                                tried.set(id, Date.now() + 15 * 60000 - ctx.cfg.retryMin * 60000);
+                                continue;
+                            }
+                            if (res && res.busy) res = null;
                             if (!res) res = await quickJob(!noFit);
                             // Nothing near enough in the short list: try once more with all vehicles loaded.
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
@@ -14604,7 +14614,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012080607' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012184538' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14746,7 +14756,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261012080607',
+                version: '1.7.0.20261012184538',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
