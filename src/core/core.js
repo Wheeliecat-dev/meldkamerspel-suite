@@ -956,5 +956,33 @@ const MKS = (() => {
         W.mksSuite = { open: ui.open, modules: defs.map((d) => d.id) };
     }
 
-    return { module, boot, esc, nl, W, IS_TOP };
+    /* ------------------------------------------------------------------------
+     * REMOTE OFF SWITCH — a file named STOP in the Log naar GitHub repository
+     * (same repo and token) stops the automation modules on every computer
+     * that runs them, at their next round. Delete the file to allow a restart.
+     * Checked at most once a minute; no token or repo = never stopped.
+     * ---------------------------------------------------------------------- */
+    let stopCache = { at: 0, val: false };
+    function remoteStop() {
+        if (Date.now() - stopCache.at < 60000) return Promise.resolve(stopCache.val);
+        const token = GM_getValue('mks.logGithub.token', '');
+        const repo = String((state.settings['log-github'] || {}).repo || '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\/$/, '');
+        if (!token || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return Promise.resolve(false);
+        return new Promise((resolve) => {
+            const done = (val) => { stopCache = { at: Date.now(), val }; resolve(val); };
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: `https://api.github.com/repos/${repo}/contents/STOP?t=${Date.now()}`,
+                    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+                    timeout: 15000,
+                    onload: (r) => done(r.status === 200),
+                    onerror: () => done(false),
+                    ontimeout: () => done(false),
+                });
+            } catch (e) { done(false); }
+        });
+    }
+
+    return { module, boot, esc, nl, W, IS_TOP, remoteStop };
 })();

@@ -1350,7 +1350,7 @@ MKS.module({
         // Spots built on in the last 30 minutes: the API can take a while to list the new
         // building, and without this the next round could build on the same post again.
         function recentSpots() {
-            state.recentSpots = (state.recentSpots || []).filter((x) => Date.now() - x[2] < 30 * 60000);
+            state.recentSpots = (state.recentSpots || []).filter((x) => Date.now() - x[2] < (x[4] || 30 * 60000));
             return state.recentSpots.map((x) => [x[0], x[1]]);
         }
         // A city name -> its centre and outline box (OpenStreetMap Nominatim), kept for a week.
@@ -1467,9 +1467,13 @@ MKS.module({
             const cat = opts.cat || CAT_OF[type];
             if (!cat) return { skip: `${c.name}: geen echte post voor gebouwtype ${type}` };
             const owned = [...data.buildings.map(posOf), ...recentSpots()];
+            // Also by name: a building is named after its post, so the same name means built.
+            const names = new Set(data.buildings.map((b) => norm(b.caption || '')));
+            const nameOf = (p) => (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${p[3]}` : p[3]);
             const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
                 .map((p) => ({ p, d: km([p[0], p[1]], c.at) }))
-                .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3))
+                .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3)
+                    && !names.has(norm(x.p[3] || '')) && !names.has(norm(nameOf(x.p) || '')))
                 .sort((a, b) => a.d - b.d);
             if (!posts.length) return { skip: `${c.name}: geen vrije echte post binnen ${maxKm} km` };
             const post = posts[0].p;
@@ -1481,7 +1485,16 @@ MKS.module({
             const cost = num(btn.value);
             return {
                 label: `nieuw gebouw "${bname}" (${posts[0].d.toFixed(1)} km, ${why})`, cost, newBuilding: true,
-                run: () => {
+                run: async () => {
+                    // Right before buying, the building list fresh from the game: another tab or
+                    // another computer running this script may have built here meanwhile.
+                    const fresh = await api('/api/buildings');
+                    const there = fresh.find((b) => km(posOf(b), [post[0], post[1]]) < 0.3 || norm(b.caption || '') === norm(bname));
+                    if (there) {
+                        state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2], 24 * 3600000]];
+                        save();
+                        throw new Error(`niet gekocht: "${there.caption}" staat al op deze plek`);
+                    }
                     const fd = new FormData(form);
                     fd.set('building[building_type]', String(type));
                     fd.set('building[name]', bname);
@@ -1491,9 +1504,16 @@ MKS.module({
                     const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
-                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2]]];
+                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2], 30 * 60000]];
                     save(); // a reload during the purchase must not lose it
                     return hit('/buildings', new URLSearchParams(fd));
+                },
+                // "Niet gelukt" may still have bought it (the list can lag for minutes): never
+                // build on this spot again for a day.
+                onFail: async () => {
+                    state.recentSpots = (state.recentSpots || []).map((x) => (x[0] === post[0] && x[1] === post[1] ? [x[0], x[1], Date.now(), x[3], 24 * 3600000] : x));
+                    save();
+                    return { note: 'misschien toch gebouwd (de gebouwenlijst loopt achter): deze plek wordt 24 uur overgeslagen' };
                 },
                 // One building more than before (the price check failed for the VWS-post,
                 // which always costs 100,000). The API can lag, so look a few times.
@@ -1604,6 +1624,13 @@ MKS.module({
                 ctx.status(`Draait al in een ander tabblad${who}. Nieuwe poging over 40 seconden.`, { tone: 'warn' });
                 addLog(`wacht op ander tabblad${who}`, 'warn');
                 setTimeout(() => { if (!stopped) round(); }, 40000);
+                return;
+            }
+            if (await MKS.remoteStop()) {
+                stopped = true;
+                addLog('gestopt op afstand: STOP-bestand in je log-repository (verwijder het en zet de module uit en aan om verder te gaan)', 'error');
+                ctx.status('Gestopt op afstand (STOP-bestand in je log-repository).', { tone: 'error' });
+                save();
                 return;
             }
             busy = true;

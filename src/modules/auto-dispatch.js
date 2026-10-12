@@ -1920,6 +1920,7 @@ MKS.module({
 
             async function cycle() {
                 if (!running || busy || stopped) return;
+                if (await MKS.remoteStop()) { stop('Gestopt op afstand: STOP-bestand in je log-repository.'); return; }
                 if (reloadWanted) { reloadWhenIdle(); return; }
                 busy = true;
                 try {

@@ -5,7 +5,9 @@ MKS.module({
     icon: '📤',
     category: 'auto',
     description: 'Zet elk uur (instelbaar) de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
-        + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel.',
+        + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel. '
+        + 'Op afstand stoppen: zet een bestand met de naam STOP in die repository (bijv. via de GitHub-app). Automatisch alarmeren en '
+        + 'Automatisch uitbreiden stoppen dan binnen een paar minuten, op elke computer. Verwijder het bestand om weer te kunnen starten.',
     at: 'ready',
     frames: 'top',
     live: true,
