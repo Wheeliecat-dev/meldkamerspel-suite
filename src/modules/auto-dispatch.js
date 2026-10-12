@@ -794,7 +794,7 @@ MKS.module({
                 const big = job.bigPatients > 0 && patientCount > job.bigPatients;
                 const ignored = (job.ignoreShort || []).map((n) => n.toLowerCase());
                 const blocking = [...String(shortage).matchAll(/beschikbaar:\s*\d+\s+([^.\n]+)/gi)]
-                    .map((m) => m[1].trim()).filter((n) => !ignored.includes(n.toLowerCase()) && !(big && /ambulance/i.test(n)));
+                    .map((m) => m[1].trim()).filter((n) => !ignored.includes(n.toLowerCase()) && !((big || job.optionalAmb) && /ambulance/i.test(n)));
                 if (shortage && job.needAll && (blocking.length || !/beschikbaar:/i.test(shortage))) {
                     reset();
                     report('skip', { reason: `te weinig: ${fewer(shortage)} (de rest is er wel)`, shortText: shortage, avail, caps, want });
@@ -1050,7 +1050,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v7'; // v7: guards, care flags, patient-only, Zorgambulance and patient-from-start missions
+            const DATA_KEY = 'mks.autoDispatch.missions.v8'; // v8: guards, care flags, patient-only, Zorgambulance and possible-patient missions
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -1290,7 +1290,9 @@ MKS.module({
                     if (e.additional && e.additional.allow_ktw_instead_of_rtw) care[`k:${e.id}`] = 1; // a Zorgambulance may go too
                     // Always a patient from the start next to other requirements (Acute buikpijn
                     // door stomp: 1 police car + 1 patient): an ambulance has to go along.
-                    if (e.additional && e.additional.possible_patient_min && !e.additional.patient_at_end_of_mission && Object.keys(e.requirements || {}).length) care[`m:${e.id}`] = e.additional.possible_patient_min;
+                    // Also when the patient only comes at the end (Liftopsluiting): sending the
+                    // ambulance along is faster than waiting for it to be asked for.
+                    if (e.additional && e.additional.possible_patient && Object.keys(e.requirements || {}).length) care[`m:${e.id}`] = e.additional.possible_patient_min || 1;
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -1792,12 +1794,14 @@ MKS.module({
                             const name = titleOf(entry);
                             const top = isTopUp(entry);
                             const p = top ? { slots: {}, vt: {}, vtCaptions: {} } : plan(missions[keyOf(entry)]); // a top-up reads the red box itself
+                            const ambQ = !top && ctx.cfg.patients ? careTypes[`m:${keyOf(entry)}`] : 0;
+                            if (ambQ && !PATIENT_VT[entry.getAttribute('mission_type_id')]) p.slots.rtw = Math.max(Number(p.slots.rtw) || 0, ambQ);
                             tried.set(id, Date.now());
                             const quickJob = (fast) => runJob({ id, token: Date.now(), fast, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
-                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] });
+                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!ambQ });
                             // One unit: straight through the alarm form, no window. Else, or when that
                             // does not fit, the hidden window as before.
                             let res = null;
@@ -1978,6 +1982,9 @@ MKS.module({
                         // Care mission: one DB-VZ with the first wave, so the Verzorgers do not
                         // wait until the others have arrived and the red box asks for them.
                         if (r && careTypes[keyOf(entry)] && !p.slots.care_service) p.slots.care_service = 1;
+                        // Missions that (can) have a patient: their ambulance(s) along right away.
+                        const amb0 = r && ctx.cfg.patients ? careTypes[`m:${keyOf(entry)}`] : 0;
+                        if (amb0 && !PATIENT_VT[entry.getAttribute('mission_type_id')]) p.slots.rtw = Math.max(Number(p.slots.rtw) || 0, amb0);
                         // With a red box the worker sends only what that box lists, so
                         // unknown full requirements do not matter.
                         if (!r && !red) {
@@ -2000,7 +2007,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!amb0 });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
