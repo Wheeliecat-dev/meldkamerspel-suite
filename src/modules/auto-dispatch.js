@@ -1050,7 +1050,7 @@ MKS.module({
          * time to a hidden iframe.
          * ==================================================================== */
         function controller() {
-            const DATA_KEY = 'mks.autoDispatch.missions.v6'; // v6: guards, care flags, patient-only and Zorgambulance missions stored next to it
+            const DATA_KEY = 'mks.autoDispatch.missions.v7'; // v7: guards, care flags, patient-only, Zorgambulance and patient-from-start missions
             try { GM_deleteValue('mks.autoDispatch.missions.v1'); } catch (e) { /* ignore */ }
             const DATA_MS = 24 * 3600 * 1000;
 
@@ -1283,6 +1283,9 @@ MKS.module({
                     // Klaplong, …). How many ambulances at least.
                     if (e.additional && e.additional.possible_patient && !Object.keys(e.requirements || {}).length) care[`p:${e.id}`] = e.additional.possible_patient_min || 1;
                     if (e.additional && e.additional.allow_ktw_instead_of_rtw) care[`k:${e.id}`] = 1; // a Zorgambulance may go too
+                    // Always a patient from the start next to other requirements (Acute buikpijn
+                    // door stomp: 1 police car + 1 patient): an ambulance has to go along.
+                    if (e.additional && e.additional.possible_patient_min && !e.additional.patient_at_end_of_mission && Object.keys(e.requirements || {}).length) care[`m:${e.id}`] = e.additional.possible_patient_min;
                     // Towing missions have no requirements: the cars to tow are in
                     // "additional" (cars = Berger-K, trucks = Berger-G).
                     const r = { ...(e.requirements || {}) };
@@ -1709,7 +1712,9 @@ MKS.module({
              * driving or on scene, a hold, nothing near enough) returns null and the hidden
              * window handles it as before. */
             const AIR_TYPES = new Set(['23', '28', '80', '85']);
-            async function directSend(id, p) {
+            async function directSend(id, p, entry) {
+                // A mission that always has a patient besides its car: the window sends both.
+                if (entry && careTypes[`m:${keyOf(entry)}`] && !(p.slots.rtw || p.slots.ktw_or_rtw)) return null;
                 const keys = Object.entries(p.slots).filter(([k, v]) => v > 0 && !/_amount$|_value$/.test(k));
                 const vts = Object.entries(p.vt).filter(([, v]) => v > 0);
                 if (keys.length + vts.length !== 1) return null;
@@ -1721,6 +1726,12 @@ MKS.module({
                 if (!r.ok) return null;
                 const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
                 if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return { busy: true };
+                // Patients on a mission that also needs a police car or fire engine: they need an
+                // ambulance too, and the window adds one per untreated patient. Only a mission
+                // that is nothing but its patient (one ambulance) goes direct.
+                const patients = doc.querySelectorAll('.mission_patient').length;
+                if (patients && !(key === 'rtw' || key === 'ktw_or_rtw' || vtId)) return null;
+                if (patients > 1) return null;
                 const form = [...doc.forms].find((f) => /\/missions\/\d+\/alarm$/.test(f.getAttribute('action') || ''));
                 if (!form) return null;
                 const avoid = new Set(avoidCars());
@@ -1794,7 +1805,7 @@ MKS.module({
                                 : quickUnitsOf(p) ? p
                                     : PATIENT_VT[entry.getAttribute('mission_type_id')] ? { slots: {}, vt: { [PATIENT_VT[entry.getAttribute('mission_type_id')]]: 1 } }
                                     : { slots: { [careTypes[`k:${keyOf(entry)}`] ? 'ktw_or_rtw' : 'rtw']: Math.max(1, patientsOf(entry), careTypes[`p:${keyOf(entry)}`] || 0) }, vt: {} };
-                            try { res = await directSend(id, dp); } catch (x) { res = null; }
+                            try { res = await directSend(id, dp, entry); } catch (x) { res = null; }
                             // Nothing fitting among the nearest: one window with the full list, not
                             // a quick one first (521 "te weinig: 1 Ambulance" a night, two windows each).
                             const noFit = res && res.noFit;
