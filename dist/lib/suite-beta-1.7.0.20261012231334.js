@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012202547 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012231334 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261012202547';
+    const VERSION = '1.7.0.20261012231334';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10236,6 +10236,79 @@ MKS.module({
     },
 });
 
+/* ==== module: main-destinations =========================================== */
+MKS.module({
+    id: 'main-destinations',
+    name: 'Alleen ziekenhuizen en cellen van één speler',
+    icon: '🤝',
+    category: 'missions',
+    description: 'Voor een tweede account: patiënten en arrestanten gaan alleen naar de ziekenhuizen en cellen van één teamspeler (bijvoorbeeld je hoofdaccount). '
+        + 'Eigen gebouwen en die van andere teamleden worden overgeslagen. '
+        + 'Auto-alarmeren volgt dit bij elke spraakaanvraag en elke arrestant; in het voertuigvenster worden de andere bestemmingen grijs. '
+        + 'De eigenaar van een gebouw wordt één keer opgezocht (gebouwpagina, "Eigenaar") en onthouden.',
+    at: 'ready',
+    frames: 'all',
+    settings: [
+        { key: 'owner', label: 'Naam van de speler', type: 'text', default: '',
+            help: 'Precies zoals in het team (bijvoorbeeld de naam van je hoofdaccount).' },
+    ],
+
+    run(ctx) {
+        // Shared with Auto-alarmeren, which reads the same cache when it picks a destination.
+        const OWNERS = 'mks.mainDest.owners';
+        const owner = String(ctx.cfg.owner || '').trim();
+        const load = () => { try { return JSON.parse(GM_getValue(OWNERS, '{}')) || {}; } catch (e) { return {}; } };
+
+        async function ownerOf(bid) {
+            const cache = load();
+            if (bid in cache) return cache[bid];
+            const r = await fetch(`/buildings/${bid}`, { credentials: 'same-origin' });
+            if (!r.ok) return null;
+            const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+            const dt = [...d.querySelectorAll('dt')].find((e) => /Eigenaar/i.test(e.textContent));
+            const name = (dt?.nextElementSibling?.textContent || '').replace(/\s+/g, ' ').trim();
+            const now = load();
+            now[bid] = name;
+            GM_setValue(OWNERS, JSON.stringify(now));
+            return name;
+        }
+
+        // The vehicle window with a transport request: grey out what is not the player's.
+        if (/^\/vehicles\/\d+\/?$/.test(location.pathname)) {
+            if (!owner) return;
+            (async () => {
+                const links = [...document.querySelectorAll('a[href*="/patient/"]:not([href$="/-1"]), a[href*="/gefangener/"]:not([href$="/-1"])')];
+                for (const a of links) {
+                    const bid = (a.getAttribute('href').match(/\/(?:patient|gefangener)\/(\d+)/) || [])[1];
+                    if (!bid) continue;
+                    const o = await ownerOf(bid);
+                    if (String(o || '').toLowerCase() === owner.toLowerCase()) continue;
+                    const row = a.closest('tr') || a;
+                    row.style.opacity = '0.3';
+                    a.title = `Niet van ${owner}`;
+                }
+            })().catch((e) => ctx.err(e));
+            return;
+        }
+        if (window.top !== window) return;
+
+        ctx.panel((el) => {
+            const cache = load();
+            const all = Object.values(cache);
+            const theirs = owner ? all.filter((n) => n.toLowerCase() === owner.toLowerCase()).length : 0;
+            el.innerHTML = owner
+                ? `<p class="mks-note">Bestemmingen alleen van <b>${ctx.esc(owner)}</b>. Auto-alarmeren slaat de rest over; past er niets, dan blijft de spraakaanvraag staan
+                    (of wordt de patiënt/arrestant vrijgelaten als dat in Auto-alarmeren aan staat).</p>
+                    <p class="mks-note">${all.length} gebouwen opgezocht, waarvan ${theirs} van ${ctx.esc(owner)}.</p>`
+                : '<p class="mks-note">Vul bij de instellingen de naam van de speler in. Zonder naam doet deze module niets.</p>';
+        });
+        ctx.actions([
+            { label: 'Eigenaren opnieuw opzoeken', confirm: 'De onthouden eigenaren van gebouwen wissen?', run: () => { GM_setValue(OWNERS, '{}'); ctx.refresh(); } },
+        ]);
+        ctx.status(owner ? `Alleen bestemmingen van ${owner}` : 'Geen speler ingevuld', { tone: owner ? 'ok' : 'warn' });
+    },
+});
+
 /* ==== module: building-share ============================================== */
 MKS.module({
     id: 'building-share',
@@ -11054,7 +11127,7 @@ MKS.module({
                 }
 
                 const all = destinations();
-                const { best, why } = bestDestination(all, job);
+                const { best, why } = await pickDestination(all, job);
                 if (best) {
                     go(best.a, { mode: best.kind, dest: best.name, km: best.dist, cost: best.cost });
                     return;
@@ -11100,7 +11173,52 @@ MKS.module({
             const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? job.ownKm : 0);
             const short = (c) => (c.a.classList.contains('btn-warning') ? 1 : 0);
             const best = fit.sort((x, y) => short(x) - short(y) || x.cost - y.cost || rank(x) - rank(y))[0];
-            return { best, why };
+            return { best, why, fit };
+        }
+
+        // The module "Alleen ziekenhuizen en cellen van één speler" (a second account using
+        // its main account's beds and cells): of what fits, the best one owned by that player.
+        // Owners are looked up once on the building page ("Eigenaar") and shared with that module.
+        function mainDestOwner() {
+            try {
+                const st = JSON.parse(GM_getValue('mks.suite.v1', '{}')) || {};
+                return st.enabled && st.enabled['main-destinations'] ? String((st.settings && st.settings['main-destinations'] || {}).owner || '').trim() : '';
+            } catch (e) { return ''; }
+        }
+        async function buildingOwner(bid) {
+            const KEY = 'mks.mainDest.owners';
+            const load = () => { try { return JSON.parse(GM_getValue(KEY, '{}')) || {}; } catch (e) { return {}; } };
+            const cache = load();
+            if (bid in cache) return cache[bid];
+            const r = await fetch(`/buildings/${bid}`, { credentials: 'same-origin' });
+            if (!r.ok) return null;
+            const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+            const dt = [...d.querySelectorAll('dt')].find((e) => /Eigenaar/i.test(e.textContent));
+            const name = (dt && dt.nextElementSibling ? dt.nextElementSibling.textContent : '').replace(/\s+/g, ' ').trim();
+            const now = load();
+            now[bid] = name;
+            GM_setValue(KEY, JSON.stringify(now));
+            return name;
+        }
+        async function pickDestination(all, job) {
+            const { best, why, fit } = bestDestination(all, job);
+            const owner = mainDestOwner().toLowerCase();
+            if (!owner || !best) return { best, why };
+            const label = 'niet van de gekozen speler';
+            let lookups = 0;
+            for (const c of fit) {
+                const bid = ((c.a.getAttribute('href') || '').match(/\/(?:patient|gefangener)\/(\d+)/) || [])[1];
+                let o = '';
+                if (!c.own && bid) {
+                    const known = (() => { try { return JSON.parse(GM_getValue('mks.mainDest.owners', '{}'))[bid]; } catch (e) { return undefined; } })();
+                    if (known === undefined && lookups >= 15) continue; // stay within the window's time; the rest next time
+                    if (known === undefined) lookups++;
+                    o = known !== undefined ? known : await buildingOwner(bid);
+                }
+                if (String(o || '').toLowerCase() === owner) return { best: c, why };
+                why[label] = (why[label] || 0) + 1;
+            }
+            return { best: null, why };
         }
 
         // Destination rows, as the Bestemmingfilter module reads them. root: the
@@ -11215,7 +11333,7 @@ MKS.module({
                 // Arrestants on a car on scene: that car needs a cell, not another car
                 // sent. Does not wait for vehicles still driving.
                 const prisonerCars = [...document.querySelectorAll('.prison-select')].filter((b) => b.querySelector('a[href*="/gefangener/"]'));
-                if (prisonerCars.length) { prisonerCell(job, prisonerCars[0], report, doneKey); return; }
+                if (prisonerCars.length) { await prisonerCell(job, prisonerCars[0], report, doneKey); return; }
                 // Verzorgers and Arbeidshygiëne grow with the responders on scene, so the red
                 // box only asks for them once units arrive. Waiting for everything still driving
                 // before sending them left missions open a long time: send those now, unless
@@ -11636,7 +11754,7 @@ MKS.module({
             btn.click();
         }
 
-        function prisonerCell(job, block, report, doneKey) {
+        async function prisonerCell(job, block, report, doneKey) {
             // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
             const vid = block.getAttribute('data-vehicle-id');
             const car = clean(block.closest('tr')?.previousElementSibling?.querySelector(`a[href^="/vehicles/${vid}"]`)?.textContent || '')
@@ -11648,7 +11766,7 @@ MKS.module({
                 a.click();
             };
             const all = destinations(block);
-            const { best, why } = bestDestination(all, job);
+            const { best, why } = await pickDestination(all, job);
             if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
             const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
             const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';
@@ -11732,6 +11850,9 @@ MKS.module({
             // ambulance), the main round must not be held back too.
             const quickHold = new Map();
             const onQuickHold = (e) => { const t = quickHold.get(e.getAttribute('mission_id')); return !!t && t > Date.now(); };
+            // How often in a row the quick lane found nothing to send: each time it waits twice
+            // as long (10, 20, 40, 60 min). A sent Besteld vervoer can stay open for hours.
+            const quickEmpty = new Map();
             // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
             // Kept over reloads: our car may have left for a cell while the mission goes on.
             const teamDone = new Map(saved.teamJoined || []); // (teamDone of older versions is not trusted)
@@ -11877,8 +11998,10 @@ MKS.module({
                 eventsTimer = setTimeout(() => { try { GM_setValue(EVENTS_KEY, JSON.stringify(events)); } catch (x) { ctx.warn('events not saved', x); } }, 2000);
             }
             // Team missions and team events (#mission_list_alliance_event): both get one noodhulp.
-            const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id]';
-            const isEvent = (e) => !!e.closest('#mission_list_alliance_event');
+            // Also the team's planned missions (Geplande inzetten van het team): like an event,
+            // one noodhulp or ambulance, whichever free one is nearest.
+            const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id], #mission_list_sicherheitswache_alliance .missionSideBarEntry[mission_id]';
+            const isEvent = (e) => !!e.closest('#mission_list_alliance_event, #mission_list_sicherheitswache_alliance');
             W.mksAutoData = {
                 get needs() { return needs; },
                 get events() { return events; },
@@ -12484,7 +12607,13 @@ MKS.module({
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
                             if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
-                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + (top ? 2 : 10) * 60000); // a top-up looks again soon
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) {
+                                const k = quickEmpty.get(id) || 0;
+                                quickEmpty.set(id, k + 1);
+                                quickHold.set(id, Date.now() + (top ? 2 : Math.min(60, 10 * 2 ** k)) * 60000); // a top-up looks again soon
+                            }
+                            if (res.result === 'sent' || res.result === 'unconfirmed') quickEmpty.delete(id);
+                            if (quickEmpty.size > 2000) quickEmpty.clear();
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
@@ -14637,7 +14766,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012202547' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012231334' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14779,7 +14908,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261012202547',
+                version: '1.7.0.20261012231334',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
