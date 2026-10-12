@@ -1231,8 +1231,10 @@ MKS.module({
                 eventsTimer = setTimeout(() => { try { GM_setValue(EVENTS_KEY, JSON.stringify(events)); } catch (x) { ctx.warn('events not saved', x); } }, 2000);
             }
             // Team missions and team events (#mission_list_alliance_event): both get one noodhulp.
-            const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id]';
-            const isEvent = (e) => !!e.closest('#mission_list_alliance_event');
+            // Also the team's planned missions (Geplande inzetten van het team): like an event,
+            // one noodhulp or ambulance, whichever free one is nearest.
+            const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id], #mission_list_sicherheitswache_alliance .missionSideBarEntry[mission_id]';
+            const isEvent = (e) => !!e.closest('#mission_list_alliance_event, #mission_list_sicherheitswache_alliance');
             W.mksAutoData = {
                 get needs() { return needs; },
                 get events() { return events; },
