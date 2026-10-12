@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261011174138 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012105130 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261011174138';
+    const VERSION = '1.7.0.20261012105130';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -958,7 +958,35 @@ const MKS = (() => {
         W.mksSuite = { open: ui.open, modules: defs.map((d) => d.id) };
     }
 
-    return { module, boot, esc, nl, W, IS_TOP };
+    /* ------------------------------------------------------------------------
+     * REMOTE OFF SWITCH — a file named STOP in the Log naar GitHub repository
+     * (same repo and token) stops the automation modules on every computer
+     * that runs them, at their next round. Delete the file to allow a restart.
+     * Checked at most once a minute; no token or repo = never stopped.
+     * ---------------------------------------------------------------------- */
+    let stopCache = { at: 0, val: false };
+    function remoteStop() {
+        if (Date.now() - stopCache.at < 60000) return Promise.resolve(stopCache.val);
+        const token = GM_getValue('mks.logGithub.token', '');
+        const repo = String((state.settings['log-github'] || {}).repo || '').trim().replace(/^https:\/\/github\.com\//, '').replace(/\/$/, '');
+        if (!token || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return Promise.resolve(false);
+        return new Promise((resolve) => {
+            const done = (val) => { stopCache = { at: Date.now(), val }; resolve(val); };
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: `https://api.github.com/repos/${repo}/contents/STOP?t=${Date.now()}`,
+                    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+                    timeout: 15000,
+                    onload: (r) => done(r.status === 200),
+                    onerror: () => done(false),
+                    ontimeout: () => done(false),
+                });
+            } catch (e) { done(false); }
+        });
+    }
+
+    return { module, boot, esc, nl, W, IS_TOP, remoteStop };
 })();
 
 /* ==== module: dark-theme ================================================== */
@@ -10806,6 +10834,8 @@ MKS.module({
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
             'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse', 'bereden brigade eenheden (paarden)': 'police_horse',
+            // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
+            'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
             'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
@@ -12538,6 +12568,7 @@ MKS.module({
 
             async function cycle() {
                 if (!running || busy || stopped) return;
+                if (await MKS.remoteStop()) { stop('Gestopt op afstand: STOP-bestand in je log-repository.'); return; }
                 if (reloadWanted) { reloadWhenIdle(); return; }
                 busy = true;
                 try {
@@ -14176,7 +14207,7 @@ MKS.module({
         // Spots built on in the last 30 minutes: the API can take a while to list the new
         // building, and without this the next round could build on the same post again.
         function recentSpots() {
-            state.recentSpots = (state.recentSpots || []).filter((x) => Date.now() - x[2] < 30 * 60000);
+            state.recentSpots = (state.recentSpots || []).filter((x) => Date.now() - x[2] < (x[4] || 30 * 60000));
             return state.recentSpots.map((x) => [x[0], x[1]]);
         }
         // A city name -> its centre and outline box (OpenStreetMap Nominatim), kept for a week.
@@ -14293,9 +14324,13 @@ MKS.module({
             const cat = opts.cat || CAT_OF[type];
             if (!cat) return { skip: `${c.name}: geen echte post voor gebouwtype ${type}` };
             const owned = [...data.buildings.map(posOf), ...recentSpots()];
+            // Also by name: a building is named after its post, so the same name means built.
+            const names = new Set(data.buildings.map((b) => norm(b.caption || '')));
+            const nameOf = (p) => (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${p[3]}` : p[3]);
             const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
                 .map((p) => ({ p, d: km([p[0], p[1]], c.at) }))
-                .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3))
+                .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3)
+                    && !names.has(norm(x.p[3] || '')) && !names.has(norm(nameOf(x.p) || '')))
                 .sort((a, b) => a.d - b.d);
             if (!posts.length) return { skip: `${c.name}: geen vrije echte post binnen ${maxKm} km` };
             const post = posts[0].p;
@@ -14307,7 +14342,16 @@ MKS.module({
             const cost = num(btn.value);
             return {
                 label: `nieuw gebouw "${bname}" (${posts[0].d.toFixed(1)} km, ${why})`, cost, newBuilding: true,
-                run: () => {
+                run: async () => {
+                    // Right before buying, the building list fresh from the game: another tab or
+                    // another computer running this script may have built here meanwhile.
+                    const fresh = await api('/api/buildings');
+                    const there = fresh.find((b) => km(posOf(b), [post[0], post[1]]) < 0.3 || norm(b.caption || '') === norm(bname));
+                    if (there) {
+                        state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2], 24 * 3600000]];
+                        save();
+                        throw new Error(`niet gekocht: "${there.caption}" staat al op deze plek`);
+                    }
                     const fd = new FormData(form);
                     fd.set('building[building_type]', String(type));
                     fd.set('building[name]', bname);
@@ -14317,9 +14361,16 @@ MKS.module({
                     const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
-                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2]]];
+                    state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2], 30 * 60000]];
                     save(); // a reload during the purchase must not lose it
                     return hit('/buildings', new URLSearchParams(fd));
+                },
+                // "Niet gelukt" may still have bought it (the list can lag for minutes): never
+                // build on this spot again for a day.
+                onFail: async () => {
+                    state.recentSpots = (state.recentSpots || []).map((x) => (x[0] === post[0] && x[1] === post[1] ? [x[0], x[1], Date.now(), x[3], 24 * 3600000] : x));
+                    save();
+                    return { note: 'misschien toch gebouwd (de gebouwenlijst loopt achter): deze plek wordt 24 uur overgeslagen' };
                 },
                 // One building more than before (the price check failed for the VWS-post,
                 // which always costs 100,000). The API can lag, so look a few times.
@@ -14430,6 +14481,13 @@ MKS.module({
                 ctx.status(`Draait al in een ander tabblad${who}. Nieuwe poging over 40 seconden.`, { tone: 'warn' });
                 addLog(`wacht op ander tabblad${who}`, 'warn');
                 setTimeout(() => { if (!stopped) round(); }, 40000);
+                return;
+            }
+            if (await MKS.remoteStop()) {
+                stopped = true;
+                addLog('gestopt op afstand: STOP-bestand in je log-repository (verwijder het en zet de module uit en aan om verder te gaan)', 'error');
+                ctx.status('Gestopt op afstand (STOP-bestand in je log-repository).', { tone: 'error' });
+                save();
                 return;
             }
             busy = true;
@@ -14548,7 +14606,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261011174138' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012105130' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14624,7 +14682,9 @@ MKS.module({
     icon: '📤',
     category: 'auto',
     description: 'Zet elk uur (instelbaar) de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
-        + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel.',
+        + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel. '
+        + 'Op afstand stoppen: zet een bestand met de naam STOP in die repository (bijv. via de GitHub-app). Automatisch alarmeren en '
+        + 'Automatisch uitbreiden stoppen dan binnen een paar minuten, op elke computer. Verwijder het bestand om weer te kunnen starten.',
     at: 'ready',
     frames: 'top',
     live: true,
@@ -14688,7 +14748,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261011174138',
+                version: '1.7.0.20261012105130',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

@@ -188,6 +188,8 @@ MKS.module({
             'hondengeleider': 'hondengeleider', 'aanhoudingseenheden': 'detention_unit', 'siv-p of dm-p': 'traffic_patrol', 'db-voa': 'traffic_inspector',
             'at operators': 'at_o', 'at commandanten': 'at_c', 'at materiaalwagens': 'at_m',
             'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse', 'bereden brigade eenheden (paarden)': 'police_horse',
+            // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
+            'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
             'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
