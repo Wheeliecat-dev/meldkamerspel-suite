@@ -408,7 +408,7 @@ MKS.module({
                 }
 
                 const all = destinations();
-                const { best, why } = await pickDestination(all, job);
+                const { best, why } = bestDestination(all, job);
                 if (best) {
                     go(best.a, { mode: best.kind, dest: best.name, km: best.dist, cost: best.cost });
                     return;
@@ -454,52 +454,7 @@ MKS.module({
             const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? job.ownKm : 0);
             const short = (c) => (c.a.classList.contains('btn-warning') ? 1 : 0);
             const best = fit.sort((x, y) => short(x) - short(y) || x.cost - y.cost || rank(x) - rank(y))[0];
-            return { best, why, fit };
-        }
-
-        // The module "Alleen ziekenhuizen en cellen van één speler" (a second account using
-        // its main account's beds and cells): of what fits, the best one owned by that player.
-        // Owners are looked up once on the building page ("Eigenaar") and shared with that module.
-        function mainDestOwner() {
-            try {
-                const st = JSON.parse(GM_getValue('mks.suite.v1', '{}')) || {};
-                return st.enabled && st.enabled['main-destinations'] ? String((st.settings && st.settings['main-destinations'] || {}).owner || '').trim() : '';
-            } catch (e) { return ''; }
-        }
-        async function buildingOwner(bid) {
-            const KEY = 'mks.mainDest.owners';
-            const load = () => { try { return JSON.parse(GM_getValue(KEY, '{}')) || {}; } catch (e) { return {}; } };
-            const cache = load();
-            if (bid in cache) return cache[bid];
-            const r = await fetch(`/buildings/${bid}`, { credentials: 'same-origin' });
-            if (!r.ok) return null;
-            const d = new DOMParser().parseFromString(await r.text(), 'text/html');
-            const dt = [...d.querySelectorAll('dt')].find((e) => /Eigenaar/i.test(e.textContent));
-            const name = (dt && dt.nextElementSibling ? dt.nextElementSibling.textContent : '').replace(/\s+/g, ' ').trim();
-            const now = load();
-            now[bid] = name;
-            GM_setValue(KEY, JSON.stringify(now));
-            return name;
-        }
-        async function pickDestination(all, job) {
-            const { best, why, fit } = bestDestination(all, job);
-            const owner = mainDestOwner().toLowerCase();
-            if (!owner || !best) return { best, why };
-            const label = 'niet van de gekozen speler';
-            let lookups = 0;
-            for (const c of fit) {
-                const bid = ((c.a.getAttribute('href') || '').match(/\/(?:patient|gefangener)\/(\d+)/) || [])[1];
-                let o = '';
-                if (!c.own && bid) {
-                    const known = (() => { try { return JSON.parse(GM_getValue('mks.mainDest.owners', '{}'))[bid]; } catch (e) { return undefined; } })();
-                    if (known === undefined && lookups >= 15) continue; // stay within the window's time; the rest next time
-                    if (known === undefined) lookups++;
-                    o = known !== undefined ? known : await buildingOwner(bid);
-                }
-                if (String(o || '').toLowerCase() === owner) return { best: c, why };
-                why[label] = (why[label] || 0) + 1;
-            }
-            return { best: null, why };
+            return { best, why };
         }
 
         // Destination rows, as the Bestemmingfilter module reads them. root: the
@@ -1047,7 +1002,7 @@ MKS.module({
                 a.click();
             };
             const all = destinations(block);
-            const { best, why } = await pickDestination(all, job);
+            const { best, why } = bestDestination(all, job);
             if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
             const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
             const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';

@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012202807 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012234601 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261012202807';
+    const VERSION = '1.7.0.20261012234601';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11215,7 +11215,7 @@ MKS.module({
                 // Arrestants on a car on scene: that car needs a cell, not another car
                 // sent. Does not wait for vehicles still driving.
                 const prisonerCars = [...document.querySelectorAll('.prison-select')].filter((b) => b.querySelector('a[href*="/gefangener/"]'));
-                if (prisonerCars.length) { prisonerCell(job, prisonerCars[0], report, doneKey); return; }
+                if (prisonerCars.length) { await prisonerCell(job, prisonerCars[0], report, doneKey); return; }
                 // Verzorgers and Arbeidshygiëne grow with the responders on scene, so the red
                 // box only asks for them once units arrive. Waiting for everything still driving
                 // before sending them left missions open a long time: send those now, unless
@@ -11636,7 +11636,7 @@ MKS.module({
             btn.click();
         }
 
-        function prisonerCell(job, block, report, doneKey) {
+        async function prisonerCell(job, block, report, doneKey) {
             // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
             const vid = block.getAttribute('data-vehicle-id');
             const car = clean(block.closest('tr')?.previousElementSibling?.querySelector(`a[href^="/vehicles/${vid}"]`)?.textContent || '')
@@ -11732,6 +11732,9 @@ MKS.module({
             // ambulance), the main round must not be held back too.
             const quickHold = new Map();
             const onQuickHold = (e) => { const t = quickHold.get(e.getAttribute('mission_id')); return !!t && t > Date.now(); };
+            // How often in a row the quick lane found nothing to send: each time it waits twice
+            // as long (10, 20, 40, 60 min). A sent Besteld vervoer can stay open for hours.
+            const quickEmpty = new Map();
             // Team missions we joined (sent our noodhulp, or found our own vehicle there): id -> when.
             // Kept over reloads: our car may have left for a cell while the mission goes on.
             const teamDone = new Map(saved.teamJoined || []); // (teamDone of older versions is not trusted)
@@ -12486,7 +12489,13 @@ MKS.module({
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
                             if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
-                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + (top ? 2 : 10) * 60000); // a top-up looks again soon
+                            else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) {
+                                const k = quickEmpty.get(id) || 0;
+                                quickEmpty.set(id, k + 1);
+                                quickHold.set(id, Date.now() + (top ? 2 : Math.min(60, 10 * 2 ** k)) * 60000); // a top-up looks again soon
+                            }
+                            if (res.result === 'sent' || res.result === 'unconfirmed') quickEmpty.delete(id);
+                            if (quickEmpty.size > 2000) quickEmpty.clear();
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 stats.sent++;
                                 sent.push(Date.now());
@@ -14639,7 +14648,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012202807' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012234601' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14781,7 +14790,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261012202807',
+                version: '1.7.0.20261012234601',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
