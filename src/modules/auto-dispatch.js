@@ -1275,8 +1275,32 @@ MKS.module({
             // one noodhulp or ambulance, whichever free one is nearest.
             const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id], #mission_list_sicherheitswache_alliance .missionSideBarEntry[mission_id]';
             const isEvent = (e) => !!e.closest('#mission_list_alliance_event, #mission_list_sicherheitswache_alliance');
+            /* New missions per hour (spawn rate): ids seen for the first time in our own
+             * lists. Kept over reloads; after a gap of more than 10 minutes the missions
+             * already in the list count as old, not as new. */
+            const SEEN_KEY = 'mks.autoDispatch.seen.v1';
+            let seen = null;
+            try { seen = JSON.parse(GM_getValue(SEEN_KEY, 'null')); } catch (e) { seen = null; }
+            let seenBaseline = !seen || !seen.at || Date.now() - seen.at > 10 * 60000;
+            if (seenBaseline) seen = { at: 0, since: Date.now(), ids: {} };
+            function trackSpawns() {
+                const now = Date.now();
+                const listed = new Set([...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id], #mission_list_krankentransporte .missionSideBarEntry[mission_id]')]
+                    .map((e) => e.getAttribute('mission_id')));
+                for (const id of listed) if (!(id in seen.ids)) seen.ids[id] = seenBaseline ? 0 : now;
+                seenBaseline = false;
+                for (const [id, t] of Object.entries(seen.ids)) if ((t === 0 && !listed.has(id)) || (t && now - t > 3 * 3600000)) delete seen.ids[id];
+                seen.at = now;
+                try { GM_setValue(SEEN_KEY, JSON.stringify(seen)); } catch (e) { /* ignore */ }
+            }
+            const spawned1h = () => { const c = Date.now() - 3600000; return Object.values(seen.ids).filter((t) => t > c).length; };
+            const spawnSince = () => seen.since || Date.now();
+            setInterval(trackSpawns, 15000);
+            setTimeout(trackSpawns, 3000);
+
             W.mksAutoData = {
                 get needs() { return needs; },
+                get spawned1h() { return spawned1h(); },
                 get events() { return events; },
                 get stats() { return stats; },
                 get holds() { return [...holds].map(([id, h]) => ({ id, ...h })); },
@@ -2297,6 +2321,8 @@ MKS.module({
                         <div class="mks-tile"><div class="v">${stats.transports}</div><div class="k">vervoerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.skipped}</div><div class="k">overgeslagen</div></div>
                         <div class="mks-tile ${stats.errors ? 't-error' : ''}"><div class="v">${stats.errors}</div><div class="k">fouten</div></div>
+                        <div class="mks-tile" title="Inzetten die in het afgelopen uur nieuw in je lijst kwamen (eigen inzetten en besteld vervoer)"><div class="v">${spawned1h()}</div>
+                            <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
