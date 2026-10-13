@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012231334 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013151150 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -32,6 +32,7 @@
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
  *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
+ *   ctx.settingExtra(key, render)  that setting's label unfolds; render(el) draws more under it
  *   ctx.set(key, value)     change one of the module's own settings
  *   ctx.open()              open the dashboard on this module
  * ========================================================================== */
@@ -40,7 +41,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261012231334';
+    const VERSION = '1.7.0.20261013151150';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -94,7 +95,7 @@ const MKS = (() => {
         if (!rt[def.id]) {
             rt[def.id] = {
                 cfg: settingsOf(def), running: false, handle: null, error: null, needsReload: false,
-                status: null, actions: [], panel: null, menus: [], onSettings: null,
+                status: null, actions: [], panel: null, menus: [], onSettings: null, extras: {},
             };
         }
         return rt[def.id];
@@ -123,6 +124,7 @@ const MKS = (() => {
             refresh() { ui.detailChanged(def.id, true); },
             menu(item) { r.menus.push(item); nav.render(); },
             onSettings(fn) { r.onSettings = fn; },
+            settingExtra(key, render) { r.extras[key] = render; },
             set(key, value) { setSetting(def, key, value); ui.changed(def.id, true); },
             open() { ui.open(def.id); },
         };
@@ -292,6 +294,8 @@ const MKS = (() => {
     #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
     #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
+    #mks-dash .mks-set .l.mks-xl { cursor:pointer; }
+    #mks-dash .mks-set-x { padding:2px 0 12px 16px; border-bottom:1px solid var(--m-bd); max-width:820px; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
     #mks-dash .mks-set .rv { font:500 12px var(--m-mono); color:var(--m-tx); min-width:42px; text-align:right; }
     #mks-dash .mks-reset { margin-top:12px; }
@@ -729,8 +733,11 @@ const MKS = (() => {
             try { r.panel(box); } catch (e) { box.innerHTML = `<p class="mks-note">Paneel kon niet laden: ${esc(e.message)}</p>`; console.error(e); }
         }
 
+        // Unfolded setting extras (ctx.settingExtra), by "module:key".
+        const openExtras = new Set();
         function renderSettings(def, box) {
             const list = def.settings || [];
+            const extras = runtime(def).extras || {};
             if (!list.length) { box.innerHTML = ''; return; }
             const cfg = settingsOf(def);
             // s.group: a sub-heading above the first setting of each group.
@@ -763,6 +770,11 @@ const MKS = (() => {
                 } else {
                     control = `<input type="text" value="${esc(v)}" placeholder="${esc(s.placeholder || '')}">`;
                 }
+                if (extras[s.key]) {
+                    const open = openExtras.has(`${def.id}:${s.key}`);
+                    return `<div class="mks-set" data-i="${i}"><div class="l mks-xl" title="Klik voor meer">${open ? '▾' : '▸'} ${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`
+                        + `<div class="mks-set-x" data-x="${i}" ${open ? '' : 'hidden'}></div>`;
+                }
                 return `<div class="mks-set" data-i="${i}"><div class="l">${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`;
             }
 
@@ -788,6 +800,18 @@ const MKS = (() => {
                     const v = read();
                     if (s.type === 'number') input.value = v;
                     setSetting(def, s.key, v);
+                });
+            });
+            box.querySelectorAll('.mks-set-x').forEach((x) => {
+                const s = list[Number(x.dataset.x)];
+                const id = `${def.id}:${s.key}`;
+                const draw = () => { try { extras[s.key](x); } catch (e) { x.textContent = `Kon niet laden: ${e.message}`; console.error(e); } };
+                if (!x.hidden) draw();
+                const label = x.previousElementSibling.querySelector('.l');
+                label.addEventListener('click', () => {
+                    x.hidden = !x.hidden;
+                    if (x.hidden) openExtras.delete(id); else { openExtras.add(id); draw(); }
+                    label.firstChild.textContent = `${x.hidden ? '▸' : '▾'} ${s.label}`;
                 });
             });
             box.querySelector('.mks-reset a').addEventListener('click', () => resetSettings(def));
@@ -10236,79 +10260,6 @@ MKS.module({
     },
 });
 
-/* ==== module: main-destinations =========================================== */
-MKS.module({
-    id: 'main-destinations',
-    name: 'Alleen ziekenhuizen en cellen van één speler',
-    icon: '🤝',
-    category: 'missions',
-    description: 'Voor een tweede account: patiënten en arrestanten gaan alleen naar de ziekenhuizen en cellen van één teamspeler (bijvoorbeeld je hoofdaccount). '
-        + 'Eigen gebouwen en die van andere teamleden worden overgeslagen. '
-        + 'Auto-alarmeren volgt dit bij elke spraakaanvraag en elke arrestant; in het voertuigvenster worden de andere bestemmingen grijs. '
-        + 'De eigenaar van een gebouw wordt één keer opgezocht (gebouwpagina, "Eigenaar") en onthouden.',
-    at: 'ready',
-    frames: 'all',
-    settings: [
-        { key: 'owner', label: 'Naam van de speler', type: 'text', default: '',
-            help: 'Precies zoals in het team (bijvoorbeeld de naam van je hoofdaccount).' },
-    ],
-
-    run(ctx) {
-        // Shared with Auto-alarmeren, which reads the same cache when it picks a destination.
-        const OWNERS = 'mks.mainDest.owners';
-        const owner = String(ctx.cfg.owner || '').trim();
-        const load = () => { try { return JSON.parse(GM_getValue(OWNERS, '{}')) || {}; } catch (e) { return {}; } };
-
-        async function ownerOf(bid) {
-            const cache = load();
-            if (bid in cache) return cache[bid];
-            const r = await fetch(`/buildings/${bid}`, { credentials: 'same-origin' });
-            if (!r.ok) return null;
-            const d = new DOMParser().parseFromString(await r.text(), 'text/html');
-            const dt = [...d.querySelectorAll('dt')].find((e) => /Eigenaar/i.test(e.textContent));
-            const name = (dt?.nextElementSibling?.textContent || '').replace(/\s+/g, ' ').trim();
-            const now = load();
-            now[bid] = name;
-            GM_setValue(OWNERS, JSON.stringify(now));
-            return name;
-        }
-
-        // The vehicle window with a transport request: grey out what is not the player's.
-        if (/^\/vehicles\/\d+\/?$/.test(location.pathname)) {
-            if (!owner) return;
-            (async () => {
-                const links = [...document.querySelectorAll('a[href*="/patient/"]:not([href$="/-1"]), a[href*="/gefangener/"]:not([href$="/-1"])')];
-                for (const a of links) {
-                    const bid = (a.getAttribute('href').match(/\/(?:patient|gefangener)\/(\d+)/) || [])[1];
-                    if (!bid) continue;
-                    const o = await ownerOf(bid);
-                    if (String(o || '').toLowerCase() === owner.toLowerCase()) continue;
-                    const row = a.closest('tr') || a;
-                    row.style.opacity = '0.3';
-                    a.title = `Niet van ${owner}`;
-                }
-            })().catch((e) => ctx.err(e));
-            return;
-        }
-        if (window.top !== window) return;
-
-        ctx.panel((el) => {
-            const cache = load();
-            const all = Object.values(cache);
-            const theirs = owner ? all.filter((n) => n.toLowerCase() === owner.toLowerCase()).length : 0;
-            el.innerHTML = owner
-                ? `<p class="mks-note">Bestemmingen alleen van <b>${ctx.esc(owner)}</b>. Auto-alarmeren slaat de rest over; past er niets, dan blijft de spraakaanvraag staan
-                    (of wordt de patiënt/arrestant vrijgelaten als dat in Auto-alarmeren aan staat).</p>
-                    <p class="mks-note">${all.length} gebouwen opgezocht, waarvan ${theirs} van ${ctx.esc(owner)}.</p>`
-                : '<p class="mks-note">Vul bij de instellingen de naam van de speler in. Zonder naam doet deze module niets.</p>';
-        });
-        ctx.actions([
-            { label: 'Eigenaren opnieuw opzoeken', confirm: 'De onthouden eigenaren van gebouwen wissen?', run: () => { GM_setValue(OWNERS, '{}'); ctx.refresh(); } },
-        ]);
-        ctx.status(owner ? `Alleen bestemmingen van ${owner}` : 'Geen speler ingevuld', { tone: owner ? 'ok' : 'warn' });
-    },
-});
-
 /* ==== module: building-share ============================================== */
 MKS.module({
     id: 'building-share',
@@ -10785,12 +10736,8 @@ MKS.module({
         { key: 'quickWindows', label: 'Snelle baan: vensters', type: 'number', default: 2, min: 1, max: 3, step: 1,
             help: 'Zoveel onzichtbare vensters werken tegelijk de kleine inzetten af.' },
         { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
-        { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
-            help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
-                + 'naar een teamevenement één noodhulp óf ambulance (wat het dichtstbij vrij is), '
-                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
-                + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
-                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien.' },
+        { key: 'teamMissions', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
+            help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -10964,6 +10911,9 @@ MKS.module({
             "DB-VI": 155, "VIA": 156
         };
 
+        // Vehicle types chosen for team missions (panel menu); null = the default.
+        const loadTeamTypes = () => { try { const v = JSON.parse(GM_getValue('mks.autoDispatch.teamTypes', '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
+
         // Lower case, no " - ", and the long words the game abbreviates in type names.
         // "DB-BO, TS-BO or BOH-DC": the game sometimes writes "or" for "of".
         const normName = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').replace(/ or /g, ' of ').trim()
@@ -11127,7 +11077,7 @@ MKS.module({
                 }
 
                 const all = destinations();
-                const { best, why } = await pickDestination(all, job);
+                const { best, why } = bestDestination(all, job);
                 if (best) {
                     go(best.a, { mode: best.kind, dest: best.name, km: best.dist, cost: best.cost });
                     return;
@@ -11173,52 +11123,7 @@ MKS.module({
             const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? job.ownKm : 0);
             const short = (c) => (c.a.classList.contains('btn-warning') ? 1 : 0);
             const best = fit.sort((x, y) => short(x) - short(y) || x.cost - y.cost || rank(x) - rank(y))[0];
-            return { best, why, fit };
-        }
-
-        // The module "Alleen ziekenhuizen en cellen van één speler" (a second account using
-        // its main account's beds and cells): of what fits, the best one owned by that player.
-        // Owners are looked up once on the building page ("Eigenaar") and shared with that module.
-        function mainDestOwner() {
-            try {
-                const st = JSON.parse(GM_getValue('mks.suite.v1', '{}')) || {};
-                return st.enabled && st.enabled['main-destinations'] ? String((st.settings && st.settings['main-destinations'] || {}).owner || '').trim() : '';
-            } catch (e) { return ''; }
-        }
-        async function buildingOwner(bid) {
-            const KEY = 'mks.mainDest.owners';
-            const load = () => { try { return JSON.parse(GM_getValue(KEY, '{}')) || {}; } catch (e) { return {}; } };
-            const cache = load();
-            if (bid in cache) return cache[bid];
-            const r = await fetch(`/buildings/${bid}`, { credentials: 'same-origin' });
-            if (!r.ok) return null;
-            const d = new DOMParser().parseFromString(await r.text(), 'text/html');
-            const dt = [...d.querySelectorAll('dt')].find((e) => /Eigenaar/i.test(e.textContent));
-            const name = (dt && dt.nextElementSibling ? dt.nextElementSibling.textContent : '').replace(/\s+/g, ' ').trim();
-            const now = load();
-            now[bid] = name;
-            GM_setValue(KEY, JSON.stringify(now));
-            return name;
-        }
-        async function pickDestination(all, job) {
-            const { best, why, fit } = bestDestination(all, job);
-            const owner = mainDestOwner().toLowerCase();
-            if (!owner || !best) return { best, why };
-            const label = 'niet van de gekozen speler';
-            let lookups = 0;
-            for (const c of fit) {
-                const bid = ((c.a.getAttribute('href') || '').match(/\/(?:patient|gefangener)\/(\d+)/) || [])[1];
-                let o = '';
-                if (!c.own && bid) {
-                    const known = (() => { try { return JSON.parse(GM_getValue('mks.mainDest.owners', '{}'))[bid]; } catch (e) { return undefined; } })();
-                    if (known === undefined && lookups >= 15) continue; // stay within the window's time; the rest next time
-                    if (known === undefined) lookups++;
-                    o = known !== undefined ? known : await buildingOwner(bid);
-                }
-                if (String(o || '').toLowerCase() === owner) return { best: c, why };
-                why[label] = (why[label] || 0) + 1;
-            }
-            return { best: null, why };
+            return { best, why };
         }
 
         // Destination rows, as the Bestemmingfilter module reads them. root: the
@@ -11708,6 +11613,17 @@ MKS.module({
             const want = job.event ? { fustw: 1, rtw: 1 } : { fustw: 1 };
             const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
             async function select() {
+                // Types chosen in the panel ("Voertuigtypes voor teaminzetten"): the nearest
+                // free vehicle of any of those types, straight from the list.
+                if (job.teamTypes && job.teamTypes.length) {
+                    const allowed = new Set(job.teamTypes.map(String));
+                    const c = [...document.querySelectorAll('input.vehicle_checkbox')]
+                        .filter((x) => allowed.has(String(x.getAttribute('vehicle_type_id'))) && !x.disabled)
+                        .sort((x, y) => dist(x) - dist(y))[0];
+                    if (!c) return [];
+                    if (!c.checked) c.click();
+                    return [c];
+                }
                 const el = document.createElement('a');
                 el.id = 'aao_mks_team';
                 el.className = 'aao_btn';
@@ -11735,7 +11651,7 @@ MKS.module({
                 dropAvoided(job.avoid);
                 picked = await select();
             }
-            if (!picked.length) { report('skip', { reason: job.event ? 'geen noodhulp of ambulance vrij' : 'geen noodhulp vrij', noCar: true }); return; }
+            if (!picked.length) { report('skip', { reason: job.teamTypes && job.teamTypes.length ? 'geen gekozen voertuigtype vrij' : job.event ? 'geen noodhulp of ambulance vrij' : 'geen noodhulp vrij', noCar: true }); return; }
             const btn = document.getElementById('alert_btn');
             if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
             // Taken by our own missions meanwhile: leave those out and choose again, once.
@@ -11766,7 +11682,7 @@ MKS.module({
                 a.click();
             };
             const all = destinations(block);
-            const { best, why } = await pickDestination(all, job);
+            const { best, why } = bestDestination(all, job);
             if (best) { go(best.a, { dest: best.name, km: best.dist, cost: best.cost }); return; }
             const need = why.vol ? 'Cellen (alles vol)' : 'Cel binnen kosten/afstand';
             const reasons = Object.entries(why).map(([k, n]) => `${n} ${k}`).join(', ') || 'geen cellen';
@@ -12676,7 +12592,7 @@ MKS.module({
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: loadTeamTypes() });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
@@ -12941,6 +12857,47 @@ MKS.module({
                 const m = Math.round((Date.now() - t) / 60000);
                 return m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} uur` : `${Math.round(m / 1440)} d`;
             };
+
+            /* Vehicle types for team missions: a folding menu in the panel. Nothing ticked =
+             * the default (one noodhulp; at an event a noodhulp or ambulance). */
+            const TEAM_TYPES_KEY = 'mks.autoDispatch.teamTypes';
+            const VT_LABEL = {};
+            for (const [n, vt] of Object.entries(VT_NAMES)) if (!(vt in VT_LABEL)) VT_LABEL[vt] = n;
+            let ownedTypes = null, ownedAt = 0, teamBox = null;
+            async function loadOwnedTypes() {
+                ownedAt = Date.now();
+                try {
+                    const v = await (await fetch('/api/vehicles', { credentials: 'same-origin' })).json();
+                    const m = {};
+                    for (const x of v) m[x.vehicle_type] = (m[x.vehicle_type] || 0) + 1;
+                    ownedTypes = m;
+                } catch (e) { ctx.warn('team types', e); }
+                if (teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
+            }
+            function drawTeamTypes(box) {
+                teamBox = box;
+                if ((!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
+                const chosen = new Set(loadTeamTypes() || []);
+                const rows = ownedTypes ? Object.entries(ownedTypes)
+                    .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
+                    .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    : '<p class="mks-note">Voertuigen laden…</p>';
+                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement van anderen gaat precies één voertuig: het dichtstbijzijnde vrije
+                        van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen. Loopt naast je eigen inzetten in een eigen
+                        onzichtbaar venster, ook als de teaminzetten verborgen zijn (Teamfilter, missiefilters).</p>
+                    <p class="mks-note"><b>Voertuigtypes</b> (${chosen.size ? `${chosen.size} gekozen` : 'niets gekozen: standaard, één noodhulp; bij een evenement een noodhulp of ambulance'})
+                        ${chosen.size ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                    <div style="columns:2;column-gap:16px">${rows}</div>`;
+                box.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
+                    const set = new Set(loadTeamTypes() || []);
+                    if (cb.checked) set.add(cb.dataset.teamVt); else set.delete(cb.dataset.teamVt);
+                    GM_setValue(TEAM_TYPES_KEY, JSON.stringify([...set]));
+                    drawTeamTypes(box);
+                }));
+                box.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); drawTeamTypes(box); });
+            }
+            ctx.settingExtra('teamMissions', drawTeamTypes);
 
             ctx.panel((el) => {
                 const esc = ctx.esc;
@@ -14766,7 +14723,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012231334' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013151150' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14908,7 +14865,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261012231334',
+                version: '1.7.0.20261013151150',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

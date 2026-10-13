@@ -30,6 +30,7 @@
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
  *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
+ *   ctx.settingExtra(key, render)  that setting's label unfolds; render(el) draws more under it
  *   ctx.set(key, value)     change one of the module's own settings
  *   ctx.open()              open the dashboard on this module
  * ========================================================================== */
@@ -92,7 +93,7 @@ const MKS = (() => {
         if (!rt[def.id]) {
             rt[def.id] = {
                 cfg: settingsOf(def), running: false, handle: null, error: null, needsReload: false,
-                status: null, actions: [], panel: null, menus: [], onSettings: null,
+                status: null, actions: [], panel: null, menus: [], onSettings: null, extras: {},
             };
         }
         return rt[def.id];
@@ -121,6 +122,7 @@ const MKS = (() => {
             refresh() { ui.detailChanged(def.id, true); },
             menu(item) { r.menus.push(item); nav.render(); },
             onSettings(fn) { r.onSettings = fn; },
+            settingExtra(key, render) { r.extras[key] = render; },
             set(key, value) { setSetting(def, key, value); ui.changed(def.id, true); },
             open() { ui.open(def.id); },
         };
@@ -290,6 +292,8 @@ const MKS = (() => {
     #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
     #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
+    #mks-dash .mks-set .l.mks-xl { cursor:pointer; }
+    #mks-dash .mks-set-x { padding:2px 0 12px 16px; border-bottom:1px solid var(--m-bd); max-width:820px; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
     #mks-dash .mks-set .rv { font:500 12px var(--m-mono); color:var(--m-tx); min-width:42px; text-align:right; }
     #mks-dash .mks-reset { margin-top:12px; }
@@ -727,8 +731,11 @@ const MKS = (() => {
             try { r.panel(box); } catch (e) { box.innerHTML = `<p class="mks-note">Paneel kon niet laden: ${esc(e.message)}</p>`; console.error(e); }
         }
 
+        // Unfolded setting extras (ctx.settingExtra), by "module:key".
+        const openExtras = new Set();
         function renderSettings(def, box) {
             const list = def.settings || [];
+            const extras = runtime(def).extras || {};
             if (!list.length) { box.innerHTML = ''; return; }
             const cfg = settingsOf(def);
             // s.group: a sub-heading above the first setting of each group.
@@ -761,6 +768,11 @@ const MKS = (() => {
                 } else {
                     control = `<input type="text" value="${esc(v)}" placeholder="${esc(s.placeholder || '')}">`;
                 }
+                if (extras[s.key]) {
+                    const open = openExtras.has(`${def.id}:${s.key}`);
+                    return `<div class="mks-set" data-i="${i}"><div class="l mks-xl" title="Klik voor meer">${open ? '▾' : '▸'} ${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`
+                        + `<div class="mks-set-x" data-x="${i}" ${open ? '' : 'hidden'}></div>`;
+                }
                 return `<div class="mks-set" data-i="${i}"><div class="l">${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`;
             }
 
@@ -786,6 +798,18 @@ const MKS = (() => {
                     const v = read();
                     if (s.type === 'number') input.value = v;
                     setSetting(def, s.key, v);
+                });
+            });
+            box.querySelectorAll('.mks-set-x').forEach((x) => {
+                const s = list[Number(x.dataset.x)];
+                const id = `${def.id}:${s.key}`;
+                const draw = () => { try { extras[s.key](x); } catch (e) { x.textContent = `Kon niet laden: ${e.message}`; console.error(e); } };
+                if (!x.hidden) draw();
+                const label = x.previousElementSibling.querySelector('.l');
+                label.addEventListener('click', () => {
+                    x.hidden = !x.hidden;
+                    if (x.hidden) openExtras.delete(id); else { openExtras.add(id); draw(); }
+                    label.firstChild.textContent = `${x.hidden ? '▸' : '▾'} ${s.label}`;
                 });
             });
             box.querySelector('.mks-reset a').addEventListener('click', () => resetSettings(def));

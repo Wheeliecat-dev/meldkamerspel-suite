@@ -66,13 +66,8 @@ MKS.module({
         { key: 'quickWindows', label: 'Snelle baan: vensters', type: 'number', default: 2, min: 1, max: 3, step: 1,
             help: 'Zoveel onzichtbare vensters werken tegelijk de kleine inzetten af.' },
         { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
-        { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
-            help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
-                + 'naar een teamevenement één noodhulp óf ambulance (wat het dichtstbij vrij is), '
-                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
-                + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
-                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien. '
-                + 'Andere voertuigtypes kiezen: uitklapmenu "Voertuigtypes voor teaminzetten" in het paneel.' },
+        { key: 'teamMissions', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
+            help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -2198,7 +2193,7 @@ MKS.module({
             const TEAM_TYPES_KEY = 'mks.autoDispatch.teamTypes';
             const VT_LABEL = {};
             for (const [n, vt] of Object.entries(VT_NAMES)) if (!(vt in VT_LABEL)) VT_LABEL[vt] = n;
-            let ownedTypes = null, ownedAt = 0, teamTypesOpen = false;
+            let ownedTypes = null, ownedAt = 0, teamBox = null;
             async function loadOwnedTypes() {
                 ownedAt = Date.now();
                 try {
@@ -2207,33 +2202,32 @@ MKS.module({
                     for (const x of v) m[x.vehicle_type] = (m[x.vehicle_type] || 0) + 1;
                     ownedTypes = m;
                 } catch (e) { ctx.warn('team types', e); }
-                ctx.refresh();
+                if (teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
             }
-            function teamTypesHtml() {
-                if (teamTypesOpen && (!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
+            function drawTeamTypes(box) {
+                teamBox = box;
+                if ((!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
                 const chosen = new Set(loadTeamTypes() || []);
                 const rows = ownedTypes ? Object.entries(ownedTypes)
                     .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
-                    .sort((a, b) => a.name.localeCompare(b.name, 'nl'))
-                    .map((r) => `<label style="display:block;margin:2px 0"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
                     : '<p class="mks-note">Voertuigen laden…</p>';
-                return `<details data-team-types ${teamTypesOpen ? 'open' : ''}><summary class="mks-h" style="cursor:pointer">Voertuigtypes voor teaminzetten (${chosen.size ? `${chosen.size} gekozen` : 'standaard'})</summary>
-                    <p class="mks-note">Naar een teaminzet of teamevenement gaat één voertuig: het dichtstbijzijnde vrije van de aangevinkte types.
-                        Niets aangevinkt = standaard (één noodhulp; bij een evenement een noodhulp of ambulance). ${chosen.size ? '<a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
-                    <div style="columns:2;column-gap:16px">${rows}</div></details>`;
-            }
-            function bindTeamTypes(el) {
-                const d = el.querySelector('[data-team-types]');
-                if (!d) return;
-                d.addEventListener('toggle', () => { teamTypesOpen = d.open; if (d.open && !ownedTypes) loadOwnedTypes(); });
-                d.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
+                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement van anderen gaat precies één voertuig: het dichtstbijzijnde vrije
+                        van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen. Loopt naast je eigen inzetten in een eigen
+                        onzichtbaar venster, ook als de teaminzetten verborgen zijn (Teamfilter, missiefilters).</p>
+                    <p class="mks-note"><b>Voertuigtypes</b> (${chosen.size ? `${chosen.size} gekozen` : 'niets gekozen: standaard, één noodhulp; bij een evenement een noodhulp of ambulance'})
+                        ${chosen.size ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                    <div style="columns:2;column-gap:16px">${rows}</div>`;
+                box.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
                     const set = new Set(loadTeamTypes() || []);
                     if (cb.checked) set.add(cb.dataset.teamVt); else set.delete(cb.dataset.teamVt);
                     GM_setValue(TEAM_TYPES_KEY, JSON.stringify([...set]));
-                    ctx.refresh();
+                    drawTeamTypes(box);
                 }));
-                d.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); ctx.refresh(); });
+                box.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); drawTeamTypes(box); });
             }
+            ctx.settingExtra('teamMissions', drawTeamTypes);
 
             ctx.panel((el) => {
                 const esc = ctx.esc;
@@ -2253,7 +2247,6 @@ MKS.module({
                         <div class="mks-tile ${stats.errors ? 't-error' : ''}"><div class="v">${stats.errors}</div><div class="k">fouten</div></div>
                     </div>
                     ${holdHtml}
-                    ${teamTypesHtml()}
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
@@ -2273,7 +2266,6 @@ MKS.module({
                         ${log.map((l) => `<tr><td class="mono">${l.at.toLocaleTimeString('nl-NL')}</td><td>${esc(l.name)}</td>
                         <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td></tr>`).join('')}</tbody></table></div>`
                         : '<p class="mks-note">Nog niets gedaan. Klik op Start of op de knop <b>Auto</b> in de missiefilterbalk.</p>'}`;
-                bindTeamTypes(el);
             });
 
             ctx.onSettings((cfg, key) => {
