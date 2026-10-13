@@ -801,7 +801,15 @@ MKS.module({
                 };
                 let picked = selection();
                 const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { picked.forEach((c) => c.checked && c.click()); } };
-                if (!picked.length) { report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : 'geen voertuigen beschikbaar', shortText: shortage }); return; }
+                if (!picked.length) {
+                    // What the window saw, to tell "all busy" from a list that did not load:
+                    // vehicles listed, per needed field how many fit, and a "load more" link still there.
+                    const listed = new Set([...document.querySelectorAll('input.vehicle_checkbox')].map((c) => c.value)).size;
+                    const fits = Object.entries(avail).map(([k, n]) => `${caption(k)} ${n}`).join(', ');
+                    const more = document.querySelector('a[href*="/missing_vehicles"]:not([data-mks-clicked])') ? ', meer laden stond er nog' : '';
+                    report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage });
+                    return;
+                }
                 // Shortages on the ignore list (setting) do not stop the rest from going. On a
                 // big patient mission ("24 Patiënten - 5 onbehandelde") ambulances may come in
                 // parts: the patient lines ask for the rest once these have arrived.
