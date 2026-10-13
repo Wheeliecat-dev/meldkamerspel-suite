@@ -1966,7 +1966,7 @@ MKS.module({
                     tried.set(id, Date.now());
                     const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: loadTeamTypes() });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
-                        result: res.result, km: res.km, reason: res.reason, joined: res.joined || undefined });
+                        result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
                         teamDone.set(id, Date.now());
                         stats.sent++;
