@@ -241,6 +241,20 @@ MKS.module({
             "DB-VI": 155, "VIA": 156
         };
 
+        // Long drives of the last 7 days: [lat, lon, time, vehicle type, km, credits].
+        // Read by Automatisch uitbreiden to place new posts where they save the most driving.
+        const FAR_KEY = 'mks.autoDispatch.longDrives.v1';
+        function recordLongDrives(pos, drives, credits) {
+            if (!pos || !drives || !drives.length) return;
+            let list;
+            try { list = JSON.parse(GM_getValue(FAR_KEY, '[]')) || []; } catch (e) { list = []; }
+            const since = Date.now() - 7 * 86400000;
+            list = list.filter((x) => x[2] >= since);
+            for (const [vt, km] of drives) list.push([Math.round(pos[0] * 1e4) / 1e4, Math.round(pos[1] * 1e4) / 1e4, Date.now(), vt, km, Number(credits) || 0]);
+            if (list.length > 5000) list = list.slice(-5000);
+            GM_setValue(FAR_KEY, JSON.stringify(list));
+        }
+
         // Vehicle types chosen for team missions (panel menu); null = the default.
         const loadTeamTypes = () => { try { const v = JSON.parse(GM_getValue('mks.autoDispatch.teamTypes', '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
 
@@ -844,7 +858,11 @@ MKS.module({
                     return;
                 }
                 try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value) });
+                // Vehicles that drove far (type, km), for Automatisch uitbreiden: new posts
+                // go where they would cut the longest drives.
+                const longDrives = picked.filter((c) => dist(c) > 15).sort((a, b) => dist(b) - dist(a)).slice(0, 5)
+                    .map((c) => [String(c.getAttribute('vehicle_type_id')), Math.round(dist(c) * 10) / 10]);
+                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value), longDrives });
                 btn.click();
             } catch (e) {
                 ctx.err(e);
@@ -1799,7 +1817,8 @@ MKS.module({
                 fd.append('vehicle_ids[]', best.c.value);
                 const res = await fetch(form.getAttribute('action'), { method: 'POST', body: new URLSearchParams(fd), credentials: 'same-origin' });
                 if (!res.ok) return null;
-                return { result: 'sent', mode: 'direct', n: 1, km: best.km, ids: [best.c.value] };
+                return { result: 'sent', mode: 'direct', n: 1, km: best.km, ids: [best.c.value],
+                    longDrives: best.km > 15 ? [[String(best.c.getAttribute('vehicle_type_id')), best.km]] : [] };
             }
             let quickBusy = false, quickTimer = null;
             async function quickCycle() {
@@ -1868,6 +1887,7 @@ MKS.module({
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
                             const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                            if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(pos, res.longDrives, creditsOf(entry));
                             recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
                                 result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
                             // A mission it just sent stays "open" in the list until its patient is
@@ -2057,6 +2077,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
+                        if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
                             stats.transports++;

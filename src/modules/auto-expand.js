@@ -1134,7 +1134,7 @@ MKS.module({
         };
         // Extensions still being built (bought here or by hand) whose vehicle the building
         // does not have yet and no project trains for: give them a crew project.
-        const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        const EXT_VT = { '2e OvD-P': 35, 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
         // Stations without a single vehicle and no project (a build whose follow-up got
         // lost, like Ambulancepost Nijmegen Centrum): give them their first vehicle.
         const EMPTY_KIND = { 0: 'brandweerkazerne', 17: 'brandweerkazerne', 5: 'politiebureau', 18: 'politiebureau', 3: 'ambulancepost', 13: 'ambulancepost' };
@@ -1372,6 +1372,13 @@ MKS.module({
             const m = 0.005;
             return { name: c.name, center: c.center, inside: (p) => p[0] >= s - m && p[0] <= n + m && p[1] >= w - m && p[1] <= e + m };
         }
+        // Long drives recorded by Automatisch alarmeren: [lat, lon, time, vehicle type, km, credits].
+        function longDrives() {
+            try {
+                const since = Date.now() - 7 * 86400000;
+                return (JSON.parse(GM_getValue('mks.autoDispatch.longDrives.v1', '[]')) || []).filter((d) => d[2] >= since);
+            } catch (e) { return []; }
+        }
         async function planGrow(data) {
             const out = [];
             if (!ctx.cfg.buildMode && !ctx.cfg.doGrow) return out;
@@ -1401,6 +1408,10 @@ MKS.module({
                 const mine = [...data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf),
                     ...(state.recentSpots || []).filter((x) => x[3] === CAT_OF[g.types[0]]).map((x) => [x[0], x[1]])];
                 let best = null;
+                const drives = longDrives().filter((d) => {
+                    const v = VT[d[3]];
+                    return v && v[3].some((t) => g.types.includes(t)); // only what such a post can hold
+                });
                 if (city) {
                     for (const p of uniq) {
                         if (p[2] !== CAT_OF[g.types[0]] || !city.inside(p)) continue;
@@ -1421,7 +1432,19 @@ MKS.module({
                     const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
                     if (gap < 3) continue;
                     const near = Math.min(...owned.map((o) => km(o, at)));
-                    if (!best || near < best.near) best = { at, gap, near, why: `groei: ${near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}` };
+                    // Long drives of this kind nearby (Automatisch alarmeren): the km a post
+                    // here would have saved in the last 7 days. The spot that saves the most wins.
+                    let saved = 0, trips = 0;
+                    for (const d of drives) {
+                        if (Math.abs(d[0] - at[0]) > 0.5 || Math.abs(d[1] - at[1]) > 0.8) continue;
+                        const gain = d[4] - km(at, [d[0], d[1]]) * 1.3; // road is longer than a straight line
+                        if (gain > 3) { saved += gain; trips++; }
+                    }
+                    const score = saved >= 150 ? saved : 0;
+                    const why = score
+                        ? `korter rijden: ${trips} lange ritten in de buurt (7 dagen), samen ~${Math.round(saved)} km korter; ${near.toFixed(1)} km van je dichtstbijzijnde gebouw`
+                        : `groei: ${near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`;
+                    if (!best || score > best.score || (score === best.score && near < best.near)) best = { at, gap, near, score, why };
                 }
                 if (!best) continue;
                 // Full-size and small for the same spot: only the better return goes on the list.
