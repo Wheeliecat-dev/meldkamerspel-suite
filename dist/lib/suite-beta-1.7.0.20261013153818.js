@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013151405 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013153818 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -42,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261013151405';
+    const VERSION = '1.7.0.20261013153818';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10552,15 +10552,16 @@ MKS.module({
     description: 'Op de pagina <i>Personeel toewijzen</i> van een voertuig: één knop vult het voertuig tot het maximum, met het personeel '
         + 'dat het opleidingsfilter van het spel toont. Kies je in het filter een opleiding, dan krijg je alleen mensen met die opleiding. '
         + 'Bij <i>Alles</i> gaan mensen met de minste opleidingen eerst, zodat je specialisten vrij blijven. '
-        + 'Een tweede knop haalt al het personeel van het voertuig af.',
+        + 'Een tweede knop haalt al het personeel van het voertuig af. '
+        + 'In het dashboard: <b>Alle voertuigen met een opleiding bemannen</b> loopt al je voertuigen langs die een opleiding vragen en zet er '
+        + 'precies het minimum aantal mensen met die opleiding op, alleen vrij personeel uit hetzelfde gebouw (groene knop). '
+        + 'Er wordt nooit iemand afgehaald en nooit iemand van een ander voertuig gepakt.',
     warning: '<b>Dit verandert de bezetting van je voertuigen in het spel.</b> Het klikt voor je op de knoppen '
         + '<i>Voertuig toewijzen</i> en <i>Voertuigtoewijzing verwijderen</i>, precies zoals je dat zelf zou doen. '
         + 'Er gebeurt pas iets als je op een van de knoppen klikt.',
     confirmOn: 'Let op: deze module wijst personeel toe aan voertuigen in het spel (of haalt het eraf) als je op de knoppen klikt.\n\nAanzetten?',
     at: 'ready',
     frames: 'all',
-    pages: /^\/vehicles\/\d+\/zuweisung\/?$/,
-    pageNote: 'Alleen op de pagina Personeel toewijzen van een voertuig',
     live: true,
     settings: [
         { key: 'steal', label: 'Ook personeel van andere voertuigen', type: 'bool', default: false,
@@ -10569,6 +10570,7 @@ MKS.module({
     ],
 
     run(ctx) {
+        if (!/^\/vehicles\/\d+\/zuweisung\/?$/.test(location.pathname)) return window.top === window ? sweepAll(ctx) : { stop() {} };
         const table = document.querySelector('#personal_table');
         if (!table) return { stop() {} };
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -10681,6 +10683,137 @@ MKS.module({
         return { stop() { obs.disconnect(); bar.remove(); } };
     },
 });
+
+/* ============================================================================
+ * SWEEP — every vehicle whose type needs a training gets the minimum number of
+ * trained people: free people of its own building only (green button), fewest
+ * other trainings first. Nobody is taken off a vehicle; orange buttons (people
+ * on another vehicle) are never used.
+ * ========================================================================== */
+function sweepAll(ctx) {
+    // Vehicle type: [minimum crew, training, trained needed (0 = the whole minimum crew)].
+    const TRAINED = {
+            11: [1, "Verkenningseenheid Brandweer", 0], 19: [1, "Hoofd Officier van Dienst - Brandweer", 0], 23: [1, "MMT-Bemanningslid", 0],
+            24: [1, "Adviseur Gevaarlijke Stoffen", 0], 26: [1, "Brandweerchauffeur-zwaar", 0], 28: [1, "Politiehelikopter", 0],
+            31: [1, "Brandweerchauffeur-zwaar", 0], 33: [4, "Duiker/Duikploegleider", 0], 35: [1, "Officier van Dienst - Politie", 0],
+            37: [1, "MMT-Bemanningslid", 0], 38: [1, "Officier van Dienst Geneeskunde", 0], 39: [2, "Mobiele Eenheid", 0], 40: [4, "Mobiele Eenheid", 0],
+            41: [2, "Vliegtuigbrandbestrijding", 0], 42: [2, "Vliegtuigbrandbestrijding", 0], 43: [2, "Vliegtuigbrandbestrijding", 0],
+            44: [1, "Airport Fire Officer / On Scene Commander", 0], 46: [1, "Motoragent", 0], 47: [1, "Hondengeleider", 0], 48: [1, "Hondengeleider", 0],
+            49: [4, "Oppervlakteredder", 0], 50: [4, "Oppervlakteredder", 0], 53: [1, "Operator AT", 0], 54: [2, "Operator AT", 0], 55: [1, "Operator AT", 0],
+            56: [1, "Voorlichter", 0], 57: [1, "Officier van Dienst Geneeskunde", 0], 60: [1, "Biketeam", 0], 64: [6, "ME - Aanhoudingseenheid", 0],
+            65: [2, "Waterredding", 0], 66: [2, "Waterredding", 0], 68: [2, "Brandweerchauffeur-zwaar", 0], 73: [1, "Bereden Brigade", 0],
+            74: [0, "Bereden Brigade", 0], 76: [1, "Waterredding", 0], 77: [2, "Groot vaarbewijs", 1], 78: [2, "Groot vaarbewijs", 0],
+            79: [2, "Groot vaarbewijs", 0], 80: [2, "SAR Helicopter", 0], 81: [1, "Weginspecteur", 0], 82: [1, "Weginspecteur", 0], 83: [1, "Weginspecteur", 0],
+            84: [4, "ME - Waterwerper", 0], 85: [2, "Fire Bucket Operator", 0], 86: [7, "Handcrew", 0], 87: [1, "Landelijk Adviseur Natuurbranden", 0],
+            88: [1, "Brandweerchauffeur-zwaar", 0], 90: [7, "Teamleider STH", 2], 92: [5, "Teamlid USAR", 0], 93: [4, "Teamlid USAR", 0],
+            94: [2, "Brandweerchauffeur-zwaar", 0], 95: [1, "Teamlid USAR", 0], 96: [1, "Teamlid USAR", 0], 97: [2, "Hondengeleider USAR", 0],
+            98: [1, "Chauffeur Dienst Infra", 0], 99: [1, "Verkeersongevallen Analist", 0], 100: [6, "Geneeskundige bijstandsverlener", 0],
+            101: [4, "Noodhulpteam", 0], 103: [3, "Intensive Care Team", 0], 104: [1, "Berger Training", 0], 105: [1, "Berger Training", 0],
+            106: [1, "Berger Training", 0], 107: [1, "Berger Training", 0], 108: [1, "Berger Training", 0], 109: [1, "Berger Training", 0],
+            110: [1, "Marechaussee", 0], 111: [1, "Marechaussee", 0], 112: [1, "Marechaussee", 0], 113: [1, "Bomontmanteling", 0], 114: [2, "Bomontmanteling", 0],
+            115: [2, "Bomontmanteling", 0], 116: [2, "Hondengeleider EOD", 0], 117: [2, "Duiker Defensie", 0], 119: [1, "Bomverkenner", 0],
+            120: [2, "Verzorger", 0], 122: [2, "Hygiënemedewerker", 0], 124: [1, "Pelotonscommandant Logistiek", 0], 128: [3, "Drone Flightcrew", 0],
+            129: [3, "TDV Drone Flightcrew", 0], 130: [2, "Brandweerchauffeur-zwaar", 0], 131: [2, "Brandweerchauffeur-zwaar", 0],
+            132: [2, "Brandweerchauffeur-zwaar", 0], 133: [1, "Brandweerchauffeur-zwaar", 0], 135: [4, "Gevaarlijke Stoffen Eenheid", 0],
+            137: [4, "Gevaarlijke Stoffen Eenheid", 0], 139: [6, "Ontsmettings Eenheid", 0], 140: [6, "Ontsmettings Eenheid", 0],
+            142: [6, "Ontsmettings Eenheid", 0], 143: [6, "Ontsmettings Eenheid", 0], 144: [1, "Incidentenbestrijder spoor", 0],
+            145: [1, "Officier van Dienst Incidentenbestrijder spoor", 0], 146: [1, "Brandweerchauffeur-zwaar", 0], 147: [1, "Brandweerchauffeur-zwaar", 0],
+            148: [1, "Brandweerchauffeur-zwaar", 0], 150: [1, "Incidentenbestrijder spoor", 0], 152: [1, "Incidentenbestrijder spoor", 0],
+    };
+    // Trainings the assign page names differently (its filter: key = label).
+    const ALIAS = { 'Verkenningseenheid Brandweer': 'gw_messtechnik', 'Hoofd Officier van Dienst - Brandweer': 'elw2',
+        'Adviseur Gevaarlijke Stoffen': 'gw_gefahrgut', 'ME - Aanhoudingseenheid': 'detention_unit', 'Bereden Brigade': 'police_horse',
+        'Noodhulpteam': 'mass_casualty' };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const norm = (t) => String(t || '').toLowerCase().replace(/\(\d+\s*dag(en)?\)/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const token = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const getDoc = async (url) => {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        if (!r.ok) throw new Error(`${url}: ${r.status}`);
+        return new DOMParser().parseFromString(await r.text(), 'text/html');
+    };
+    const log = [];
+    const note = (t, tone = 'idle') => { log.unshift({ at: new Date().toLocaleTimeString('nl-NL'), t, tone }); log.length = Math.min(log.length, 200); ctx.refresh(); };
+    let busy = false, stopAsked = false;
+
+    async function run() {
+        if (busy) return;
+        busy = true;
+        stopAsked = false;
+        let done = 0, people = 0, short = 0;
+        try {
+            const vehicles = await (await fetch('/api/vehicles', { credentials: 'same-origin' })).json();
+            const todo = vehicles.filter((v) => TRAINED[v.vehicle_type] && (Number(v.assigned_personnel_count) || 0) < TRAINED[v.vehicle_type][0]);
+            note(`${todo.length} voertuig(en) met een opleiding hebben minder dan het minimum aan personeel`);
+            for (const [i, v] of todo.entries()) {
+                if (stopAsked) { note('gestopt'); break; }
+                ctx.status(`Bemannen ${i + 1}/${todo.length}: ${v.caption}`, { tone: 'busy', progress: [i, todo.length] });
+                const [minCrew, training, rule] = TRAINED[v.vehicle_type];
+                const doc = await getDoc(`/vehicles/${v.id}/zuweisung`);
+                // The training's key ("ovd_p") from the page's own filter list.
+                const opt = (ALIAS[training] && [...doc.querySelectorAll('select option')].find((o) => o.value === ALIAS[training]))
+                    || [...doc.querySelectorAll('select option')].find((o) => norm(o.textContent) === norm(training))
+                    || [...doc.querySelectorAll('select option')].find((o) => o.value !== 'all' && norm(o.textContent).startsWith(norm(training)))
+                    || [...doc.querySelectorAll('select option')].find((o) => o.value !== 'all' && norm(training).startsWith(norm(o.textContent)));
+                if (!opt) { note(`${v.caption}: opleiding "${training}" niet gevonden op de pagina`, 'warn'); continue; }
+                const key = opt.value;
+                const rows = [...doc.querySelectorAll('tr[id^="personal_"]')].map((tr) => {
+                    let keys = [];
+                    try { keys = JSON.parse(tr.getAttribute('data-filterable-by') || '[]'); } catch (e) { /* none */ }
+                    const btn = tr.querySelector('a.btn[personal_id]');
+                    return { pid: btn?.getAttribute('personal_id'), keys, btn, busyNow: /In opleiding/i.test(tr.textContent) };
+                }).filter((r) => r.pid);
+                const onIt = rows.filter((r) => r.btn.classList.contains('btn-assigned'));
+                let seatsMax = null;
+                for (const sc of doc.scripts) { const m = sc.textContent.match(/personal_max\s*=\s*(\d+)/); if (m) seatsMax = Number(m[1]); }
+                const want = rule ? rule : minCrew; // trained people needed
+                const haveTrained = onIt.filter((r) => r.keys.includes(key)).length;
+                let need = Math.max(0, want - haveTrained);
+                if (seatsMax != null) need = Math.min(need, Math.max(0, seatsMax - onIt.length));
+                if (!need) continue;
+                const pool = rows.filter((r) => r.btn.classList.contains('btn-success') && !r.busyNow && r.keys.includes(key))
+                    .sort((a, b) => a.keys.length - b.keys.length).slice(0, need);
+                let ok = 0;
+                for (const r of pool) {
+                    await fetch(`/vehicles/${v.id}/zuweisungDo/${r.pid}`, { method: 'POST', credentials: 'same-origin',
+                        headers: { 'X-CSRF-Token': token() }, body: new URLSearchParams({ authenticity_token: token() }) });
+                    ok++;
+                    await sleep(ctx.cfg.delayMs);
+                }
+                // Check on the page itself.
+                const after = await getDoc(`/vehicles/${v.id}/zuweisung`);
+                const confirmed = pool.filter((r) => after.querySelector(`a[personal_id="${r.pid}"]`)?.classList.contains('btn-assigned')).length;
+                people += confirmed;
+                if (confirmed) done++;
+                if (confirmed < need) {
+                    short++;
+                    note(`${v.caption}: ${confirmed} van ${need} met "${opt.textContent.trim()}" gekoppeld${pool.length < need ? ' (niet genoeg vrij opgeleid personeel in dit gebouw)' : ''}`, 'warn');
+                } else note(`${v.caption}: ${confirmed} met "${opt.textContent.trim()}" gekoppeld`, 'ok');
+                if (ok !== confirmed) await sleep(1000);
+            }
+            ctx.status(`Klaar: ${people} personeelsleden op ${done} voertuig(en)${short ? `, ${short} nog niet compleet` : ''}`, { tone: short ? 'warn' : 'ok' });
+            note(`klaar: ${people} personeelsleden op ${done} voertuig(en)${short ? `, ${short} nog niet compleet` : ''}`, short ? 'warn' : 'ok');
+        } catch (e) {
+            ctx.err(e);
+            ctx.status(`Fout: ${e.message}`, { tone: 'error' });
+            note(`fout: ${e.message}`, 'error');
+        } finally { busy = false; ctx.refresh(); }
+    }
+
+    ctx.actions([
+        { label: 'Alle voertuigen met een opleiding bemannen', kind: 'primary',
+            confirm: 'Alle voertuigen langslopen die een opleiding vragen en er het minimum aan opgeleid, vrij personeel uit hetzelfde gebouw op zetten?\n\nEr wordt niemand afgehaald of van een ander voertuig gepakt.',
+            run: () => run() },
+        { label: 'Stoppen', run: () => { stopAsked = true; } },
+    ]);
+    ctx.panel((el) => {
+        el.innerHTML = log.length
+            ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>${log.map((l) => `<tr><td class="mono mks-dim">${ctx.esc(l.at)}</td><td class="${l.tone === 'warn' ? 't-warn' : l.tone === 'error' ? 't-error' : ''}">${ctx.esc(l.t)}</td></tr>`).join('')}</tbody></table></div>`
+            : '<p class="mks-note">Klik op <b>Alle voertuigen met een opleiding bemannen</b>. Alleen vrij personeel met de juiste opleiding uit hetzelfde gebouw, precies het minimum.</p>';
+    });
+    ctx.status('Klaar om te bemannen', { tone: 'idle' });
+    return { stop() { stopAsked = true; } };
+}
 
 /* ==== module: auto-dispatch =============================================== */
 MKS.module({
@@ -10925,6 +11058,20 @@ MKS.module({
             "HA-ICB": 147, "GM-ICB": 148, "HSH-ICB": 149, "VW-HS": 150, "BM-VTHS": 151, "TS-Spoor": 152, "DB-RI": 153, "RIA": 154,
             "DB-VI": 155, "VIA": 156
         };
+
+        // Long drives of the last 7 days: [lat, lon, time, vehicle type, km, credits].
+        // Read by Automatisch uitbreiden to place new posts where they save the most driving.
+        const FAR_KEY = 'mks.autoDispatch.longDrives.v1';
+        function recordLongDrives(pos, drives, credits) {
+            if (!pos || !drives || !drives.length) return;
+            let list;
+            try { list = JSON.parse(GM_getValue(FAR_KEY, '[]')) || []; } catch (e) { list = []; }
+            const since = Date.now() - 7 * 86400000;
+            list = list.filter((x) => x[2] >= since);
+            for (const [vt, km] of drives) list.push([Math.round(pos[0] * 1e4) / 1e4, Math.round(pos[1] * 1e4) / 1e4, Date.now(), vt, km, Number(credits) || 0]);
+            if (list.length > 5000) list = list.slice(-5000);
+            GM_setValue(FAR_KEY, JSON.stringify(list));
+        }
 
         // Vehicle types chosen for team missions (panel menu); null = the default.
         const loadTeamTypes = () => { try { const v = JSON.parse(GM_getValue('mks.autoDispatch.teamTypes', '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
@@ -11380,7 +11527,8 @@ MKS.module({
                 // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
                 const held = needKeys.filter((k) => job.reserved && job.reserved[k] && avail[k] - want[k] < job.reserved[k].need);
                 if (held.length) {
-                    report('skip', { held: true, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
+                    const heldIds = [...new Set(held.flatMap((k) => job.reserved[k].ids || []))];
+                    report('skip', { held: true, heldIds, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
                     return;
                 }
 
@@ -11528,7 +11676,11 @@ MKS.module({
                     return;
                 }
                 try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
-                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value) });
+                // Vehicles that drove far (type, km), for Automatisch uitbreiden: new posts
+                // go where they would cut the longest drives.
+                const longDrives = picked.filter((c) => dist(c) > 15).sort((a, b) => dist(b) - dist(a)).slice(0, 5)
+                    .map((c) => [String(c.getAttribute('vehicle_type_id')), Math.round(dist(c) * 10) / 10]);
+                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value), longDrives });
                 btn.click();
             } catch (e) {
                 ctx.err(e);
@@ -12120,11 +12272,31 @@ MKS.module({
                     // 7,190 garage fire held units back from 6,000 missions for no gain.
                     if (hid === id || h.credits < credits * 2) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
-                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
+                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0, ids: [] };
                         out[k].need += v.need;
+                        out[k].ids.push(hid);
                     }
                 }
                 return out;
+            }
+            // A hold adds up the credits of the missions it keeps waiting. Once those together
+            // are worth more than the big mission, the hold ends (and is not set again for a
+            // while): one 57k Dieseltrein held back missions worth 157k that were never sent.
+            function noteBlocked(res, id, credits) {
+                for (const hid of res.heldIds || []) {
+                    const h = holds.get(hid);
+                    if (!h) continue;
+                    h.blocked = h.blocked || {};
+                    h.blocked[id] = Math.max(Number(credits) || 0, 1);
+                    const total = Object.values(h.blocked).reduce((a, b) => a + b, 0);
+                    if (total > h.credits) {
+                        holds.delete(hid);
+                        holdExpired.set(hid, Date.now());
+                        addLog(h.name, `niet meer bewaard: wachtende inzetten samen ${ctx.nl(total)} cr, meer dan deze inzet (${ctx.nl(h.credits)} cr)`, 'idle');
+                        // The mission it kept waiting goes again in a minute.
+                        tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                    }
+                }
             }
             // A mission whose hold ran out is not held again for twice the hold time: before
             // this, it was held again on its next try and kept rare vehicles idle for an hour
@@ -12463,7 +12635,8 @@ MKS.module({
                 fd.append('vehicle_ids[]', best.c.value);
                 const res = await fetch(form.getAttribute('action'), { method: 'POST', body: new URLSearchParams(fd), credentials: 'same-origin' });
                 if (!res.ok) return null;
-                return { result: 'sent', mode: 'direct', n: 1, km: best.km, ids: [best.c.value] };
+                return { result: 'sent', mode: 'direct', n: 1, km: best.km, ids: [best.c.value],
+                    longDrives: best.km > 15 ? [[String(best.c.getAttribute('vehicle_type_id')), best.km]] : [] };
             }
             let quickBusy = false, quickTimer = null;
             async function quickCycle() {
@@ -12532,6 +12705,7 @@ MKS.module({
                             if (res.result === 'skip' && !res.held && /te weinig|geen voertuigen|te ver|op \d/i.test(String(res.reason || ''))) res = await quickJob(false);
                             const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
                             const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                            if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(pos, res.longDrives, creditsOf(entry));
                             recordEvent({ kind: 'mission', lane: top ? 'quick-topup' : 'quick', id, name, type: keyOf(entry), credits: creditsOf(entry), pos,
                                 result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined });
                             // A mission it just sent stays "open" in the list until its patient is
@@ -12554,6 +12728,7 @@ MKS.module({
                                 curPos = pos;
                                 curCredits = creditsOf(entry);
                                 recordResult(res, id, name);
+                                if (res.held) noteBlocked(res, id, creditsOf(entry));
                                 addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
                             } else if (res.result === 'wait') {
                                 // backoff set above
@@ -12720,6 +12895,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
+                        if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
                             stats.transports++;
@@ -12737,6 +12913,7 @@ MKS.module({
                             // Not a shortage: the vehicle is there, but kept for a bigger mission.
                             errorStreak = 0;
                             addLog(name, res.reason, 'idle');
+                            noteBlocked(res, id, credits);
                         } else if (res.result === 'sent' || res.result === 'unconfirmed') {
                             stats.sent++;
                             errorStreak = 0;
@@ -14123,7 +14300,7 @@ MKS.module({
         };
         // Extensions still being built (bought here or by hand) whose vehicle the building
         // does not have yet and no project trains for: give them a crew project.
-        const EXT_VT = { 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
+        const EXT_VT = { '2e OvD-P': 35, 'Drone Team Politie': 128, 'Mobiele Eenheid, Aanhoudingseenheid': 64, 'Waterwerper Uitbreiding': 84, 'Waterwerper': 84, 'Bereden Brigade': 73 };
         // Stations without a single vehicle and no project (a build whose follow-up got
         // lost, like Ambulancepost Nijmegen Centrum): give them their first vehicle.
         const EMPTY_KIND = { 0: 'brandweerkazerne', 17: 'brandweerkazerne', 5: 'politiebureau', 18: 'politiebureau', 3: 'ambulancepost', 13: 'ambulancepost' };
@@ -14361,6 +14538,13 @@ MKS.module({
             const m = 0.005;
             return { name: c.name, center: c.center, inside: (p) => p[0] >= s - m && p[0] <= n + m && p[1] >= w - m && p[1] <= e + m };
         }
+        // Long drives recorded by Automatisch alarmeren: [lat, lon, time, vehicle type, km, credits].
+        function longDrives() {
+            try {
+                const since = Date.now() - 7 * 86400000;
+                return (JSON.parse(GM_getValue('mks.autoDispatch.longDrives.v1', '[]')) || []).filter((d) => d[2] >= since);
+            } catch (e) { return []; }
+        }
         async function planGrow(data) {
             const out = [];
             if (!ctx.cfg.buildMode && !ctx.cfg.doGrow) return out;
@@ -14390,6 +14574,10 @@ MKS.module({
                 const mine = [...data.buildings.filter((b) => g.same.includes(b.building_type)).map(posOf),
                     ...(state.recentSpots || []).filter((x) => x[3] === CAT_OF[g.types[0]]).map((x) => [x[0], x[1]])];
                 let best = null;
+                const drives = longDrives().filter((d) => {
+                    const v = VT[d[3]];
+                    return v && v[3].some((t) => g.types.includes(t)); // only what such a post can hold
+                });
                 if (city) {
                     for (const p of uniq) {
                         if (p[2] !== CAT_OF[g.types[0]] || !city.inside(p)) continue;
@@ -14410,7 +14598,19 @@ MKS.module({
                     const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
                     if (gap < 3) continue;
                     const near = Math.min(...owned.map((o) => km(o, at)));
-                    if (!best || near < best.near) best = { at, gap, near, why: `groei: ${near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}` };
+                    // Long drives of this kind nearby (Automatisch alarmeren): the km a post
+                    // here would have saved in the last 7 days. The spot that saves the most wins.
+                    let saved = 0, trips = 0;
+                    for (const d of drives) {
+                        if (Math.abs(d[0] - at[0]) > 0.5 || Math.abs(d[1] - at[1]) > 0.8) continue;
+                        const gain = d[4] - km(at, [d[0], d[1]]) * 1.3; // road is longer than a straight line
+                        if (gain > 3) { saved += gain; trips++; }
+                    }
+                    const score = saved >= 150 ? saved : 0;
+                    const why = score
+                        ? `korter rijden: ${trips} lange ritten in de buurt (7 dagen), samen ~${Math.round(saved)} km korter; ${near.toFixed(1)} km van je dichtstbijzijnde gebouw`
+                        : `groei: ${near.toFixed(1)} km van je dichtstbijzijnde gebouw, ${gap.toFixed(1)} km van je dichtstbijzijnde ${g.name}`;
+                    if (!best || score > best.score || (score === best.score && near < best.near)) best = { at, gap, near, score, why };
                 }
                 if (!best) continue;
                 // Full-size and small for the same spot: only the better return goes on the list.
@@ -14738,7 +14938,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013151405' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013153818' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14880,7 +15080,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261013151405',
+                version: '1.7.0.20261013153818',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
