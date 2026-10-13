@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013150801 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013153143 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -32,6 +32,8 @@
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
  *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
+ *   ctx.settingExtra(key, render)  that setting's label unfolds; render(el) draws more under it
+ *   setting.parent: 'key'   shown inside that setting's unfolding part instead of in the list
  *   ctx.set(key, value)     change one of the module's own settings
  *   ctx.open()              open the dashboard on this module
  * ========================================================================== */
@@ -40,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261013150801';
+    const VERSION = '1.7.0.20261013153143';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -94,7 +96,7 @@ const MKS = (() => {
         if (!rt[def.id]) {
             rt[def.id] = {
                 cfg: settingsOf(def), running: false, handle: null, error: null, needsReload: false,
-                status: null, actions: [], panel: null, menus: [], onSettings: null,
+                status: null, actions: [], panel: null, menus: [], onSettings: null, extras: {},
             };
         }
         return rt[def.id];
@@ -123,6 +125,7 @@ const MKS = (() => {
             refresh() { ui.detailChanged(def.id, true); },
             menu(item) { r.menus.push(item); nav.render(); },
             onSettings(fn) { r.onSettings = fn; },
+            settingExtra(key, render) { r.extras[key] = render; },
             set(key, value) { setSetting(def, key, value); ui.changed(def.id, true); },
             open() { ui.open(def.id); },
         };
@@ -292,6 +295,11 @@ const MKS = (() => {
     #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
     #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
+    #mks-dash .mks-set .l.mks-xl { cursor:pointer; }
+    #mks-dash .mks-set-x { padding:2px 0 12px 16px; border-bottom:1px solid var(--m-bd); max-width:820px; }
+    #mks-dash .mks-set-x .mks-set { max-width:804px; }
+    #mks-dash .mks-set-x .mks-set:last-of-type { border-bottom:1px solid var(--m-bd); }
+    #mks-dash .mks-xn { color:var(--m-faint); font-weight:400; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
     #mks-dash .mks-set .rv { font:500 12px var(--m-mono); color:var(--m-tx); min-width:42px; text-align:right; }
     #mks-dash .mks-reset { margin-top:12px; }
@@ -729,21 +737,32 @@ const MKS = (() => {
             try { r.panel(box); } catch (e) { box.innerHTML = `<p class="mks-note">Paneel kon niet laden: ${esc(e.message)}</p>`; console.error(e); }
         }
 
+        // Unfolded setting extras (ctx.settingExtra), by "module:key".
+        const openExtras = new Set();
         function renderSettings(def, box) {
             const list = def.settings || [];
+            const extras = runtime(def).extras || {};
             if (!list.length) { box.innerHTML = ''; return; }
             const cfg = settingsOf(def);
-            // s.group: a sub-heading above the first setting of each group.
+            // s.group: a sub-heading above the first setting of each group (a group's settings
+            // are kept together, in the order the groups first appear).
             // s.advanced: tucked away under "Geavanceerd" (fine-tuning).
+            // s.parent: inside that setting's unfolding part.
             let lastGroup = null;
             const rows = (items) => items.map(([s, i]) => {
                 const head = s.group && s.group !== lastGroup ? `<div class="mks-sg">${esc(s.group)}</div>` : '';
                 if (s.group) lastGroup = s.group;
                 return head + rowHtml(s, i);
             }).join('');
-            const indexed = list.map((s, i) => [s, i]);
-            const main = indexed.filter(([s]) => !s.advanced);
-            const adv = indexed.filter(([s]) => s.advanced);
+            const keys = new Set(list.map((s) => s.key));
+            const childrenOf = {};
+            list.forEach((s, i) => { if (s.parent && keys.has(s.parent)) (childrenOf[s.parent] = childrenOf[s.parent] || []).push([s, i]); });
+            const indexed = list.map((s, i) => [s, i]).filter(([s]) => !(s.parent && keys.has(s.parent)));
+            const order = [];
+            indexed.forEach(([s]) => { const g = s.group || ''; if (!order.includes(g)) order.push(g); });
+            const byGroup = (items) => order.flatMap((g) => items.filter(([s]) => (s.group || '') === g));
+            const main = byGroup(indexed.filter(([s]) => !s.advanced));
+            const adv = byGroup(indexed.filter(([s]) => s.advanced));
             box.innerHTML = `<h4 class="mks-h">Instellingen</h4>` + rows(main)
                 + (adv.length ? `<details class="mks-adv"><summary>Geavanceerd (${adv.length})</summary>${(lastGroup = null, rows(adv))}</details>` : '')
                 + `<div class="mks-reset"><a class="mks-link">Standaardwaarden herstellen</a></div>`;
@@ -762,6 +781,13 @@ const MKS = (() => {
                     control = `<input type="number" ${s.min != null ? `min="${s.min}"` : ''} ${s.max != null ? `max="${s.max}"` : ''} step="${s.step || 'any'}" value="${esc(v)}">${s.unit ? `<span class="u">${esc(s.unit)}</span>` : ''}`;
                 } else {
                     control = `<input type="text" value="${esc(v)}" placeholder="${esc(s.placeholder || '')}">`;
+                }
+                const kids = childrenOf[s.key] || [];
+                if (extras[s.key] || kids.length) {
+                    const open = openExtras.has(`${def.id}:${s.key}`);
+                    const more = kids.length ? ` <span class="mks-xn">(${kids.length})</span>` : '';
+                    return `<div class="mks-set" data-i="${i}"><div class="l mks-xl" title="Klik voor meer">${open ? '▾' : '▸'} ${esc(s.label)}${more}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`
+                        + `<div class="mks-set-x" data-x="${i}" ${open ? '' : 'hidden'}>${kids.map(([k, j]) => rowHtml(k, j)).join('')}<div class="mks-set-xc"></div></div>`;
                 }
                 return `<div class="mks-set" data-i="${i}"><div class="l">${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`;
             }
@@ -788,6 +814,19 @@ const MKS = (() => {
                     const v = read();
                     if (s.type === 'number') input.value = v;
                     setSetting(def, s.key, v);
+                });
+            });
+            box.querySelectorAll('.mks-set-x').forEach((x) => {
+                const s = list[Number(x.dataset.x)];
+                const id = `${def.id}:${s.key}`;
+                const xc = x.querySelector(':scope > .mks-set-xc');
+                const draw = () => { if (!extras[s.key]) return; try { extras[s.key](xc); } catch (e) { xc.textContent = `Kon niet laden: ${e.message}`; console.error(e); } };
+                if (!x.hidden) draw();
+                const label = x.previousElementSibling.querySelector('.l');
+                label.addEventListener('click', () => {
+                    x.hidden = !x.hidden;
+                    if (x.hidden) openExtras.delete(id); else { openExtras.add(id); draw(); }
+                    label.firstChild.textContent = `${x.hidden ? '▸' : '▾'} ${s.label}`;
                 });
             });
             box.querySelector('.mks-reset a').addEventListener('click', () => resetSettings(def));
@@ -10670,84 +10709,79 @@ MKS.module({
     pageNote: 'Op de kaartpagina (en onzichtbaar in het alarmeer- en voertuigvenster)',
     live: true,
     settings: [
-        { key: 'maxKm', label: 'Maximale afstand', type: 'number', default: 25, min: 1, max: 500, step: 1, unit: 'km',
+        { key: 'maxKm', group: 'Voertuigen kiezen', label: 'Maximale afstand', type: 'number', default: 25, min: 1, max: 500, step: 1, unit: 'km',
             help: 'Hemelsbreed. Is één van de gekozen voertuigen verder weg, dan wordt de inzet overgeslagen.' },
-        { key: 'airKm', label: 'Maximale afstand helikopters', type: 'number', default: 100, min: 1, max: 500, step: 5, unit: 'km',
+        { key: 'airKm', parent: 'maxKm', label: 'Maximale afstand helikopters', type: 'number', default: 100, min: 1, max: 500, step: 5, unit: 'km',
             help: 'Lifeliner, Politiehelikopter, SAR-heli en FBO-Heli vliegen en mogen van verder komen.' },
-        { key: 'needAll', label: 'Alleen als alles beschikbaar is', type: 'bool', default: true,
+        { key: 'needAll', group: 'Voertuigen kiezen', label: 'Alleen als alles beschikbaar is', type: 'bool', default: true,
             help: 'Uit: stuurt ook als het spel meldt dat er voertuigen tekort zijn (stuurt dan wat er wel is).' },
-        { key: 'ownJobOnly', label: 'Niet als gewone voertuigen', type: 'text', default: 'TS-BO, TS-GO',
+        { key: 'ownJobOnly', parent: 'needAll', label: 'Niet als gewone voertuigen', type: 'text', default: 'TS-BO, TS-GO',
             help: 'Voertuigsoorten met komma\'s ertussen die alleen gaan als een inzet ze zelf vraagt, niet als gewone tankautospuit, '
                 + 'slangenwagen of voor water. Bijvoorbeeld: TS-BO, TS-GO, TS-IB, TS-Spoor, DB-RI.' },
-        { key: 'ignoreShort', label: 'Tekort negeren bij', type: 'text', default: 'Incidentenbestrijder',
+        { key: 'ignoreShort', parent: 'needAll', label: 'Tekort negeren bij', type: 'text', default: 'Incidentenbestrijder',
             help: 'Namen met komma\'s ertussen, zoals het spel ze noemt ("te weinig: 1 Incidentenbestrijder"). '
                 + 'Is alleen hiervan te weinig, dan gaat de rest toch. Telt nog wel mee in de tekortlijst.' },
-        { key: 'topUp', label: 'Bijsturen bij rode melding', type: 'bool', default: true,
+        { key: 'topUp', group: 'Voertuigen kiezen', label: 'Bijsturen bij rode melding', type: 'bool', default: true,
             help: 'Ook inzetten waar al voertuigen zijn, maar het spel "Missende voertuigen" meldt: stuurt alleen wat daar staat. '
                 + 'Wacht tot er niets meer onderweg is, zodat er niets dubbel gaat.' },
-        { key: 'patients', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
+        { key: 'patients', group: 'Patiënten', label: 'Patiënten: ambulance, MMT en OvD-G', type: 'bool', default: true,
             help: 'Leest per patiënt wat nodig is ("We benodigen: MMT-Arts, OvD-G"): een ambulance per patiënt, '
                 + 'één MMT tegelijk (de volgende in een latere ronde als het nog nodig is) en hooguit één OvD-G per inzet. '
                 + 'Ook bij inzetten waar al voertuigen staan.' },
-        { key: 'ovdgFrom', label: 'OvD-G vanaf zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
+        { key: 'ovdgFrom', parent: 'patients', label: 'OvD-G vanaf zoveel patiënten', type: 'number', default: 5, min: 0, max: 100, step: 1,
             help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
                 + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
-        { key: 'bigCredits', label: 'Grote inzet vanaf', type: 'number', default: 15000, min: 0, max: 100000, step: 500, unit: 'credits',
+        { key: 'bigCredits', group: 'Grote inzetten', label: 'Grote inzet vanaf', type: 'number', default: 15000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
                 + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. Alleen voor inzetten met minstens twee keer zoveel credits. 0 = niets vasthouden.' },
-        { key: 'rareMax', label: 'Zeldzaam: hooguit zoveel vrij', type: 'number', default: 2, min: 0, max: 20, step: 1,
+        { key: 'rareMax', parent: 'bigCredits', label: 'Zeldzaam: hooguit zoveel vrij', type: 'number', default: 2, min: 0, max: 20, step: 1,
             help: 'Een voertuigsoort die de grote inzet nodig heeft en waarvan er zoveel of minder vrij zijn (of geen), wordt voor die inzet bewaard.' },
-        { key: 'holdMin', label: 'Bewaren voor grote inzet', type: 'number', default: 20, min: 1, max: 120, step: 1, unit: 'min',
+        { key: 'holdMin', parent: 'bigCredits', label: 'Bewaren voor grote inzet', type: 'number', default: 20, min: 1, max: 120, step: 1, unit: 'min',
             help: 'Daarna mogen kleinere inzetten ze weer gebruiken, zodat niets voorgoed vastloopt. De grote inzet wordt ondertussen elke minuut opnieuw bekeken.' },
-        { key: 'bigPatients', label: 'Grote inzet: meer dan zoveel patiënten', type: 'number', default: 30, min: 0, max: 500, step: 5,
+        { key: 'bigPatients', parent: 'bigCredits', label: 'Grote inzet: meer dan zoveel patiënten', type: 'number', default: 30, min: 0, max: 500, step: 5,
             help: 'Daar mogen ambulances in delen: te weinig of te ver weg houdt de rest niet tegen. De patiënten vragen daarna zelf '
                 + 'om de rest ("We benodigen: ambulance") en die gaan in de volgende rondes. 0 = uit.' },
-        { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
+        { key: 'onlyVisible', group: 'Voertuigen kiezen', label: 'Alleen zichtbare inzetten', type: 'bool', default: true,
             help: 'Je eigen inzetten die je met de missiefilters verbergt, worden overgeslagen. Teaminzetten gaan ook als ze verborgen zijn.' },
-        { key: 'quickLane', label: 'Snelle baan voor kleine inzetten', type: 'bool', default: true,
+        { key: 'quickLane', group: 'Extra rondes', label: 'Snelle baan voor kleine inzetten', type: 'bool', default: true,
             help: 'Een extra onzichtbaar venster voor kleine inzetten (onder de grens hieronder, één of twee voertuigen) en rode inzetten die nog maar zoveel missen, '
                 + 'elke paar seconden, los van de grote ronde door de hele lijst. Een auto die de ene kant net stuurde, kiest de andere niet.' },
-        { key: 'quickMax', label: 'Snelle baan: tot', type: 'number', default: 1000, min: 0, max: 20000, step: 100, unit: 'credits' },
-        { key: 'quickWindows', label: 'Snelle baan: vensters', type: 'number', default: 2, min: 1, max: 3, step: 1,
+        { key: 'quickMax', parent: 'quickLane', label: 'Snelle baan: tot', type: 'number', default: 1000, min: 0, max: 20000, step: 100, unit: 'credits' },
+        { key: 'quickWindows', parent: 'quickLane', label: 'Snelle baan: vensters', type: 'number', default: 2, min: 1, max: 3, step: 1,
             help: 'Zoveel onzichtbare vensters werken tegelijk de kleine inzetten af.' },
-        { key: 'quickUnits', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
-        { key: 'teamMissions', label: 'Teaminzetten: 1 noodhulp', type: 'bool', default: false,
-            help: 'Ook de gedeelde teaminzetten en teamevenementen van anderen: daar gaat precies één noodhulp heen (de dichtstbijzijnde, hoe ver ook), '
-                + 'naar een teamevenement één noodhulp óf ambulance (wat het dichtstbij vrij is), '
-                + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
-                + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
-                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien. '
-                + 'Andere voertuigtypes kiezen: uitklapmenu "Voertuigtypes voor teaminzetten" in het paneel.' },
-        { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
-        { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
-        { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
-        { key: 'maxPerHour', label: 'Maximaal per uur', type: 'number', default: 500, min: 1, max: 2000, step: 10 },
-        { key: 'transport', label: 'Spraakaanvragen afhandelen', type: 'bool', default: true,
+        { key: 'quickUnits', parent: 'quickLane', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
+        { key: 'teamMissions', group: 'Extra rondes', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
+            help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
+        { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
+        { key: 'scanSec', parent: 'maxPerHour', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
+        { key: 'retryMin', parent: 'maxPerHour', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
+        { key: 'maxPerHour', group: 'Tempo', label: 'Maximaal per uur', type: 'number', default: 500, min: 1, max: 2000, step: 10 },
+        { key: 'transport', group: 'Spraakaanvragen', label: 'Spraakaanvragen afhandelen', type: 'bool', default: true,
             help: 'Patiënten naar het beste passende ziekenhuis, gevangenen naar de beste cel: goedkoopst, dan dichtstbij. '
                 + 'Volle, te dure of te verre bestemmingen en ziekenhuizen zonder de juiste afdeling vallen af.' },
-        { key: 'destCost', label: 'Maximale kosten bestemming (team)', type: 'select', default: '20',
+        { key: 'destCost', parent: 'transport', label: 'Maximale kosten bestemming (team)', type: 'select', default: '20',
             options: [['0', '0 %'], ['10', '10 %'], ['20', '20 %'], ['30', '30 %'], ['40', '40 %'], ['50', '50 % (alles)']] },
-        { key: 'destKm', label: 'Maximale afstand bestemming', type: 'number', default: 0, min: 0, max: 500, step: 5, unit: 'km', help: '0 = geen grens.' },
-        { key: 'ownKm', label: 'Voorrang eigen ziekenhuis', type: 'number', default: 5, min: 0, max: 100, step: 1, unit: 'km',
+        { key: 'destKm', parent: 'transport', label: 'Maximale afstand bestemming', type: 'number', default: 0, min: 0, max: 500, step: 5, unit: 'km', help: '0 = geen grens.' },
+        { key: 'ownKm', parent: 'transport', label: 'Voorrang eigen ziekenhuis', type: 'number', default: 5, min: 0, max: 100, step: 1, unit: 'km',
             help: 'Bij gelijke kosten wint je eigen ziekenhuis of cel, zolang die niet meer dan zoveel km verder is.' },
-        { key: 'release', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
+        { key: 'release', parent: 'transport', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
-        { key: 'sendBack', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
+        { key: 'sendBack', group: 'Patiënten', label: 'Klaar op patiënten na: rest terug naar post', type: 'bool', default: true,
             help: 'Is de voortgangsbalk van een inzet leeg (0%, het werk is gedaan) en wacht die alleen nog op patiëntenzorg (ambulance, OvD-G, MMT, Lifeliner), '
                 + 'dan gaan je andere voertuigen daar (ter plaatse en onderweg) terug naar de post. Niet bij inzetten met arrestanten.' },
-        { key: 'planned', label: 'Geplande inzetten meedoen', type: 'bool', default: true,
+        { key: 'planned', group: 'Extra rondes', label: 'Geplande inzetten meedoen', type: 'bool', default: true,
             help: 'Bewakingen en evenementen uit de lijst "Geplande inzetten": alleen als ze genoeg opleveren per voertuig per uur, '
                 + 'kort voor de start, na de gewone inzetten, en nooit met zeldzame eenheden.' },
-        { key: 'plannedMin', label: 'Gepland: minimaal per voertuig per uur', type: 'number', default: 400, min: 0, max: 5000, step: 50, unit: 'credits',
+        { key: 'plannedMin', parent: 'planned', label: 'Gepland: minimaal per voertuig per uur', type: 'number', default: 400, min: 0, max: 5000, step: 50, unit: 'credits',
             help: 'Credits van de inzet gedeeld door voertuigen x duur. Je gemiddelde over al je voertuigen ligt rond de 200.' },
-        { key: 'plannedLead', label: 'Gepland: sturen vanaf', type: 'number', default: 25, min: 5, max: 180, step: 5, unit: 'min voor de start',
+        { key: 'plannedLead', parent: 'planned', label: 'Gepland: sturen vanaf', type: 'number', default: 25, min: 5, max: 180, step: 5, unit: 'min voor de start',
             help: 'Eerder sturen houdt voertuigen langer vast; te laat en ze zijn er niet op tijd.' },
-        { key: 'plannedSkip', label: 'Gepland: nooit met', type: 'text',
+        { key: 'plannedSkip', parent: 'planned', label: 'Gepland: nooit met', type: 'text',
             default: 'drone_police, at_o, at_c, at_m, bike_police, police_horse, ovdp, polizeihubschrauber, kdow_orgl, fire_aviation, wildfire_command',
             help: 'Eisen (spelnamen) waarvoor je eenheden te zeldzaam zijn om uren vast te zitten.' },
-        { key: 'reloadMin', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
+        { key: 'reloadMin', parent: 'maxPerHour', label: 'Pagina verversen elke', type: 'number', default: 120, min: 0, max: 1440, step: 10, unit: 'min',
             help: 'Een lang open spelpagina wordt traag en zwaar. Ververst tussen twee rondes door en gaat daarna vanzelf verder. 0 = nooit '
                 + '(behalve als het geheugen bijna vol is).' },
     ],
@@ -11346,7 +11380,8 @@ MKS.module({
                 // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
                 const held = needKeys.filter((k) => job.reserved && job.reserved[k] && avail[k] - want[k] < job.reserved[k].need);
                 if (held.length) {
-                    report('skip', { held: true, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
+                    const heldIds = [...new Set(held.flatMap((k) => job.reserved[k].ids || []))];
+                    report('skip', { held: true, heldIds, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
                     return;
                 }
 
@@ -12086,11 +12121,31 @@ MKS.module({
                     // 7,190 garage fire held units back from 6,000 missions for no gain.
                     if (hid === id || h.credits < credits * 2) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
-                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
+                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0, ids: [] };
                         out[k].need += v.need;
+                        out[k].ids.push(hid);
                     }
                 }
                 return out;
+            }
+            // A hold adds up the credits of the missions it keeps waiting. Once those together
+            // are worth more than the big mission, the hold ends (and is not set again for a
+            // while): one 57k Dieseltrein held back missions worth 157k that were never sent.
+            function noteBlocked(res, id, credits) {
+                for (const hid of res.heldIds || []) {
+                    const h = holds.get(hid);
+                    if (!h) continue;
+                    h.blocked = h.blocked || {};
+                    h.blocked[id] = Math.max(Number(credits) || 0, 1);
+                    const total = Object.values(h.blocked).reduce((a, b) => a + b, 0);
+                    if (total > h.credits) {
+                        holds.delete(hid);
+                        holdExpired.set(hid, Date.now());
+                        addLog(h.name, `niet meer bewaard: wachtende inzetten samen ${ctx.nl(total)} cr, meer dan deze inzet (${ctx.nl(h.credits)} cr)`, 'idle');
+                        // The mission it kept waiting goes again in a minute.
+                        tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                    }
+                }
             }
             // A mission whose hold ran out is not held again for twice the hold time: before
             // this, it was held again on its next try and kept rare vehicles idle for an hour
@@ -12520,6 +12575,7 @@ MKS.module({
                                 curPos = pos;
                                 curCredits = creditsOf(entry);
                                 recordResult(res, id, name);
+                                if (res.held) noteBlocked(res, id, creditsOf(entry));
                                 addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
                             } else if (res.result === 'wait') {
                                 // backoff set above
@@ -12703,6 +12759,7 @@ MKS.module({
                             // Not a shortage: the vehicle is there, but kept for a bigger mission.
                             errorStreak = 0;
                             addLog(name, res.reason, 'idle');
+                            noteBlocked(res, id, credits);
                         } else if (res.result === 'sent' || res.result === 'unconfirmed') {
                             stats.sent++;
                             errorStreak = 0;
@@ -12844,7 +12901,7 @@ MKS.module({
             const TEAM_TYPES_KEY = 'mks.autoDispatch.teamTypes';
             const VT_LABEL = {};
             for (const [n, vt] of Object.entries(VT_NAMES)) if (!(vt in VT_LABEL)) VT_LABEL[vt] = n;
-            let ownedTypes = null, ownedAt = 0, teamTypesOpen = false;
+            let ownedTypes = null, ownedAt = 0, teamBox = null;
             async function loadOwnedTypes() {
                 ownedAt = Date.now();
                 try {
@@ -12853,33 +12910,32 @@ MKS.module({
                     for (const x of v) m[x.vehicle_type] = (m[x.vehicle_type] || 0) + 1;
                     ownedTypes = m;
                 } catch (e) { ctx.warn('team types', e); }
-                ctx.refresh();
+                if (teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
             }
-            function teamTypesHtml() {
-                if (teamTypesOpen && (!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
+            function drawTeamTypes(box) {
+                teamBox = box;
+                if ((!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
                 const chosen = new Set(loadTeamTypes() || []);
                 const rows = ownedTypes ? Object.entries(ownedTypes)
                     .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
-                    .sort((a, b) => a.name.localeCompare(b.name, 'nl'))
-                    .map((r) => `<label style="display:block;margin:2px 0"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
                     : '<p class="mks-note">Voertuigen laden…</p>';
-                return `<details data-team-types ${teamTypesOpen ? 'open' : ''}><summary class="mks-h" style="cursor:pointer">Voertuigtypes voor teaminzetten (${chosen.size ? `${chosen.size} gekozen` : 'standaard'})</summary>
-                    <p class="mks-note">Naar een teaminzet of teamevenement gaat één voertuig: het dichtstbijzijnde vrije van de aangevinkte types.
-                        Niets aangevinkt = standaard (één noodhulp; bij een evenement een noodhulp of ambulance). ${chosen.size ? '<a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
-                    <div style="columns:2;column-gap:16px">${rows}</div></details>`;
-            }
-            function bindTeamTypes(el) {
-                const d = el.querySelector('[data-team-types]');
-                if (!d) return;
-                d.addEventListener('toggle', () => { teamTypesOpen = d.open; if (d.open && !ownedTypes) loadOwnedTypes(); });
-                d.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
+                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement van anderen gaat precies één voertuig: het dichtstbijzijnde vrije
+                        van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen. Loopt naast je eigen inzetten in een eigen
+                        onzichtbaar venster, ook als de teaminzetten verborgen zijn (Teamfilter, missiefilters).</p>
+                    <p class="mks-note"><b>Voertuigtypes</b> (${chosen.size ? `${chosen.size} gekozen` : 'niets gekozen: standaard, één noodhulp; bij een evenement een noodhulp of ambulance'})
+                        ${chosen.size ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                    <div style="columns:2;column-gap:16px">${rows}</div>`;
+                box.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
                     const set = new Set(loadTeamTypes() || []);
                     if (cb.checked) set.add(cb.dataset.teamVt); else set.delete(cb.dataset.teamVt);
                     GM_setValue(TEAM_TYPES_KEY, JSON.stringify([...set]));
-                    ctx.refresh();
+                    drawTeamTypes(box);
                 }));
-                d.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); ctx.refresh(); });
+                box.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); drawTeamTypes(box); });
             }
+            ctx.settingExtra('teamMissions', drawTeamTypes);
 
             ctx.panel((el) => {
                 const esc = ctx.esc;
@@ -12899,7 +12955,6 @@ MKS.module({
                         <div class="mks-tile ${stats.errors ? 't-error' : ''}"><div class="v">${stats.errors}</div><div class="k">fouten</div></div>
                     </div>
                     ${holdHtml}
-                    ${teamTypesHtml()}
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
@@ -12919,7 +12974,6 @@ MKS.module({
                         ${log.map((l) => `<tr><td class="mono">${l.at.toLocaleTimeString('nl-NL')}</td><td>${esc(l.name)}</td>
                         <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td></tr>`).join('')}</tbody></table></div>`
                         : '<p class="mks-note">Nog niets gedaan. Klik op Start of op de knop <b>Auto</b> in de missiefilterbalk.</p>'}`;
-                bindTeamTypes(el);
             });
 
             ctx.onSettings((cfg, key) => {
@@ -12983,7 +13037,7 @@ MKS.module({
         // Same keys as before, so saved values stay; only order, groups and texts changed.
         { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 0, max: 100000000, step: 10000, unit: 'credits',
             help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
-        { group: 'Geld', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
+        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
 
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
@@ -13002,12 +13056,12 @@ MKS.module({
             help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (brandweer, politie en ambulance om de beurt), en maakt elke post af: '
                 + 'brandweer level 2 met een TST 4/5, ambulancepost level 1 met een ambulance, politie met noodhulp; de rest van de plekken '
                 + 'naar het grootste tekort dat er past. Tekorten en opleidingen wachten zolang. Werkt ook als "Nieuwe gebouwen" uit staat.' },
-        { group: 'Groeien', key: 'buildCity', label: 'Bouwmodus: stad', type: 'text', default: '', placeholder: 'bijv. Utrecht',
+        { group: 'Groeien', parent: 'buildMode', key: 'buildCity', label: 'Bouwmodus: stad', type: 'text', default: '', placeholder: 'bijv. Utrecht',
             help: 'Leeg = overal. Met een stad: eerst alle vrije echte posten in die stad, het dichtst bij het centrum eerst. '
                 + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
 
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
-        { group: 'Personeel', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
+        { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
         { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
             help: 'Een voertuigsoort komt pas in aanmerking als die zo vaak in de tekortlijst van Automatisch alarmeren staat.' },
@@ -14707,7 +14761,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013150801' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013153143' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14849,7 +14903,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261013150801',
+                version: '1.7.0.20261013153143',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

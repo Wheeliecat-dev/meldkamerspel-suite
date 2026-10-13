@@ -695,7 +695,8 @@ MKS.module({
                 // Big needs 1 OvD-P and 2 are free: a small mission may still take one.
                 const held = needKeys.filter((k) => job.reserved && job.reserved[k] && avail[k] - want[k] < job.reserved[k].need);
                 if (held.length) {
-                    report('skip', { held: true, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
+                    const heldIds = [...new Set(held.flatMap((k) => job.reserved[k].ids || []))];
+                    report('skip', { held: true, heldIds, reason: `bewaard voor ${job.reserved[held[0]].by}: ${held.map(caption).join(', ')}` });
                     return;
                 }
 
@@ -1435,11 +1436,31 @@ MKS.module({
                     // 7,190 garage fire held units back from 6,000 missions for no gain.
                     if (hid === id || h.credits < credits * 2) continue;
                     for (const [k, v] of Object.entries(h.keys)) {
-                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0 };
+                        if (!out[k]) out[k] = { by: `${h.name} (${ctx.nl(h.credits)} cr)`, need: 0, ids: [] };
                         out[k].need += v.need;
+                        out[k].ids.push(hid);
                     }
                 }
                 return out;
+            }
+            // A hold adds up the credits of the missions it keeps waiting. Once those together
+            // are worth more than the big mission, the hold ends (and is not set again for a
+            // while): one 57k Dieseltrein held back missions worth 157k that were never sent.
+            function noteBlocked(res, id, credits) {
+                for (const hid of res.heldIds || []) {
+                    const h = holds.get(hid);
+                    if (!h) continue;
+                    h.blocked = h.blocked || {};
+                    h.blocked[id] = Math.max(Number(credits) || 0, 1);
+                    const total = Object.values(h.blocked).reduce((a, b) => a + b, 0);
+                    if (total > h.credits) {
+                        holds.delete(hid);
+                        holdExpired.set(hid, Date.now());
+                        addLog(h.name, `niet meer bewaard: wachtende inzetten samen ${ctx.nl(total)} cr, meer dan deze inzet (${ctx.nl(h.credits)} cr)`, 'idle');
+                        // The mission it kept waiting goes again in a minute.
+                        tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                    }
+                }
             }
             // A mission whose hold ran out is not held again for twice the hold time: before
             // this, it was held again on its next try and kept rare vehicles idle for an hour
@@ -1869,6 +1890,7 @@ MKS.module({
                                 curPos = pos;
                                 curCredits = creditsOf(entry);
                                 recordResult(res, id, name);
+                                if (res.held) noteBlocked(res, id, creditsOf(entry));
                                 addLog(name, `snel overgeslagen: ${res.reason}`, 'warn');
                             } else if (res.result === 'wait') {
                                 // backoff set above
@@ -2052,6 +2074,7 @@ MKS.module({
                             // Not a shortage: the vehicle is there, but kept for a bigger mission.
                             errorStreak = 0;
                             addLog(name, res.reason, 'idle');
+                            noteBlocked(res, id, credits);
                         } else if (res.result === 'sent' || res.result === 'unconfirmed') {
                             stats.sent++;
                             errorStreak = 0;
