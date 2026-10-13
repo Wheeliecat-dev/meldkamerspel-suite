@@ -807,6 +807,17 @@ MKS.module({
                     const listed = new Set([...document.querySelectorAll('input.vehicle_checkbox')].map((c) => c.value)).size;
                     const fits = Object.entries(avail).map(([k, n]) => `${caption(k)} ${n}`).join(', ');
                     const more = document.querySelector('a[href*="/missing_vehicles"]:not([data-mks-clicked])') ? ', meer laden stond er nog' : '';
+                    if (!listed && !shortage) {
+                        // Not one vehicle listed (not even busy-free ones): the page is in another
+                        // state. Seen on missions sent before that turned red again. Say what the
+                        // page shows, and leave it for longer.
+                        const page = [document.querySelector('h1')?.textContent, ...[...document.querySelectorAll('.alert')].map((x) => x.textContent)]
+                            .map((t) => clean(t || '')).filter(Boolean).join(' | ').slice(0, 160);
+                        const tables = [...document.querySelectorAll('table[id]')].slice(0, 6)
+                            .map((t) => `${t.id} ${t.querySelectorAll('tbody tr').length}`).join(', ') || 'geen tabellen';
+                        report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'})` });
+                        return;
+                    }
                     report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage });
                     return;
                 }
@@ -2109,6 +2120,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
+                        if (res.emptyList) tried.set(id, Date.now() + 10 * 60000); // look again in about 10 minutes, not every round
                         if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
