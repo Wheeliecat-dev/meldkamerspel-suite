@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261012223836 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013150801 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -40,7 +40,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261012223836';
+    const VERSION = '1.7.0.20261013150801';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10717,7 +10717,8 @@ MKS.module({
                 + 'naar een teamevenement één noodhulp óf ambulance (wat het dichtstbij vrij is), '
                 + 'alleen als je er nog niet aan meedoet. Verder niets: geen bijsturen, geen andere voertuigen. Loopt naast je eigen inzetten, '
                 + 'in een eigen onzichtbaar venster; een auto die net naar de ene kant ging, wordt niet ook naar de andere gestuurd. '
-                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien.' },
+                + 'Ook als ze verborgen zijn (Teamfilter op rood, missiefilters): je hoeft ze niet te zien. '
+                + 'Andere voertuigtypes kiezen: uitklapmenu "Voertuigtypes voor teaminzetten" in het paneel.' },
         { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -10890,6 +10891,9 @@ MKS.module({
             "HA-ICB": 147, "GM-ICB": 148, "HSH-ICB": 149, "VW-HS": 150, "BM-VTHS": 151, "TS-Spoor": 152, "DB-RI": 153, "RIA": 154,
             "DB-VI": 155, "VIA": 156
         };
+
+        // Vehicle types chosen for team missions (panel menu); null = the default.
+        const loadTeamTypes = () => { try { const v = JSON.parse(GM_getValue('mks.autoDispatch.teamTypes', '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
 
         // Lower case, no " - ", and the long words the game abbreviates in type names.
         // "DB-BO, TS-BO or BOH-DC": the game sometimes writes "or" for "of".
@@ -11215,7 +11219,7 @@ MKS.module({
                 // Arrestants on a car on scene: that car needs a cell, not another car
                 // sent. Does not wait for vehicles still driving.
                 const prisonerCars = [...document.querySelectorAll('.prison-select')].filter((b) => b.querySelector('a[href*="/gefangener/"]'));
-                if (prisonerCars.length) { prisonerCell(job, prisonerCars[0], report, doneKey); return; }
+                if (prisonerCars.length) { await prisonerCell(job, prisonerCars[0], report, doneKey); return; }
                 // Verzorgers and Arbeidshygiëne grow with the responders on scene, so the red
                 // box only asks for them once units arrive. Waiting for everything still driving
                 // before sending them left missions open a long time: send those now, unless
@@ -11590,6 +11594,17 @@ MKS.module({
             const want = job.event ? { fustw: 1, rtw: 1 } : { fustw: 1 };
             const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { document.querySelectorAll('input.vehicle_checkbox:checked').forEach((c) => c.click()); } };
             async function select() {
+                // Types chosen in the panel ("Voertuigtypes voor teaminzetten"): the nearest
+                // free vehicle of any of those types, straight from the list.
+                if (job.teamTypes && job.teamTypes.length) {
+                    const allowed = new Set(job.teamTypes.map(String));
+                    const c = [...document.querySelectorAll('input.vehicle_checkbox')]
+                        .filter((x) => allowed.has(String(x.getAttribute('vehicle_type_id'))) && !x.disabled)
+                        .sort((x, y) => dist(x) - dist(y))[0];
+                    if (!c) return [];
+                    if (!c.checked) c.click();
+                    return [c];
+                }
                 const el = document.createElement('a');
                 el.id = 'aao_mks_team';
                 el.className = 'aao_btn';
@@ -11617,7 +11632,7 @@ MKS.module({
                 dropAvoided(job.avoid);
                 picked = await select();
             }
-            if (!picked.length) { report('skip', { reason: job.event ? 'geen noodhulp of ambulance vrij' : 'geen noodhulp vrij', noCar: true }); return; }
+            if (!picked.length) { report('skip', { reason: job.teamTypes && job.teamTypes.length ? 'geen gekozen voertuigtype vrij' : job.event ? 'geen noodhulp of ambulance vrij' : 'geen noodhulp vrij', noCar: true }); return; }
             const btn = document.getElementById('alert_btn');
             if (!btn) { reset(); report('error', { reason: 'knop Alarmeren niet gevonden' }); return; }
             // Taken by our own missions meanwhile: leave those out and choose again, once.
@@ -11636,7 +11651,7 @@ MKS.module({
             btn.click();
         }
 
-        function prisonerCell(job, block, report, doneKey) {
+        async function prisonerCell(job, block, report, doneKey) {
             // The car's own row is the one above the cell list ("MD 33.01 NH-OV").
             const vid = block.getAttribute('data-vehicle-id');
             const car = clean(block.closest('tr')?.previousElementSibling?.querySelector(`a[href^="/vehicles/${vid}"]`)?.textContent || '')
@@ -12558,7 +12573,7 @@ MKS.module({
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '' });
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: loadTeamTypes() });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
@@ -12824,6 +12839,48 @@ MKS.module({
                 return m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} uur` : `${Math.round(m / 1440)} d`;
             };
 
+            /* Vehicle types for team missions: a folding menu in the panel. Nothing ticked =
+             * the default (one noodhulp; at an event a noodhulp or ambulance). */
+            const TEAM_TYPES_KEY = 'mks.autoDispatch.teamTypes';
+            const VT_LABEL = {};
+            for (const [n, vt] of Object.entries(VT_NAMES)) if (!(vt in VT_LABEL)) VT_LABEL[vt] = n;
+            let ownedTypes = null, ownedAt = 0, teamTypesOpen = false;
+            async function loadOwnedTypes() {
+                ownedAt = Date.now();
+                try {
+                    const v = await (await fetch('/api/vehicles', { credentials: 'same-origin' })).json();
+                    const m = {};
+                    for (const x of v) m[x.vehicle_type] = (m[x.vehicle_type] || 0) + 1;
+                    ownedTypes = m;
+                } catch (e) { ctx.warn('team types', e); }
+                ctx.refresh();
+            }
+            function teamTypesHtml() {
+                if (teamTypesOpen && (!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
+                const chosen = new Set(loadTeamTypes() || []);
+                const rows = ownedTypes ? Object.entries(ownedTypes)
+                    .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
+                    .sort((a, b) => a.name.localeCompare(b.name, 'nl'))
+                    .map((r) => `<label style="display:block;margin:2px 0"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    : '<p class="mks-note">Voertuigen laden…</p>';
+                return `<details data-team-types ${teamTypesOpen ? 'open' : ''}><summary class="mks-h" style="cursor:pointer">Voertuigtypes voor teaminzetten (${chosen.size ? `${chosen.size} gekozen` : 'standaard'})</summary>
+                    <p class="mks-note">Naar een teaminzet of teamevenement gaat één voertuig: het dichtstbijzijnde vrije van de aangevinkte types.
+                        Niets aangevinkt = standaard (één noodhulp; bij een evenement een noodhulp of ambulance). ${chosen.size ? '<a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                    <div style="columns:2;column-gap:16px">${rows}</div></details>`;
+            }
+            function bindTeamTypes(el) {
+                const d = el.querySelector('[data-team-types]');
+                if (!d) return;
+                d.addEventListener('toggle', () => { teamTypesOpen = d.open; if (d.open && !ownedTypes) loadOwnedTypes(); });
+                d.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
+                    const set = new Set(loadTeamTypes() || []);
+                    if (cb.checked) set.add(cb.dataset.teamVt); else set.delete(cb.dataset.teamVt);
+                    GM_setValue(TEAM_TYPES_KEY, JSON.stringify([...set]));
+                    ctx.refresh();
+                }));
+                d.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); ctx.refresh(); });
+            }
+
             ctx.panel((el) => {
                 const esc = ctx.esc;
                 const tone = { ok: 't-ok', warn: 't-warn', error: 't-error', idle: '' };
@@ -12842,6 +12899,7 @@ MKS.module({
                         <div class="mks-tile ${stats.errors ? 't-error' : ''}"><div class="v">${stats.errors}</div><div class="k">fouten</div></div>
                     </div>
                     ${holdHtml}
+                    ${teamTypesHtml()}
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
@@ -12861,6 +12919,7 @@ MKS.module({
                         ${log.map((l) => `<tr><td class="mono">${l.at.toLocaleTimeString('nl-NL')}</td><td>${esc(l.name)}</td>
                         <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td></tr>`).join('')}</tbody></table></div>`
                         : '<p class="mks-note">Nog niets gedaan. Klik op Start of op de knop <b>Auto</b> in de missiefilterbalk.</p>'}`;
+                bindTeamTypes(el);
             });
 
             ctx.onSettings((cfg, key) => {
@@ -14648,7 +14707,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261012223836' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013150801' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -14790,7 +14849,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261012223836',
+                version: '1.7.0.20261013150801',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
