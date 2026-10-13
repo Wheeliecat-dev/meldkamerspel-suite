@@ -31,6 +31,7 @@
  *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
  *   ctx.settingExtra(key, render)  that setting's label unfolds; render(el) draws more under it
+ *   setting.parent: 'key'   shown inside that setting's unfolding part instead of in the list
  *   ctx.set(key, value)     change one of the module's own settings
  *   ctx.open()              open the dashboard on this module
  * ========================================================================== */
@@ -294,6 +295,9 @@ const MKS = (() => {
     #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
     #mks-dash .mks-set .l.mks-xl { cursor:pointer; }
     #mks-dash .mks-set-x { padding:2px 0 12px 16px; border-bottom:1px solid var(--m-bd); max-width:820px; }
+    #mks-dash .mks-set-x .mks-set { max-width:804px; }
+    #mks-dash .mks-set-x .mks-set:last-of-type { border-bottom:1px solid var(--m-bd); }
+    #mks-dash .mks-xn { color:var(--m-faint); font-weight:400; }
     #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
     #mks-dash .mks-set .rv { font:500 12px var(--m-mono); color:var(--m-tx); min-width:42px; text-align:right; }
     #mks-dash .mks-reset { margin-top:12px; }
@@ -738,17 +742,25 @@ const MKS = (() => {
             const extras = runtime(def).extras || {};
             if (!list.length) { box.innerHTML = ''; return; }
             const cfg = settingsOf(def);
-            // s.group: a sub-heading above the first setting of each group.
+            // s.group: a sub-heading above the first setting of each group (a group's settings
+            // are kept together, in the order the groups first appear).
             // s.advanced: tucked away under "Geavanceerd" (fine-tuning).
+            // s.parent: inside that setting's unfolding part.
             let lastGroup = null;
             const rows = (items) => items.map(([s, i]) => {
                 const head = s.group && s.group !== lastGroup ? `<div class="mks-sg">${esc(s.group)}</div>` : '';
                 if (s.group) lastGroup = s.group;
                 return head + rowHtml(s, i);
             }).join('');
-            const indexed = list.map((s, i) => [s, i]);
-            const main = indexed.filter(([s]) => !s.advanced);
-            const adv = indexed.filter(([s]) => s.advanced);
+            const keys = new Set(list.map((s) => s.key));
+            const childrenOf = {};
+            list.forEach((s, i) => { if (s.parent && keys.has(s.parent)) (childrenOf[s.parent] = childrenOf[s.parent] || []).push([s, i]); });
+            const indexed = list.map((s, i) => [s, i]).filter(([s]) => !(s.parent && keys.has(s.parent)));
+            const order = [];
+            indexed.forEach(([s]) => { const g = s.group || ''; if (!order.includes(g)) order.push(g); });
+            const byGroup = (items) => order.flatMap((g) => items.filter(([s]) => (s.group || '') === g));
+            const main = byGroup(indexed.filter(([s]) => !s.advanced));
+            const adv = byGroup(indexed.filter(([s]) => s.advanced));
             box.innerHTML = `<h4 class="mks-h">Instellingen</h4>` + rows(main)
                 + (adv.length ? `<details class="mks-adv"><summary>Geavanceerd (${adv.length})</summary>${(lastGroup = null, rows(adv))}</details>` : '')
                 + `<div class="mks-reset"><a class="mks-link">Standaardwaarden herstellen</a></div>`;
@@ -768,10 +780,12 @@ const MKS = (() => {
                 } else {
                     control = `<input type="text" value="${esc(v)}" placeholder="${esc(s.placeholder || '')}">`;
                 }
-                if (extras[s.key]) {
+                const kids = childrenOf[s.key] || [];
+                if (extras[s.key] || kids.length) {
                     const open = openExtras.has(`${def.id}:${s.key}`);
-                    return `<div class="mks-set" data-i="${i}"><div class="l mks-xl" title="Klik voor meer">${open ? '▾' : '▸'} ${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`
-                        + `<div class="mks-set-x" data-x="${i}" ${open ? '' : 'hidden'}></div>`;
+                    const more = kids.length ? ` <span class="mks-xn">(${kids.length})</span>` : '';
+                    return `<div class="mks-set" data-i="${i}"><div class="l mks-xl" title="Klik voor meer">${open ? '▾' : '▸'} ${esc(s.label)}${more}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`
+                        + `<div class="mks-set-x" data-x="${i}" ${open ? '' : 'hidden'}>${kids.map(([k, j]) => rowHtml(k, j)).join('')}<div class="mks-set-xc"></div></div>`;
                 }
                 return `<div class="mks-set" data-i="${i}"><div class="l">${esc(s.label)}${s.help ? `<span class="h">${s.help}</span>` : ''}</div><div class="c">${control}</div></div>`;
             }
@@ -803,7 +817,8 @@ const MKS = (() => {
             box.querySelectorAll('.mks-set-x').forEach((x) => {
                 const s = list[Number(x.dataset.x)];
                 const id = `${def.id}:${s.key}`;
-                const draw = () => { try { extras[s.key](x); } catch (e) { x.textContent = `Kon niet laden: ${e.message}`; console.error(e); } };
+                const xc = x.querySelector(':scope > .mks-set-xc');
+                const draw = () => { if (!extras[s.key]) return; try { extras[s.key](xc); } catch (e) { xc.textContent = `Kon niet laden: ${e.message}`; console.error(e); } };
                 if (!x.hidden) draw();
                 const label = x.previousElementSibling.querySelector('.l');
                 label.addEventListener('click', () => {
