@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261014014431 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261014114010 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -42,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261014014431';
+    const VERSION = '1.7.0.20261014114010';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11625,6 +11625,18 @@ MKS.module({
                     const listed = new Set([...document.querySelectorAll('input.vehicle_checkbox')].map((c) => c.value)).size;
                     const fits = Object.entries(avail).map(([k, n]) => `${caption(k)} ${n}`).join(', ');
                     const more = document.querySelector('a[href*="/missing_vehicles"]:not([data-mks-clicked])') ? ', meer laden stond er nog' : '';
+                    if (!listed && !shortage) {
+                        // Not one vehicle listed (not even busy-free ones): the page is in another
+                        // state. Seen on missions sent before that turned red again. Say what the
+                        // page shows, and leave it for longer.
+                        const page = [document.querySelector('h1')?.textContent, ...[...document.querySelectorAll('.alert')].map((x) => x.textContent)]
+                            .map((t) => clean(t || '')).filter(Boolean).join(' | ').slice(0, 160);
+                        const tables = [...document.querySelectorAll('table[id]')].slice(0, 6)
+                            .map((t) => `${t.id} ${t.querySelectorAll('tbody tr').length}`).join(', ') || 'geen tabellen';
+                        const body = clean(document.body ? document.body.innerText : '').slice(0, 140);
+                        report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'}; ${location.pathname.replace(/\d+/g, '#')}; tekst: ${body || 'leeg'})` });
+                        return;
+                    }
                     report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage });
                     return;
                 }
@@ -12927,6 +12939,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
+                        if (res.emptyList) tried.set(id, Date.now() + 20 * 60000); // look again in about 20 minutes, not every round
                         if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
@@ -14880,11 +14893,18 @@ MKS.module({
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
                     }
-                    for (const c of cands.slice(0, ctx.cfg.planDepth)) {
+                    // planDepth options that can actually be done: needs that are blocked (no
+                    // classroom, a building type that is not built) do not use up a place, or a
+                    // round with the top 6 all waiting for a classroom bought nothing at all
+                    // while MICU, DB-DRONE and OvD-P further down could be bought.
+                    let viable = 0;
+                    for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
+                        if (viable >= ctx.cfg.planDepth) break;
                         const plan = c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
+                        viable++;
                         ranking.push({ need: c.name, value: c.value, ...plan, ratio: c.value / Math.max(plan.cost, 2000) });
                     }
                     updateBlocked();
@@ -14972,7 +14992,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261014014431' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261014114010' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15114,7 +15134,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261014014431',
+                version: '1.7.0.20261014114010',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

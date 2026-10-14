@@ -1680,11 +1680,18 @@ MKS.module({
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
                     }
-                    for (const c of cands.slice(0, ctx.cfg.planDepth)) {
+                    // planDepth options that can actually be done: needs that are blocked (no
+                    // classroom, a building type that is not built) do not use up a place, or a
+                    // round with the top 6 all waiting for a classroom bought nothing at all
+                    // while MICU, DB-DRONE and OvD-P further down could be bought.
+                    let viable = 0;
+                    for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
+                        if (viable >= ctx.cfg.planDepth) break;
                         const plan = c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
+                        viable++;
                         ranking.push({ need: c.name, value: c.value, ...plan, ratio: c.value / Math.max(plan.cost, 2000) });
                     }
                     updateBlocked();
