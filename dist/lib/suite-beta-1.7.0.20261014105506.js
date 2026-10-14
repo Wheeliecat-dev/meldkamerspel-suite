@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261013194505 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261014105506 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -42,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261013194505';
+    const VERSION = '1.7.0.20261014105506';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11625,6 +11625,18 @@ MKS.module({
                     const listed = new Set([...document.querySelectorAll('input.vehicle_checkbox')].map((c) => c.value)).size;
                     const fits = Object.entries(avail).map(([k, n]) => `${caption(k)} ${n}`).join(', ');
                     const more = document.querySelector('a[href*="/missing_vehicles"]:not([data-mks-clicked])') ? ', meer laden stond er nog' : '';
+                    if (!listed && !shortage) {
+                        // Not one vehicle listed (not even busy-free ones): the page is in another
+                        // state. Seen on missions sent before that turned red again. Say what the
+                        // page shows, and leave it for longer.
+                        const page = [document.querySelector('h1')?.textContent, ...[...document.querySelectorAll('.alert')].map((x) => x.textContent)]
+                            .map((t) => clean(t || '')).filter(Boolean).join(' | ').slice(0, 160);
+                        const tables = [...document.querySelectorAll('table[id]')].slice(0, 6)
+                            .map((t) => `${t.id} ${t.querySelectorAll('tbody tr').length}`).join(', ') || 'geen tabellen';
+                        const body = clean(document.body ? document.body.innerText : '').slice(0, 140);
+                        report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'}; ${location.pathname.replace(/\d+/g, '#')}; tekst: ${body || 'leeg'})` });
+                        return;
+                    }
                     report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage });
                     return;
                 }
@@ -12093,8 +12105,32 @@ MKS.module({
             // one noodhulp or ambulance, whichever free one is nearest.
             const TEAM_LISTS = '#mission_list_alliance .missionSideBarEntry[mission_id], #mission_list_alliance_event .missionSideBarEntry[mission_id], #mission_list_sicherheitswache_alliance .missionSideBarEntry[mission_id]';
             const isEvent = (e) => !!e.closest('#mission_list_alliance_event, #mission_list_sicherheitswache_alliance');
+            /* New missions per hour (spawn rate): ids seen for the first time in our own
+             * lists. Kept over reloads; after a gap of more than 10 minutes the missions
+             * already in the list count as old, not as new. */
+            const SEEN_KEY = 'mks.autoDispatch.seen.v1';
+            let seen = null;
+            try { seen = JSON.parse(GM_getValue(SEEN_KEY, 'null')); } catch (e) { seen = null; }
+            let seenBaseline = !seen || !seen.at || Date.now() - seen.at > 10 * 60000;
+            if (seenBaseline) seen = { at: 0, since: Date.now(), ids: {} };
+            function trackSpawns() {
+                const now = Date.now();
+                const listed = new Set([...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id], #mission_list_krankentransporte .missionSideBarEntry[mission_id]')]
+                    .map((e) => e.getAttribute('mission_id')));
+                for (const id of listed) if (!(id in seen.ids)) seen.ids[id] = seenBaseline ? 0 : now;
+                seenBaseline = false;
+                for (const [id, t] of Object.entries(seen.ids)) if ((t === 0 && !listed.has(id)) || (t && now - t > 3 * 3600000)) delete seen.ids[id];
+                seen.at = now;
+                try { GM_setValue(SEEN_KEY, JSON.stringify(seen)); } catch (e) { /* ignore */ }
+            }
+            const spawned1h = () => { const c = Date.now() - 3600000; return Object.values(seen.ids).filter((t) => t > c).length; };
+            const spawnSince = () => seen.since || Date.now();
+            setInterval(trackSpawns, 15000);
+            setTimeout(trackSpawns, 3000);
+
             W.mksAutoData = {
                 get needs() { return needs; },
+                get spawned1h() { return spawned1h(); },
                 get events() { return events; },
                 get stats() { return stats; },
                 get holds() { return [...holds].map(([id, h]) => ({ id, ...h })); },
@@ -12903,6 +12939,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
+                        if (res.emptyList) tried.set(id, Date.now() + 20 * 60000); // look again in about 20 minutes, not every round
                         if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
@@ -13115,6 +13152,8 @@ MKS.module({
                         <div class="mks-tile"><div class="v">${stats.transports}</div><div class="k">vervoerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.skipped}</div><div class="k">overgeslagen</div></div>
                         <div class="mks-tile ${stats.errors ? 't-error' : ''}"><div class="v">${stats.errors}</div><div class="k">fouten</div></div>
+                        <div class="mks-tile" title="Inzetten die in het afgelopen uur nieuw in je lijst kwamen (eigen inzetten en besteld vervoer)"><div class="v">${spawned1h()}</div>
+                            <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
                     <h4 class="mks-h">Tekort per voertuigtype</h4>
@@ -14946,7 +14985,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261013194505' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261014105506' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15088,12 +15127,12 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261013194505',
+                version: '1.7.0.20261014105506',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
                     needs: read('mks.autoDispatch.needs.v1', {}),
-                    live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, holds: dispatch.holds, team: dispatch.team,
+                    live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, spawned1h: dispatch.spawned1h, holds: dispatch.holds, team: dispatch.team,
                         log: (dispatch.log || []).slice(0, 200) }) : null,
                 },
                 expand: {
