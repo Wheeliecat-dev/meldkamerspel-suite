@@ -187,7 +187,7 @@ MKS.module({
             // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
             'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
-            'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
+            'politie helikopters': 'police_helicopters', 'politiehelikopters': 'police_helicopters', 'politiehelikopter': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
             'db-icb of ts-spoor': 'railway_fire_engine', 'ovd-icb': 'railway_elw', 'ts-sth': 'disaster_response', 'hvh-sth': 'disaster_response_equipment',
             'berger-g': 'car_carrier_large', 'db-drone': 'drone_police', 'db-ri of ria': 'thatched_firefighting', 'sb-ba, sb-ib of as': 'industrial_response_engine',

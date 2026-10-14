@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261014015217 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261014140826 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -42,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261014015217';
+    const VERSION = '1.7.0.20261014140826';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11005,7 +11005,7 @@ MKS.module({
             // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
             'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
-            'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
+            'politie helikopters': 'police_helicopters', 'politiehelikopters': 'police_helicopters', 'politiehelikopter': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
             'db-icb of ts-spoor': 'railway_fire_engine', 'ovd-icb': 'railway_elw', 'ts-sth': 'disaster_response', 'hvh-sth': 'disaster_response_equipment',
             'berger-g': 'car_carrier_large', 'db-drone': 'drone_police', 'db-ri of ria': 'thatched_firefighting', 'sb-ba, sb-ib of as': 'industrial_response_engine',
@@ -11633,7 +11633,8 @@ MKS.module({
                             .map((t) => clean(t || '')).filter(Boolean).join(' | ').slice(0, 160);
                         const tables = [...document.querySelectorAll('table[id]')].slice(0, 6)
                             .map((t) => `${t.id} ${t.querySelectorAll('tbody tr').length}`).join(', ') || 'geen tabellen';
-                        report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'})` });
+                        const body = clean(document.body ? document.body.innerText : '').slice(0, 140);
+                        report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'}; ${location.pathname.replace(/\d+/g, '#')}; tekst: ${body || 'leeg'})` });
                         return;
                     }
                     report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage });
@@ -12938,7 +12939,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
-                        if (res.emptyList) tried.set(id, Date.now() + 10 * 60000); // look again in about 10 minutes, not every round
+                        if (res.emptyList) tried.set(id, Date.now() + 20 * 60000); // look again in about 20 minutes, not every round
                         if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
@@ -14892,11 +14893,18 @@ MKS.module({
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
                     }
-                    for (const c of cands.slice(0, ctx.cfg.planDepth)) {
+                    // planDepth options that can actually be done: needs that are blocked (no
+                    // classroom, a building type that is not built) do not use up a place, or a
+                    // round with the top 6 all waiting for a classroom bought nothing at all
+                    // while MICU, DB-DRONE and OvD-P further down could be bought.
+                    let viable = 0;
+                    for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
+                        if (viable >= ctx.cfg.planDepth) break;
                         const plan = c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
+                        viable++;
                         ranking.push({ need: c.name, value: c.value, ...plan, ratio: c.value / Math.max(plan.cost, 2000) });
                     }
                     updateBlocked();
@@ -14984,7 +14992,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261014015217' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261014140826' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15126,7 +15134,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261014015217',
+                version: '1.7.0.20261014140826',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
