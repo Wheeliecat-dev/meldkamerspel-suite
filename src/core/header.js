@@ -24,6 +24,7 @@
 // @connect      api.github.com
 // @connect      generativelanguage.googleapis.com
 // @connect      api.openai.com
+// @connect      openrouter.ai
 // @require      {{REQUIRE_URL}}
 // @run-at       document-start
 // ==/UserScript==
