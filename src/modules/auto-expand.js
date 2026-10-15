@@ -1795,7 +1795,9 @@ MKS.module({
                 // Chat models only; a cheap "mini" of the newest generation first, then "nano", then the rest.
                 usable = usable.filter((n) => /^(gpt-|o\d)/.test(n) && !/(audio|realtime|search|transcribe|tts|image|embed|instruct|codex|vision|preview|-\d{4}-\d{2}-\d{2}$)/i.test(n));
                 const version = (n) => { const m = n.match(/^gpt-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : n.startsWith('o') ? 3 : 0; };
-                rank = (n) => version(n) * 10 + (/mini/.test(n) ? 3 : /nano/.test(n) ? 1 : 0);
+                // Cheap first, always: any "mini" beats any full model (a full "gpt-6.1-sol" was picked
+                // over the minis before), then "nano"; newest within each.
+                rank = (n) => (/mini/.test(n) ? 1000 : /nano/.test(n) ? 500 : 0) + version(n);
             } else {
                 usable = usable.filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
                 const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };

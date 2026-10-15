@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015183313 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015191653 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261015183313';
+    const VERSION = '1.7.0.20261015191653';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -13301,15 +13301,15 @@ MKS.module({
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
-        { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenAI of Gemini)', type: 'bool', default: false,
-            help: 'Een AI-model (OpenAI of Google Gemini, naar gelang je sleutel) kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
+        { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenRouter, OpenAI of Gemini)', type: 'bool', default: false,
+            help: 'Een AI-model (OpenRouter, OpenAI of Google Gemini, naar gelang je sleutel) kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
                 + 'of besluit te sparen. Het script voert de keuze meteen uit, met dezelfde regels: alleen credits, nooit coins, buffer blijft staan. '
                 + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
-        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'API-sleutel (OpenAI of Gemini)', type: 'text', default: '', placeholder: 'sk-… of AIza…',
-            help: 'Een OpenAI-sleutel (begint met sk-) gaat alleen naar api.openai.com, een Gemini-sleutel (AIza…) alleen naar Google. '
+        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'API-sleutel', type: 'text', default: '', placeholder: 'sk-or-…, sk-… of AIza…',
+            help: 'OpenRouter (sk-or-…, gratis modellen) gaat alleen naar openrouter.ai, OpenAI (sk-…) alleen naar api.openai.com, Gemini (AIza…) alleen naar Google. '
                 + 'Blijft in je browser; staat nooit in het logboek of de log-upload. OpenAI kost geld per gebruik (een paar cent per dag met een mini-model).' },
         { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
-            help: '"auto" = het nieuwste goedkope model dat je sleutel mag gebruiken (OpenAI: een "mini"-model, Gemini: Flash), opgevraagd bij de dienst. Of vul zelf een modelnaam in.' },
+            help: '"auto" = een passend model, opgevraagd bij de dienst (OpenRouter: een gratis model, OpenAI: een "mini"-model, Gemini: Flash). Of vul zelf een modelnaam in.' },
         { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
             default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
             help: 'Gaat elke keer mee naar de AI.' },
@@ -13751,6 +13751,8 @@ MKS.module({
                 else if (cells) out.push({ kind: 'ext', name, types: [5, 11, 18], match: /\bcel\b|cel$/i, value, at: centroid(t.pos), t });
             }
             for (const u of unlocks7d) if ((state.cool[u.name] || 0) <= now) out.push(u);
+            // The AI's focus (a need it asked to work on): 5x for 6 hours, so it gets planned.
+            for (const c of out) if (aiFocusOn(c.name)) c.value *= 5;
             return out.sort((a, b) => b.value - a.value);
         }
 
@@ -14913,8 +14915,17 @@ MKS.module({
         let aiLast = null; // { sig, at, label, wait, reason }
         let aiFailedAt = 0;
         // Which service the key belongs to: OpenAI keys start with "sk-", Gemini keys with "AIza".
-        const aiProvider = (key) => (/^sk-/.test(key) ? 'openai' : 'gemini');
-        const AI_NAME = { openai: 'OpenAI', gemini: 'Gemini' };
+        // OpenRouter keys start with "sk-or-", OpenAI keys with "sk-", Gemini keys with "AIza".
+        const aiProvider = (key) => (/^sk-or-/.test(key) ? 'openrouter' : /^sk-/.test(key) ? 'openai' : 'gemini');
+        const AI_NAME = { openai: 'OpenAI', gemini: 'Gemini', openrouter: 'OpenRouter' };
+        // The JSON in an answer, also when a model wraps it in ``` fences or adds a sentence.
+        function parseJsonLoose(text) {
+            const t = String(text || '').replace(/```(?:json)?/gi, '');
+            try { return JSON.parse(t); } catch (e) { /* look for the object */ }
+            const a = t.indexOf('{'), b = t.lastIndexOf('}');
+            if (a >= 0 && b > a) return JSON.parse(t.slice(a, b + 1));
+            throw new Error('geen JSON');
+        }
         function aiHttp(method, url, headers, body, timeout) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
@@ -14930,7 +14941,11 @@ MKS.module({
             const name = AI_NAME[prov];
             let r;
             try {
-                r = prov === 'openai'
+                r = prov === 'openrouter'
+                    ? await aiHttp('POST', 'https://openrouter.ai/api/v1/chat/completions',
+                        { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, 'HTTP-Referer': 'https://www.meldkamerspel.com', 'X-Title': "Wheeliecat's Meldkamerspel Scripts" },
+                        { model, messages: [{ role: 'user', content: prompt }] }, 120000)
+                    : prov === 'openai'
                     ? await aiHttp('POST', 'https://api.openai.com/v1/chat/completions',
                         { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
                         { model, messages: [{ role: 'user', content: prompt }], response_format: { type: 'json_object' } }, 90000)
@@ -14951,16 +14966,21 @@ MKS.module({
             }
             try {
                 const j = JSON.parse(r.responseText);
+                // OpenRouter can answer 200 with an error from the model's host inside.
+                if (j.error) { const err = new Error(`${name}: ${String(j.error.message || JSON.stringify(j.error)).slice(0, 300)}`); err.status = Number(j.error.code) || 503; throw err; }
                 let text;
-                if (prov === 'openai') {
+                if (prov === 'openai' || prov === 'openrouter') {
                     text = j.choices[0].message.content || '';
                     aiMeta = { usage: j.usage || null, raw: text.slice(0, 600), finish: j.choices[0].finish_reason || null };
                 } else {
                     text = j.candidates[0].content.parts.map((x) => x.text || '').join('');
                     aiMeta = { usage: j.usageMetadata || null, raw: text.slice(0, 600), finish: j.candidates[0].finishReason || null };
                 }
-                return JSON.parse(text);
-            } catch (e) { throw new Error(`${name}: antwoord niet te lezen`); }
+                return parseJsonLoose(text);
+            } catch (e) {
+                if (e.status) throw e;
+                throw new Error(`${name}: antwoord niet te lezen (${String(aiMeta && aiMeta.raw || r.responseText || '').slice(0, 120)})`);
+            }
         }
         // "auto": the newest Flash model this key may use, asked from Google once per page.
         let aiAutoModel = null;
@@ -14988,7 +15008,9 @@ MKS.module({
         let aiAlternatives = []; // next-best models, for when the first is overloaded
         async function aiModels(key) {
             const prov = aiProvider(key);
-            const r = prov === 'openai'
+            const r = prov === 'openrouter'
+                ? await aiHttp('GET', 'https://openrouter.ai/api/v1/models', { Authorization: `Bearer ${key}` }, null, 30000)
+                : prov === 'openai'
                 ? await aiHttp('GET', 'https://api.openai.com/v1/models', { Authorization: `Bearer ${key}` }, null, 30000)
                 : await aiHttp('GET', 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { 'x-goog-api-key': key }, null, 30000);
             if (r.status !== 200) {
@@ -14999,6 +15021,11 @@ MKS.module({
                 throw err;
             }
             const j = JSON.parse(r.responseText);
+            if (prov === 'openrouter') {
+                // Free models only (":free", or no price): newest first.
+                return (j.data || []).filter((m) => /:free$/.test(m.id || '') || (m.pricing && Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0))
+                    .sort((a, b) => (b.created || 0) - (a.created || 0)).map((m) => String(m.id || ''));
+            }
             if (prov === 'openai') return (j.data || []).map((m) => String(m.id || ''));
             return (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
                 .map((m) => String(m.name || '').replace(/^models\//, ''));
@@ -15010,24 +15037,37 @@ MKS.module({
             const prov = aiProvider(key);
             let usable = await aiModels(key);
             let rank;
-            if (prov === 'openai') {
+            if (prov === 'openrouter') {
+                // Free text models; well-known families first (they follow JSON instructions well).
+                usable = usable.filter((n) => !/(vision|image|audio|tts|embed|guard|moderation|coder)/i.test(n));
+                rank = (n) => (/(gemini|deepseek|llama-3\.3|llama-4|qwen3|qwen-2\.5-72b|gpt-oss|mistral-small|gemma-3)/i.test(n) ? 10 : 0);
+            } else if (prov === 'openai') {
                 // Chat models only; a cheap "mini" of the newest generation first, then "nano", then the rest.
                 usable = usable.filter((n) => /^(gpt-|o\d)/.test(n) && !/(audio|realtime|search|transcribe|tts|image|embed|instruct|codex|vision|preview|-\d{4}-\d{2}-\d{2}$)/i.test(n));
                 const version = (n) => { const m = n.match(/^gpt-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : n.startsWith('o') ? 3 : 0; };
-                rank = (n) => version(n) * 10 + (/mini/.test(n) ? 3 : /nano/.test(n) ? 1 : 0);
+                // Cheap first, always: any "mini" beats any full model (a full "gpt-6.1-sol" was picked
+                // over the minis before), then "nano"; newest within each.
+                rank = (n) => (/mini/.test(n) ? 1000 : /nano/.test(n) ? 500 : 0) + version(n);
             } else {
                 usable = usable.filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
                 const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
                 rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
             }
-            usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
+            if (prov === 'openrouter') usable.sort((a, b) => rank(b) - rank(a)); // keeps newest-first within a group
+            else usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
             if (!usable.length) throw new Error(`${AI_NAME[prov]}: geen bruikbaar model gevonden voor deze sleutel`);
-            aiAlternatives = usable.slice(1, 4);
+            aiAlternatives = usable.slice(1, prov === 'openrouter' ? 6 : 4); // free models are often busy: more to fall back on
             aiAutoModel = usable[0];
             addLog(`AI gebruikt ${AI_NAME[prov]}-model ${aiAutoModel}`, 'idle');
             return aiAutoModel;
         }
-        async function aiDecide(ranking, data, spendable) {
+        function aiFocusOn(name) {
+            const f = state.aiFocus;
+            return !!(ctx.cfg.aiOn && f && f.until > Date.now() && String(f.need).toLowerCase() === String(name).toLowerCase());
+        }
+        const BT_NAME = { 0: 'brandweerkazerne', 17: 'brandweerkazerne (klein)', 3: 'ambulancepost', 13: 'VWS-post', 5: 'politiebureau', 18: 'politiebureau (klein)',
+            11: 'politie hoofdbureau', 2: 'ziekenhuis', 6: 'MMT-standplaats', 9: 'politieheli', 16: 'waterredding', 24: 'berger', 22: 'RWS', 25: 'defensie', 27: 'spoor' };
+        async function aiDecide(ranking, data, spendable, cands = []) {
             if (Date.now() - aiFailedAt < 15 * 60000) return null; // after an error: the rules for a while
             const options = ranking.slice(0, 15).map((r, i) => ({
                 i, step: r.label, need: r.need, cost: r.cost, blockedCreditsPerWeek: Math.round(r.value || 0),
@@ -15046,13 +15086,25 @@ MKS.module({
                 `Player wishes: ${String(ctx.cfg.aiNotes || '').slice(0, 600)}`,
                 `Credits now: ${data.credits}; spendable above the buffer: ${Math.max(0, spendable)}; income: ${rate && rate.perHour ? Math.round(rate.perHour) : 'unknown'} per hour.`,
                 `Options (JSON): ${JSON.stringify(options)}`,
+                `All shortages and wishes the script sees, most valuable first (need = exact name; planned = it is one of the options; blocked = why not): ${JSON.stringify(cands.slice(0, 40).map((c) => {
+                    const why = skipped.find((x) => x.toLowerCase().startsWith(String(c.name).toLowerCase()));
+                    return { need: c.name, valuePerWeek: Math.round(c.value || 0), planned: ranking.some((r) => r.need === c.name), blocked: why ? why.slice(String(c.name).length).replace(/^[^:]*:\s*/, '').slice(0, 160) : undefined };
+                }))}`,
+                `Projects under way (training, extension being built, waiting to buy or assign): ${JSON.stringify(projects().slice(0, 25).map((p) => `${VT[p.vt]?.[0] || p.vt} @ ${p.caption || '?'}: ${p.stage}${p.wait ? ` (${p.wait})` : ''}`))}`,
+                `Buildings owned: ${JSON.stringify(Object.entries(data.buildings.reduce((m, b) => { const n = BT_NAME[b.building_type] || `type ${b.building_type}`; m[n] = (m[n] || 0) + 1; return m; }, {})).map(([n, k]) => `${k} ${n}`))}`,
+                `Schools with all classrooms busy for hours: ${JSON.stringify(Object.entries(state.classBlocked || {}).map(([t, b]) => `${({ 4: 'fire academy', 7: 'medical', 8: 'police academy' })[t] || t}: ${Math.round((Date.now() - b.since) / 3600000)} h`))}`,
+                state.aiFocus && state.aiFocus.until > Date.now() ? `Your current focus: ${state.aiFocus.need} (until ${new Date(state.aiFocus.until).toLocaleTimeString('nl-NL')}).` : 'No focus set.',
                 (() => {
                     const recent = aiJournal().filter((x) => !x.error).slice(-8).map((x) => ({
                         hoursAgo: Math.round((Date.now() - x.at) / 360000) / 10, chose: x.wait ? 'save' : x.label, reason: x.reason,
                         result: (x.outcomes || []).map((o) => o.result).join(', ') || 'not carried out yet' }));
                     return recent.length ? `Your recent decisions and what came of them (avoid flip-flopping; learn from failures): ${JSON.stringify(recent)}` : '';
                 })(),
-                'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
+                'Rules: refer to options by their step text, never by their number. If the best option costs more than is spendable now, still choose it:',
+                'the script saves up for it by itself. Use -1 only when no option is worth doing at all.',
+                'You may also set "focus" to the exact need name of one shortage from the list above that you want worked on next (for example one that is not planned yet);',
+                'it then gets priority for 6 hours and will show up as an option. Leave focus empty to keep the current one or have none.',
+                'Answer with JSON only: {"choice": <option i, or -1>, "reason": "<one short sentence in Dutch, naming the step>", "focus": "<need name or empty>"}.',
             ].join('\n');
             const t0 = Date.now();
             let model = null;
@@ -15067,20 +15119,31 @@ MKS.module({
                     if (e.status === 404) {
                         model = await aiModelName(key, true);
                         res = await aiRequest(model, key, prompt);
-                    } else if ([500, 502, 503, 504].includes(e.status)) {
+                    } else if ([429, 500, 502, 503, 504].includes(e.status)) {
                         // Busy at Google: once more after a short wait, then the next-best models.
                         await sleep(8000);
                         const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
                         let last = e;
                         for (const m of tries) {
-                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![500, 502, 503, 504].includes(e2.status)) break; }
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![429, 500, 502, 503, 504].includes(e2.status)) break; }
                         }
                         if (last) throw last;
                     } else throw e;
                 }
-                const c = Number(res && res.choice);
+                let c = Number(res && res.choice);
                 const reason = String((res && res.reason) || '').slice(0, 200);
+                // "Save for option 0": that means choose option 0 (the script saves up for it).
+                const named = c === -1 && reason.match(/opti(?:e|on)\s*(\d+)/i);
+                if (named && Number(named[1]) < options.length) c = Number(named[1]);
                 const wait = c === -1;
+                const focus = String((res && res.focus) || '').trim();
+                if (focus) {
+                    const hit = cands.find((x) => String(x.name).toLowerCase() === focus.toLowerCase());
+                    if (hit && !(state.aiFocus && state.aiFocus.need === hit.name && state.aiFocus.until > Date.now())) {
+                        state.aiFocus = { need: hit.name, at: Date.now(), until: Date.now() + 6 * 3600000 };
+                        addLog(`AI focus: ${hit.name} (6 uur voorrang)`, 'idle');
+                    }
+                }
                 const option = !wait && Number.isInteger(c) && c >= 0 && c < options.length ? ranking[c] : null;
                 if (!wait && !option) throw new Error(`Gemini: onbekende keuze ${JSON.stringify(res).slice(0, 80)}`);
                 const changed = !aiLast || aiLast.wait !== wait || aiLast.label !== (option && option.label);
@@ -15091,7 +15154,7 @@ MKS.module({
                     notes: String(ctx.cfg.aiNotes || '').slice(0, 300),
                     options: options.map((o) => [o.step, o.need, o.cost, o.blockedCreditsPerWeek, o.returnPerCredit, o.affordableNow ? 1 : 0]),
                     rules: ranking[0] ? ranking[0].label : null, wait, choice: wait ? -1 : c, label: option ? option.label : null,
-                    agreesWithRules: !wait && option === ranking[0], reason, raw: aiMeta && aiMeta.raw,
+                    agreesWithRules: !wait && option === ranking[0], reason, focus: focus || undefined, raw: aiMeta && aiMeta.raw,
                 });
                 aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason, jid };
                 if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
@@ -15169,7 +15232,7 @@ MKS.module({
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
                     if (ctx.cfg.aiOn && String(ctx.cfg.aiKey || '').trim() && ranking.length) {
-                        const pick = await aiDecide(ranking, data, spendable);
+                        const pick = await aiDecide(ranking, data, spendable, cands);
                         if (pick) next = pick.wait ? null : pick.option;
                     }
                 }
@@ -15259,7 +15322,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015183313' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015191653' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15281,7 +15344,8 @@ MKS.module({
                 hero = `<div class="mks-hero ${now ? 't-busy' : 't-warn'}"><div class="k">Volgende stap</div>
                     <div class="t">${esc(next.label)}</div>
                     <div class="s">${next.cost ? `${ctx.nl(next.cost)} credits · ${now ? 'nu te betalen' : `te betalen ${esc(next.eta ? etaText(next.eta) : "later")}`}` : 'gratis'}
-                    ${ctx.cfg.aiOn && aiLast && !aiLast.wait ? `<br>AI: ${esc(aiLast.reason)}` : ''}</div></div>`;
+                    ${ctx.cfg.aiOn && aiLast && !aiLast.wait ? `<br>AI: ${esc(aiLast.reason)}` : ''}
+                    ${ctx.cfg.aiOn && state.aiFocus && state.aiFocus.until > Date.now() ? `<br>AI-focus: ${esc(state.aiFocus.need)} (tot ${new Date(state.aiFocus.until).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })})` : ''}</div></div>`;
             } else {
                 const why = ctx.cfg.aiOn && aiLast && aiLast.wait ? `AI spaart: ${esc(aiLast.reason)}`
                     : skipped.length ? `Niets te doen: ${skipped.length} tekort(en) wachten (zie Overgeslagen).` : 'Geen tekorten om op te lossen.';
@@ -15331,6 +15395,24 @@ MKS.module({
         });
         ctx.actions([
             { label: 'Nu een stap', kind: 'primary', run: () => round() },
+            { label: 'AI testen', title: 'Eén proefvraag aan de AI met je sleutel; het resultaat of de fout komt in het logboek.', run: async () => {
+                const key = String(ctx.cfg.aiKey || '').trim();
+                if (!key) { addLog('AI-test: geen API-sleutel ingevuld', 'warn'); ctx.refresh(); return; }
+                const prov = AI_NAME[aiProvider(key)];
+                addLog(`AI-test: ${prov}-sleutel herkend, bezig…`, 'idle');
+                ctx.refresh();
+                try {
+                    const model = await aiModelName(key, String(ctx.cfg.aiModel || 'auto').trim().toLowerCase() === 'auto');
+                    const t0 = Date.now();
+                    const res = await aiRequest(model, key, 'Reply with JSON only: {"ok": true, "note": "<one short Dutch sentence>"}');
+                    aiFailedAt = 0;
+                    addLog(`AI-test gelukt: ${prov}, model ${model}, ${Math.round((Date.now() - t0) / 100) / 10} s, antwoord ${JSON.stringify(res).slice(0, 120)}`, 'ok');
+                } catch (e) {
+                    addLog(`AI-test mislukt (${prov}): ${e.message}`, 'error');
+                }
+                save();
+                ctx.refresh();
+            } },
             { label: 'Wachttijden wissen', run: () => { state.cool = {}; save(); ctx.refresh(); }, title: 'Tekorten die net zijn aangepakt mogen meteen weer.' },
             { label: 'Opleidingslijst wissen', run: () => { state.wishes = {}; save(); ctx.refresh(); } },
         ]);
@@ -15430,7 +15512,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261015183313',
+                version: '1.7.0.20261015191653',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
