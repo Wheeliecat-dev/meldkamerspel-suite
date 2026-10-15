@@ -978,6 +978,24 @@ MKS.module({
             return out;
         }
 
+        // Can a building of this type hold the vehicle without an extension? Checked on own
+        // buildings of that type: if one of them offers an extension that unlocks it, a new
+        // one would need that extension as well. Unknown (no such building) counts as no.
+        const noExtCache = {};
+        async function needsNoExtension(type, vt, data) {
+            const k = `${type}:${vt}`;
+            if (k in noExtCache) return noExtCache[k];
+            // Built extensions (from the building list) and ones still to buy (building pages).
+            if (data.buildings.some((x) => x.building_type === type && (x.extensions || []).some((e) => unlocks(e.caption || '', vt)))) { noExtCache[k] = false; return false; }
+            const same = data.buildings.filter((x) => x.building_type === type && !x.small_building).slice(0, 3);
+            let ok = same.length > 0;
+            for (const x of same) {
+                const info = await buildingInfo(x.id);
+                if (info.exts.some((e) => unlocks(e.text, vt))) { ok = false; break; }
+            }
+            noExtCache[k] = ok;
+            return ok;
+        }
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
@@ -1020,7 +1038,10 @@ MKS.module({
                     // at once: build that instead (the "Ambulance standplaats" at Voorthuizen
                     // would have kept the ambulance waiting for days).
                     const own = v[3].find((t) => t !== b.building_type && CAT_OF[t] && !NO_NEW_BUILDING.has(t) && ![17, 18].includes(t));
-                    if (own != null && ctx.cfg.doBuild && c.at) {
+                    // Only when that type holds the vehicle without an extension too: a fire
+                    // station needs "Grootschalige Geneeskundige Bijstand" for NHT and GGB as
+                    // well, so two 1.4M stations bought "for NHT" (De Bilt, Bunnik) did not help.
+                    if (own != null && ctx.cfg.doBuild && c.at && await needsNoExtension(own, c.vt, data)) {
                         const nb = await planBuilding(c, [own], `voor ${v[0]}, direct klaar in plaats van uitbreiding in ${b.caption}`, data);
                         if (!nb.skip) return nb;
                     }

@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015184637 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015230807 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261015184637';
+    const VERSION = '1.7.0.20261015230807';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -12793,6 +12793,9 @@ MKS.module({
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
                             if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
+                            // Waiting for a free MICU (Interfacilitair Transport): look again in 10 minutes,
+                            // not every round (49 such missions made 285 skips in one afternoon).
+                            else if (res.result === 'skip' && /MICU/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + 10 * 60000);
                             else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) {
                                 const k = quickEmpty.get(id) || 0;
                                 quickEmpty.set(id, k + 1);
@@ -13730,6 +13733,9 @@ MKS.module({
             const out = [];
             for (const [name, t] of Object.entries(needs.types || {})) {
                 if (t.missions < ctx.cfg.minMissions) continue;
+                // MICU: Interfacilitair Transport comes about one per MICU you own and pays
+                // nothing itself, so its shortage never ends. Not worth buying against.
+                if (/MICU/i.test(name)) continue;
                 if ((state.cool[name] || 0) > now) continue;
                 // A project for this need is still under way (training, extension being
                 // built): wait for it instead of planning a second answer (a 400k police
@@ -14225,6 +14231,24 @@ MKS.module({
             return out;
         }
 
+        // Can a building of this type hold the vehicle without an extension? Checked on own
+        // buildings of that type: if one of them offers an extension that unlocks it, a new
+        // one would need that extension as well. Unknown (no such building) counts as no.
+        const noExtCache = {};
+        async function needsNoExtension(type, vt, data) {
+            const k = `${type}:${vt}`;
+            if (k in noExtCache) return noExtCache[k];
+            // Built extensions (from the building list) and ones still to buy (building pages).
+            if (data.buildings.some((x) => x.building_type === type && (x.extensions || []).some((e) => unlocks(e.caption || '', vt)))) { noExtCache[k] = false; return false; }
+            const same = data.buildings.filter((x) => x.building_type === type && !x.small_building).slice(0, 3);
+            let ok = same.length > 0;
+            for (const x of same) {
+                const info = await buildingInfo(x.id);
+                if (info.exts.some((e) => unlocks(e.text, vt))) { ok = false; break; }
+            }
+            noExtCache[k] = ok;
+            return ok;
+        }
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
@@ -14267,7 +14291,10 @@ MKS.module({
                     // at once: build that instead (the "Ambulance standplaats" at Voorthuizen
                     // would have kept the ambulance waiting for days).
                     const own = v[3].find((t) => t !== b.building_type && CAT_OF[t] && !NO_NEW_BUILDING.has(t) && ![17, 18].includes(t));
-                    if (own != null && ctx.cfg.doBuild && c.at) {
+                    // Only when that type holds the vehicle without an extension too: a fire
+                    // station needs "Grootschalige Geneeskundige Bijstand" for NHT and GGB as
+                    // well, so two 1.4M stations bought "for NHT" (De Bilt, Bunnik) did not help.
+                    if (own != null && ctx.cfg.doBuild && c.at && await needsNoExtension(own, c.vt, data)) {
                         const nb = await planBuilding(c, [own], `voor ${v[0]}, direct klaar in plaats van uitbreiding in ${b.caption}`, data);
                         if (!nb.skip) return nb;
                     }
@@ -15045,7 +15072,9 @@ MKS.module({
                 // Chat models only; a cheap "mini" of the newest generation first, then "nano", then the rest.
                 usable = usable.filter((n) => /^(gpt-|o\d)/.test(n) && !/(audio|realtime|search|transcribe|tts|image|embed|instruct|codex|vision|preview|-\d{4}-\d{2}-\d{2}$)/i.test(n));
                 const version = (n) => { const m = n.match(/^gpt-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : n.startsWith('o') ? 3 : 0; };
-                rank = (n) => version(n) * 10 + (/mini/.test(n) ? 3 : /nano/.test(n) ? 1 : 0);
+                // Cheap first, always: any "mini" beats any full model (a full "gpt-6.1-sol" was picked
+                // over the minis before), then "nano"; newest within each.
+                rank = (n) => (/mini/.test(n) ? 1000 : /nano/.test(n) ? 500 : 0) + version(n);
             } else {
                 usable = usable.filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
                 const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
@@ -15320,7 +15349,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015184637' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015230807' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15510,7 +15539,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261015184637',
+                version: '1.7.0.20261015230807',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
