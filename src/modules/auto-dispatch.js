@@ -816,6 +816,9 @@ MKS.module({
                         const tables = [...document.querySelectorAll('table[id]')].slice(0, 6)
                             .map((t) => `${t.id} ${t.querySelectorAll('tbody tr').length}`).join(', ') || 'geen tabellen';
                         const body = clean(document.body ? document.body.innerText : '').slice(0, 140);
+                        // The mission is already over ("De inzet is succesvol afgesloten."): its
+                        // entry can stay in the list a while. Nothing to send, not again.
+                        if (/succesvol afgesloten/i.test(body)) { report('skip', { emptyList: true, finished: true, reason: 'inzet is al afgesloten' }); return; }
                         report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'}; ${location.pathname.replace(/\d+/g, '#')}; tekst: ${body || 'leeg'})` });
                         return;
                     }
@@ -2121,7 +2124,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
-                        if (res.emptyList) tried.set(id, Date.now() + 20 * 60000); // look again in about 20 minutes, not every round
+                        if (res.emptyList) tried.set(id, Date.now() + (res.finished ? 6 * 3600000 : 20 * 60000)); // finished: never again; else in about 20 minutes
                         if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
