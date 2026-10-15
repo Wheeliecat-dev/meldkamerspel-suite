@@ -51,14 +51,15 @@ MKS.module({
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
-        { group: 'AI', key: 'aiOn', label: 'AI beslist (Gemini)', type: 'bool', default: false,
-            help: 'Een AI-model van Google kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
+        { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenAI of Gemini)', type: 'bool', default: false,
+            help: 'Een AI-model (OpenAI of Google Gemini, naar gelang je sleutel) kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
                 + 'of besluit te sparen. Het script voert de keuze meteen uit, met dezelfde regels: alleen credits, nooit coins, buffer blijft staan. '
                 + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
-        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'Gemini API-sleutel', type: 'text', default: '', placeholder: 'AIza…',
-            help: 'Blijft in je browser en gaat alleen naar Google (generativelanguage.googleapis.com). Staat nooit in het logboek of de log-upload.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'API-sleutel (OpenAI of Gemini)', type: 'text', default: '', placeholder: 'sk-… of AIza…',
+            help: 'Een OpenAI-sleutel (begint met sk-) gaat alleen naar api.openai.com, een Gemini-sleutel (AIza…) alleen naar Google. '
+                + 'Blijft in je browser; staat nooit in het logboek of de log-upload. OpenAI kost geld per gebruik (een paar cent per dag met een mini-model).' },
         { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
-            help: '"auto" = het nieuwste Flash-model dat je sleutel mag gebruiken (wordt bij Google opgevraagd). Of vul zelf een modelnaam in.' },
+            help: '"auto" = het nieuwste goedkope model dat je sleutel mag gebruiken (OpenAI: een "mini"-model, Gemini: Flash), opgevraagd bij de dienst. Of vul zelf een modelnaam in.' },
         { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
             default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
             help: 'Gaat elke keer mee naar de AI.' },
@@ -1661,35 +1662,51 @@ MKS.module({
          * never stored elsewhere, logged or uploaded. On any failure: the rules decide. */
         let aiLast = null; // { sig, at, label, wait, reason }
         let aiFailedAt = 0;
-        function aiRequest(model, key, prompt) {
+        // Which service the key belongs to: OpenAI keys start with "sk-", Gemini keys with "AIza".
+        const aiProvider = (key) => (/^sk-/.test(key) ? 'openai' : 'gemini');
+        const AI_NAME = { openai: 'OpenAI', gemini: 'Gemini' };
+        function aiHttp(method, url, headers, body, timeout) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                    data: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
-                    timeout: 60000,
-                    onload: (r) => {
-                        if (r.status < 200 || r.status >= 300) {
-                            let msg = String(r.responseText || '');
-                            try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
-                            const err = new Error(`Gemini ${r.status}: ${msg.slice(0, 300)}`);
-                            err.status = r.status;
-                            reject(err);
-                            return;
-                        }
-                        try {
-                            const j = JSON.parse(r.responseText);
-                            const text = j.candidates[0].content.parts.map((x) => x.text || '').join('');
-                            aiMeta = { usage: j.usageMetadata || null, raw: text.slice(0, 600), finish: j.candidates[0].finishReason || null };
-                            resolve(JSON.parse(text));
-                        } catch (e) { reject(new Error('Gemini: antwoord niet te lezen')); }
-                    },
-                    onerror: () => reject(new Error('Gemini: geen verbinding')),
-                    ontimeout: () => reject(new Error('Gemini: geen antwoord (60 s)')),
+                    method, url, headers, data: body ? JSON.stringify(body) : undefined, timeout,
+                    onload: (r) => resolve(r),
+                    onerror: () => reject(new Error('geen verbinding')),
+                    ontimeout: () => reject(new Error(`geen antwoord (${Math.round(timeout / 1000)} s)`)),
                 });
             });
+        }
+        async function aiRequest(model, key, prompt) {
+            const prov = aiProvider(key);
+            const name = AI_NAME[prov];
+            let r;
+            try {
+                r = prov === 'openai'
+                    ? await aiHttp('POST', 'https://api.openai.com/v1/chat/completions',
+                        { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+                        { model, messages: [{ role: 'user', content: prompt }], response_format: { type: 'json_object' } }, 90000)
+                    : await aiHttp('POST', `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+                        { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                        { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }, 60000);
+            } catch (e) { throw new Error(`${name}: ${e.message}`); }
+            if (r.status < 200 || r.status >= 300) {
+                let msg = String(r.responseText || '');
+                try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                const err = new Error(`${name} ${r.status}: ${msg.slice(0, 300)}`);
+                err.status = r.status;
+                throw err;
+            }
+            try {
+                const j = JSON.parse(r.responseText);
+                let text;
+                if (prov === 'openai') {
+                    text = j.choices[0].message.content || '';
+                    aiMeta = { usage: j.usage || null, raw: text.slice(0, 600), finish: j.choices[0].finish_reason || null };
+                } else {
+                    text = j.candidates[0].content.parts.map((x) => x.text || '').join('');
+                    aiMeta = { usage: j.usageMetadata || null, raw: text.slice(0, 600), finish: j.candidates[0].finishReason || null };
+                }
+                return JSON.parse(text);
+            } catch (e) { throw new Error(`${name}: antwoord niet te lezen`); }
         }
         // "auto": the newest Flash model this key may use, asked from Google once per page.
         let aiAutoModel = null;
@@ -1715,38 +1732,45 @@ MKS.module({
             try { GM_setValue(AI_JOURNAL_KEY, JSON.stringify(j)); } catch (x) { /* ignore */ }
         }
         let aiAlternatives = []; // next-best models, for when the first is overloaded
-        function aiModels(key) {
-            return new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
-                    headers: { 'x-goog-api-key': key },
-                    timeout: 30000,
-                    onload: (r) => {
-                        try {
-                            if (r.status !== 200) throw new Error(`Gemini ${r.status} bij modellen opvragen`);
-                            resolve((JSON.parse(r.responseText).models || []));
-                        } catch (e) { reject(e); }
-                    },
-                    onerror: () => reject(new Error('Gemini: geen verbinding')),
-                    ontimeout: () => reject(new Error('Gemini: geen antwoord')),
-                });
-            });
+        async function aiModels(key) {
+            const prov = aiProvider(key);
+            const r = prov === 'openai'
+                ? await aiHttp('GET', 'https://api.openai.com/v1/models', { Authorization: `Bearer ${key}` }, null, 30000)
+                : await aiHttp('GET', 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { 'x-goog-api-key': key }, null, 30000);
+            if (r.status !== 200) {
+                let msg = String(r.responseText || '');
+                try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                const err = new Error(`${AI_NAME[prov]} ${r.status} bij modellen opvragen: ${msg.slice(0, 200)}`);
+                err.status = r.status;
+                throw err;
+            }
+            const j = JSON.parse(r.responseText);
+            if (prov === 'openai') return (j.data || []).map((m) => String(m.id || ''));
+            return (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map((m) => String(m.name || '').replace(/^models\//, ''));
         }
         async function aiModelName(key, refresh) {
             const set = String(ctx.cfg.aiModel || '').trim();
             if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
             if (aiAutoModel && !refresh) return aiAutoModel;
-            const usable = (await aiModels(key)).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
-                .map((m) => String(m.name || '').replace(/^models\//, ''))
-                .filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
-            const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
-            const rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            const prov = aiProvider(key);
+            let usable = await aiModels(key);
+            let rank;
+            if (prov === 'openai') {
+                // Chat models only; a cheap "mini" of the newest generation first, then "nano", then the rest.
+                usable = usable.filter((n) => /^(gpt-|o\d)/.test(n) && !/(audio|realtime|search|transcribe|tts|image|embed|instruct|codex|vision|preview|-\d{4}-\d{2}-\d{2}$)/i.test(n));
+                const version = (n) => { const m = n.match(/^gpt-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : n.startsWith('o') ? 3 : 0; };
+                rank = (n) => version(n) * 10 + (/mini/.test(n) ? 3 : /nano/.test(n) ? 1 : 0);
+            } else {
+                usable = usable.filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
+                const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
+                rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            }
             usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
-            if (!usable.length) throw new Error('Gemini: geen bruikbaar model gevonden voor deze sleutel');
+            if (!usable.length) throw new Error(`${AI_NAME[prov]}: geen bruikbaar model gevonden voor deze sleutel`);
             aiAlternatives = usable.slice(1, 4);
             aiAutoModel = usable[0];
-            addLog(`AI gebruikt model ${aiAutoModel}`, 'idle');
+            addLog(`AI gebruikt ${AI_NAME[prov]}-model ${aiAutoModel}`, 'idle');
             return aiAutoModel;
         }
         async function aiDecide(ranking, data, spendable) {

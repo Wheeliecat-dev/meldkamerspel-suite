@@ -23,6 +23,7 @@
 // @connect      raw.githubusercontent.com
 // @connect      api.github.com
 // @connect      generativelanguage.googleapis.com
+// @connect      api.openai.com
 // @require      {{REQUIRE_URL}}
 // @run-at       document-start
 // ==/UserScript==

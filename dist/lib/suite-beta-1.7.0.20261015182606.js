@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015180919 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015182606 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261015180919';
+    const VERSION = '1.7.0.20261015182606';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -13301,14 +13301,15 @@ MKS.module({
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
-        { group: 'AI', key: 'aiOn', label: 'AI beslist (Gemini)', type: 'bool', default: false,
-            help: 'Een AI-model van Google kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
+        { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenAI of Gemini)', type: 'bool', default: false,
+            help: 'Een AI-model (OpenAI of Google Gemini, naar gelang je sleutel) kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
                 + 'of besluit te sparen. Het script voert de keuze meteen uit, met dezelfde regels: alleen credits, nooit coins, buffer blijft staan. '
                 + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
-        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'Gemini API-sleutel', type: 'text', default: '', placeholder: 'AIza…',
-            help: 'Blijft in je browser en gaat alleen naar Google (generativelanguage.googleapis.com). Staat nooit in het logboek of de log-upload.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'API-sleutel (OpenAI of Gemini)', type: 'text', default: '', placeholder: 'sk-… of AIza…',
+            help: 'Een OpenAI-sleutel (begint met sk-) gaat alleen naar api.openai.com, een Gemini-sleutel (AIza…) alleen naar Google. '
+                + 'Blijft in je browser; staat nooit in het logboek of de log-upload. OpenAI kost geld per gebruik (een paar cent per dag met een mini-model).' },
         { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
-            help: '"auto" = het nieuwste Flash-model dat je sleutel mag gebruiken (wordt bij Google opgevraagd). Of vul zelf een modelnaam in.' },
+            help: '"auto" = het nieuwste goedkope model dat je sleutel mag gebruiken (OpenAI: een "mini"-model, Gemini: Flash), opgevraagd bij de dienst. Of vul zelf een modelnaam in.' },
         { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
             default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
             help: 'Gaat elke keer mee naar de AI.' },
@@ -14911,67 +14912,115 @@ MKS.module({
          * never stored elsewhere, logged or uploaded. On any failure: the rules decide. */
         let aiLast = null; // { sig, at, label, wait, reason }
         let aiFailedAt = 0;
-        function aiRequest(model, key, prompt) {
+        // Which service the key belongs to: OpenAI keys start with "sk-", Gemini keys with "AIza".
+        const aiProvider = (key) => (/^sk-/.test(key) ? 'openai' : 'gemini');
+        const AI_NAME = { openai: 'OpenAI', gemini: 'Gemini' };
+        function aiHttp(method, url, headers, body, timeout) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                    data: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
-                    timeout: 60000,
-                    onload: (r) => {
-                        if (r.status < 200 || r.status >= 300) {
-                            let msg = String(r.responseText || '');
-                            try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
-                            const err = new Error(`Gemini ${r.status}: ${msg.slice(0, 300)}`);
-                            err.status = r.status;
-                            reject(err);
-                            return;
-                        }
-                        try {
-                            const j = JSON.parse(r.responseText);
-                            resolve(JSON.parse(j.candidates[0].content.parts.map((x) => x.text || '').join('')));
-                        } catch (e) { reject(new Error('Gemini: antwoord niet te lezen')); }
-                    },
-                    onerror: () => reject(new Error('Gemini: geen verbinding')),
-                    ontimeout: () => reject(new Error('Gemini: geen antwoord (60 s)')),
+                    method, url, headers, data: body ? JSON.stringify(body) : undefined, timeout,
+                    onload: (r) => resolve(r),
+                    onerror: () => reject(new Error('geen verbinding')),
+                    ontimeout: () => reject(new Error(`geen antwoord (${Math.round(timeout / 1000)} s)`)),
                 });
             });
         }
+        async function aiRequest(model, key, prompt) {
+            const prov = aiProvider(key);
+            const name = AI_NAME[prov];
+            let r;
+            try {
+                r = prov === 'openai'
+                    ? await aiHttp('POST', 'https://api.openai.com/v1/chat/completions',
+                        { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+                        { model, messages: [{ role: 'user', content: prompt }], response_format: { type: 'json_object' } }, 90000)
+                    : await aiHttp('POST', `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+                        { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                        { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }, 60000);
+            } catch (e) { throw new Error(`${name}: ${e.message}`); }
+            if (r.status < 200 || r.status >= 300) {
+                let msg = String(r.responseText || '');
+                try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                const err = new Error(`${name} ${r.status}: ${msg.slice(0, 300)}`);
+                err.status = r.status;
+                throw err;
+            }
+            try {
+                const j = JSON.parse(r.responseText);
+                let text;
+                if (prov === 'openai') {
+                    text = j.choices[0].message.content || '';
+                    aiMeta = { usage: j.usage || null, raw: text.slice(0, 600), finish: j.choices[0].finish_reason || null };
+                } else {
+                    text = j.candidates[0].content.parts.map((x) => x.text || '').join('');
+                    aiMeta = { usage: j.usageMetadata || null, raw: text.slice(0, 600), finish: j.candidates[0].finishReason || null };
+                }
+                return JSON.parse(text);
+            } catch (e) { throw new Error(`${name}: antwoord niet te lezen`); }
+        }
         // "auto": the newest Flash model this key may use, asked from Google once per page.
         let aiAutoModel = null;
-        function aiModels(key) {
-            return new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
-                    headers: { 'x-goog-api-key': key },
-                    timeout: 30000,
-                    onload: (r) => {
-                        try {
-                            if (r.status !== 200) throw new Error(`Gemini ${r.status} bij modellen opvragen`);
-                            resolve((JSON.parse(r.responseText).models || []));
-                        } catch (e) { reject(e); }
-                    },
-                    onerror: () => reject(new Error('Gemini: geen verbinding')),
-                    ontimeout: () => reject(new Error('Gemini: geen antwoord')),
-                });
-            });
+        let aiMeta = null; // usage and raw answer of the last Gemini reply
+
+        /* AI JOURNAL — every AI decision with what it saw, what it chose, what the rules
+         * would have chosen, and what came of it; kept in GM storage (last 400) and
+         * uploaded by Log naar GitHub, to be analysed and fed back. The key is never in it. */
+        const AI_JOURNAL_KEY = 'mks.autoExpand.aiJournal.v1';
+        const aiJournal = () => { try { return JSON.parse(GM_getValue(AI_JOURNAL_KEY, '[]')) || []; } catch (e) { return []; } };
+        function aiJournalAdd(entry) {
+            const j = aiJournal();
+            j.push(entry);
+            try { GM_setValue(AI_JOURNAL_KEY, JSON.stringify(j.slice(-400))); } catch (e) { /* ignore */ }
+            return entry.id;
+        }
+        function aiJournalOutcome(id, outcome) {
+            if (!id) return;
+            const j = aiJournal();
+            const e = j.find((x) => x.id === id);
+            if (!e) return;
+            e.outcomes = (e.outcomes || []).concat([{ at: Date.now(), ...outcome }]).slice(-5);
+            try { GM_setValue(AI_JOURNAL_KEY, JSON.stringify(j)); } catch (x) { /* ignore */ }
+        }
+        let aiAlternatives = []; // next-best models, for when the first is overloaded
+        async function aiModels(key) {
+            const prov = aiProvider(key);
+            const r = prov === 'openai'
+                ? await aiHttp('GET', 'https://api.openai.com/v1/models', { Authorization: `Bearer ${key}` }, null, 30000)
+                : await aiHttp('GET', 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { 'x-goog-api-key': key }, null, 30000);
+            if (r.status !== 200) {
+                let msg = String(r.responseText || '');
+                try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                const err = new Error(`${AI_NAME[prov]} ${r.status} bij modellen opvragen: ${msg.slice(0, 200)}`);
+                err.status = r.status;
+                throw err;
+            }
+            const j = JSON.parse(r.responseText);
+            if (prov === 'openai') return (j.data || []).map((m) => String(m.id || ''));
+            return (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map((m) => String(m.name || '').replace(/^models\//, ''));
         }
         async function aiModelName(key, refresh) {
             const set = String(ctx.cfg.aiModel || '').trim();
             if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
             if (aiAutoModel && !refresh) return aiAutoModel;
-            const usable = (await aiModels(key)).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
-                .map((m) => String(m.name || '').replace(/^models\//, ''))
-                .filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
-            const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
-            const rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            const prov = aiProvider(key);
+            let usable = await aiModels(key);
+            let rank;
+            if (prov === 'openai') {
+                // Chat models only; a cheap "mini" of the newest generation first, then "nano", then the rest.
+                usable = usable.filter((n) => /^(gpt-|o\d)/.test(n) && !/(audio|realtime|search|transcribe|tts|image|embed|instruct|codex|vision|preview|-\d{4}-\d{2}-\d{2}$)/i.test(n));
+                const version = (n) => { const m = n.match(/^gpt-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : n.startsWith('o') ? 3 : 0; };
+                rank = (n) => version(n) * 10 + (/mini/.test(n) ? 3 : /nano/.test(n) ? 1 : 0);
+            } else {
+                usable = usable.filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
+                const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
+                rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            }
             usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
-            if (!usable.length) throw new Error('Gemini: geen bruikbaar model gevonden voor deze sleutel');
+            if (!usable.length) throw new Error(`${AI_NAME[prov]}: geen bruikbaar model gevonden voor deze sleutel`);
+            aiAlternatives = usable.slice(1, 4);
             aiAutoModel = usable[0];
-            addLog(`AI gebruikt model ${aiAutoModel}`, 'idle');
+            addLog(`AI gebruikt ${AI_NAME[prov]}-model ${aiAutoModel}`, 'idle');
             return aiAutoModel;
         }
         async function aiDecide(ranking, data, spendable) {
@@ -14993,17 +15042,37 @@ MKS.module({
                 `Player wishes: ${String(ctx.cfg.aiNotes || '').slice(0, 600)}`,
                 `Credits now: ${data.credits}; spendable above the buffer: ${Math.max(0, spendable)}; income: ${rate && rate.perHour ? Math.round(rate.perHour) : 'unknown'} per hour.`,
                 `Options (JSON): ${JSON.stringify(options)}`,
+                (() => {
+                    const recent = aiJournal().filter((x) => !x.error).slice(-8).map((x) => ({
+                        hoursAgo: Math.round((Date.now() - x.at) / 360000) / 10, chose: x.wait ? 'save' : x.label, reason: x.reason,
+                        result: (x.outcomes || []).map((o) => o.result).join(', ') || 'not carried out yet' }));
+                    return recent.length ? `Your recent decisions and what came of them (avoid flip-flopping; learn from failures): ${JSON.stringify(recent)}` : '';
+                })(),
                 'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
             ].join('\n');
+            const t0 = Date.now();
+            let model = null;
             try {
                 const key = String(ctx.cfg.aiKey).trim();
                 let res;
+                model = await aiModelName(key);
                 try {
-                    res = await aiRequest(await aiModelName(key), key, prompt);
+                    res = await aiRequest(model, key, prompt);
                 } catch (e) {
-                    // The model is gone or unknown (404): pick the newest one this key may use, once.
-                    if (e.status !== 404) throw e;
-                    res = await aiRequest(await aiModelName(key, true), key, prompt);
+                    // The model is gone or unknown (404): pick the newest one this key may use.
+                    if (e.status === 404) {
+                        model = await aiModelName(key, true);
+                        res = await aiRequest(model, key, prompt);
+                    } else if (e.status === 503 || e.status === 500 || e.status === 502) {
+                        // Busy at Google: once more after a short wait, then the next-best models.
+                        await sleep(8000);
+                        const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
+                        let last = e;
+                        for (const m of tries) {
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![500, 502, 503].includes(e2.status)) break; }
+                        }
+                        if (last) throw last;
+                    } else throw e;
                 }
                 const c = Number(res && res.choice);
                 const reason = String((res && res.reason) || '').slice(0, 200);
@@ -15011,11 +15080,23 @@ MKS.module({
                 const option = !wait && Number.isInteger(c) && c >= 0 && c < options.length ? ranking[c] : null;
                 if (!wait && !option) throw new Error(`Gemini: onbekende keuze ${JSON.stringify(res).slice(0, 80)}`);
                 const changed = !aiLast || aiLast.wait !== wait || aiLast.label !== (option && option.label);
-                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason };
+                const jid = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+                aiJournalAdd({
+                    id: jid, at: Date.now(), model, ms: Date.now() - t0, usage: aiMeta && aiMeta.usage, finish: aiMeta && aiMeta.finish,
+                    credits: data.credits, spendable: Math.max(0, spendable), incomePerHour: rate && rate.perHour ? Math.round(rate.perHour) : null,
+                    notes: String(ctx.cfg.aiNotes || '').slice(0, 300),
+                    options: options.map((o) => [o.step, o.need, o.cost, o.blockedCreditsPerWeek, o.returnPerCredit, o.affordableNow ? 1 : 0]),
+                    rules: ranking[0] ? ranking[0].label : null, wait, choice: wait ? -1 : c, label: option ? option.label : null,
+                    agreesWithRules: !wait && option === ranking[0], reason, raw: aiMeta && aiMeta.raw,
+                });
+                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason, jid };
                 if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
                 return wait ? { wait: true } : { option };
             } catch (e) {
-                aiFailedAt = Date.now();
+                // Busy or rate-limited: the rules for 5 minutes; anything else for 15.
+                aiFailedAt = Date.now() - ([429, 500, 502, 503].includes(e.status) ? 10 * 60000 : 0);
+                aiJournalAdd({ id: `${Date.now().toString(36)}e`, at: Date.now(), model, ms: Date.now() - t0, error: String(e.message || e).slice(0, 300),
+                    status: e.status || null, rules: ranking[0] ? ranking[0].label : null, credits: data.credits });
                 addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
                 return null;
             }
@@ -15104,6 +15185,7 @@ MKS.module({
                 }
                 if (next.cost > spendable) {
                     state.lastRound.result = `spaart: ${next.cost} nodig, ${Math.max(0, spendable)} vrij boven de buffer`;
+                    if (aiLast && aiLast.label === next.label && !aiLast.savedNoted) { aiLast.savedNoted = true; aiJournalOutcome(aiLast.jid, { result: 'saving up', need: next.cost, free: Math.max(0, spendable) }); }
                     const eta = etaText(etaFor(next.cost, data.credits));
                     state.lastRound.eta = eta;
                     ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer. Genoeg over ${eta}.`, { tone: 'idle' });
@@ -15127,6 +15209,7 @@ MKS.module({
                         list.push(Date.now());
                     }
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
+                    if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'done', cost: next.cost });
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
                     state.lastRound.result = 'gedaan';
                     // Training started: a new project. Vehicle bought for trained people
@@ -15150,6 +15233,7 @@ MKS.module({
                     const why = (next.onFail && await next.onFail()) || {};
                     addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
+                    if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'failed', said: lastSaid || null });
                     // A failure the script understands (an extension a small station cannot
                     // have yet) is handled, not a reason to stop everything.
                     if (!why.known && ++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
@@ -15171,7 +15255,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015180919' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015182606' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15342,7 +15426,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261015180919',
+                version: '1.7.0.20261015182606',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
@@ -15352,6 +15436,7 @@ MKS.module({
                 },
                 expand: {
                     state: read('mks.autoExpand.state.v1', {}),
+                    aiJournal: read('mks.autoExpand.aiJournal.v1', []).slice(-200),
                     live: expand ? strip({ next: expand.next, skipped: expand.skipped, ranking: expand.ranking, unlocks: expand.unlocks }) : null,
                 },
             };
