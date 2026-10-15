@@ -81,6 +81,7 @@ MKS.module({
                 },
                 expand: {
                     state: read('mks.autoExpand.state.v1', {}),
+                    aiJournal: read('mks.autoExpand.aiJournal.v1', []).slice(-200),
                     live: expand ? strip({ next: expand.next, skipped: expand.skipped, ranking: expand.ranking, unlocks: expand.unlocks }) : null,
                 },
             };

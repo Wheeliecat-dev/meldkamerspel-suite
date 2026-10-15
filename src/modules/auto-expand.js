@@ -1681,7 +1681,9 @@ MKS.module({
                         }
                         try {
                             const j = JSON.parse(r.responseText);
-                            resolve(JSON.parse(j.candidates[0].content.parts.map((x) => x.text || '').join('')));
+                            const text = j.candidates[0].content.parts.map((x) => x.text || '').join('');
+                            aiMeta = { usage: j.usageMetadata || null, raw: text.slice(0, 600), finish: j.candidates[0].finishReason || null };
+                            resolve(JSON.parse(text));
                         } catch (e) { reject(new Error('Gemini: antwoord niet te lezen')); }
                     },
                     onerror: () => reject(new Error('Gemini: geen verbinding')),
@@ -1691,6 +1693,27 @@ MKS.module({
         }
         // "auto": the newest Flash model this key may use, asked from Google once per page.
         let aiAutoModel = null;
+        let aiMeta = null; // usage and raw answer of the last Gemini reply
+
+        /* AI JOURNAL — every AI decision with what it saw, what it chose, what the rules
+         * would have chosen, and what came of it; kept in GM storage (last 400) and
+         * uploaded by Log naar GitHub, to be analysed and fed back. The key is never in it. */
+        const AI_JOURNAL_KEY = 'mks.autoExpand.aiJournal.v1';
+        const aiJournal = () => { try { return JSON.parse(GM_getValue(AI_JOURNAL_KEY, '[]')) || []; } catch (e) { return []; } };
+        function aiJournalAdd(entry) {
+            const j = aiJournal();
+            j.push(entry);
+            try { GM_setValue(AI_JOURNAL_KEY, JSON.stringify(j.slice(-400))); } catch (e) { /* ignore */ }
+            return entry.id;
+        }
+        function aiJournalOutcome(id, outcome) {
+            if (!id) return;
+            const j = aiJournal();
+            const e = j.find((x) => x.id === id);
+            if (!e) return;
+            e.outcomes = (e.outcomes || []).concat([{ at: Date.now(), ...outcome }]).slice(-5);
+            try { GM_setValue(AI_JOURNAL_KEY, JSON.stringify(j)); } catch (x) { /* ignore */ }
+        }
         let aiAlternatives = []; // next-best models, for when the first is overloaded
         function aiModels(key) {
             return new Promise((resolve, reject) => {
@@ -1745,12 +1768,20 @@ MKS.module({
                 `Player wishes: ${String(ctx.cfg.aiNotes || '').slice(0, 600)}`,
                 `Credits now: ${data.credits}; spendable above the buffer: ${Math.max(0, spendable)}; income: ${rate && rate.perHour ? Math.round(rate.perHour) : 'unknown'} per hour.`,
                 `Options (JSON): ${JSON.stringify(options)}`,
+                (() => {
+                    const recent = aiJournal().filter((x) => !x.error).slice(-8).map((x) => ({
+                        hoursAgo: Math.round((Date.now() - x.at) / 360000) / 10, chose: x.wait ? 'save' : x.label, reason: x.reason,
+                        result: (x.outcomes || []).map((o) => o.result).join(', ') || 'not carried out yet' }));
+                    return recent.length ? `Your recent decisions and what came of them (avoid flip-flopping; learn from failures): ${JSON.stringify(recent)}` : '';
+                })(),
                 'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
             ].join('\n');
+            const t0 = Date.now();
+            let model = null;
             try {
                 const key = String(ctx.cfg.aiKey).trim();
                 let res;
-                let model = await aiModelName(key);
+                model = await aiModelName(key);
                 try {
                     res = await aiRequest(model, key, prompt);
                 } catch (e) {
@@ -1775,12 +1806,23 @@ MKS.module({
                 const option = !wait && Number.isInteger(c) && c >= 0 && c < options.length ? ranking[c] : null;
                 if (!wait && !option) throw new Error(`Gemini: onbekende keuze ${JSON.stringify(res).slice(0, 80)}`);
                 const changed = !aiLast || aiLast.wait !== wait || aiLast.label !== (option && option.label);
-                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason };
+                const jid = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+                aiJournalAdd({
+                    id: jid, at: Date.now(), model, ms: Date.now() - t0, usage: aiMeta && aiMeta.usage, finish: aiMeta && aiMeta.finish,
+                    credits: data.credits, spendable: Math.max(0, spendable), incomePerHour: rate && rate.perHour ? Math.round(rate.perHour) : null,
+                    notes: String(ctx.cfg.aiNotes || '').slice(0, 300),
+                    options: options.map((o) => [o.step, o.need, o.cost, o.blockedCreditsPerWeek, o.returnPerCredit, o.affordableNow ? 1 : 0]),
+                    rules: ranking[0] ? ranking[0].label : null, wait, choice: wait ? -1 : c, label: option ? option.label : null,
+                    agreesWithRules: !wait && option === ranking[0], reason, raw: aiMeta && aiMeta.raw,
+                });
+                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason, jid };
                 if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
                 return wait ? { wait: true } : { option };
             } catch (e) {
                 // Busy or rate-limited: the rules for 5 minutes; anything else for 15.
                 aiFailedAt = Date.now() - ([429, 500, 502, 503].includes(e.status) ? 10 * 60000 : 0);
+                aiJournalAdd({ id: `${Date.now().toString(36)}e`, at: Date.now(), model, ms: Date.now() - t0, error: String(e.message || e).slice(0, 300),
+                    status: e.status || null, rules: ranking[0] ? ranking[0].label : null, credits: data.credits });
                 addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
                 return null;
             }
@@ -1869,6 +1911,7 @@ MKS.module({
                 }
                 if (next.cost > spendable) {
                     state.lastRound.result = `spaart: ${next.cost} nodig, ${Math.max(0, spendable)} vrij boven de buffer`;
+                    if (aiLast && aiLast.label === next.label && !aiLast.savedNoted) { aiLast.savedNoted = true; aiJournalOutcome(aiLast.jid, { result: 'saving up', need: next.cost, free: Math.max(0, spendable) }); }
                     const eta = etaText(etaFor(next.cost, data.credits));
                     state.lastRound.eta = eta;
                     ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer. Genoeg over ${eta}.`, { tone: 'idle' });
@@ -1892,6 +1935,7 @@ MKS.module({
                         list.push(Date.now());
                     }
                     addLog(`${next.cost ? 'gekocht' : 'gestart'}: ${next.label}`, 'ok', next.cost);
+                    if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'done', cost: next.cost });
                     ctx.status(`Gedaan: ${next.label}`, { tone: 'ok' });
                     state.lastRound.result = 'gedaan';
                     // Training started: a new project. Vehicle bought for trained people
@@ -1915,6 +1959,7 @@ MKS.module({
                     const why = (next.onFail && await next.onFail()) || {};
                     addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
+                    if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'failed', said: lastSaid || null });
                     // A failure the script understands (an extension a small station cannot
                     // have yet) is handled, not a reason to stop everything.
                     if (!why.known && ++failStreak >= 3) { stopped = true; ctx.status('Gestopt na 3 mislukte aankopen op rij. Zet de module uit en aan om opnieuw te starten.', { tone: 'error' }); }
