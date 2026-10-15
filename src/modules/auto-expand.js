@@ -1930,37 +1930,66 @@ MKS.module({
 
         ctx.panel((el) => {
             const day = new Date().toISOString().slice(0, 10);
-            const tone = { ok: 't-ok', warn: 't-warn', error: 't-error', idle: '' };
+            const rate = incomeRate();
+            const lr = state.lastRound || {};
             const wishes = Object.entries(state.wishes).sort((a, b) => b[1] - a[1]);
-            el.innerHTML = `<div class="mks-tiles">
+            const STAGE = { train: 'opleiden', buy: 'kopen', assign: 'koppelen', prep: 'voorbereiden', grow: 'nieuwe post' };
+            const time = (t) => new Date(t).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+            // What happens next, in one card.
+            let hero;
+            if (next) {
+                const now = next.cost <= Math.max(0, (lr.credits || 0) - ctx.cfg.buffer);
+                hero = `<div class="mks-hero ${now ? 't-busy' : 't-warn'}"><div class="k">Volgende stap</div>
+                    <div class="t">${esc(next.label)}</div>
+                    <div class="s">${next.cost ? `${ctx.nl(next.cost)} credits · ${now ? 'nu te betalen' : `te betalen ${esc(next.eta ? etaText(next.eta) : "later")}`}` : 'gratis'}
+                    ${ctx.cfg.aiOn && aiLast && !aiLast.wait ? `<br>AI: ${esc(aiLast.reason)}` : ''}</div></div>`;
+            } else {
+                const why = ctx.cfg.aiOn && aiLast && aiLast.wait ? `AI spaart: ${esc(aiLast.reason)}`
+                    : skipped.length ? `Niets te doen: ${skipped.length} tekort(en) wachten (zie Overgeslagen).` : 'Geen tekorten om op te lossen.';
+                hero = `<div class="mks-hero"><div class="k">Volgende stap</div><div class="t">Niets gepland</div><div class="s">${why}</div></div>`;
+            }
+
+            const tiles = `<div class="mks-tiles">
+                    <div class="mks-tile"><div class="v">${lr.credits != null ? ctx.nl(Math.max(0, lr.credits - ctx.cfg.buffer)) : '–'}</div><div class="k">vrij boven buffer (${ctx.nl(ctx.cfg.buffer)})</div></div>
+                    <div class="mks-tile"><div class="v">${rate ? ctx.nl(rate.perHour) : '–'}</div><div class="k">inkomen per uur</div></div>
                     <div class="mks-tile"><div class="v">${ctx.nl(state.spent[day] || 0)}</div><div class="k">uitgegeven vandaag</div></div>
-                    <div class="mks-tile"><div class="v">${ctx.nl(ctx.cfg.buffer)}</div><div class="k">buffer</div></div>
-                </div>
-                ${projects().length ? `<h4 class="mks-h">Projecten (opleiden → kopen → koppelen)</h4>
-                    <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Gebouw</th><th>Stap</th><th>Sinds</th></tr></thead><tbody>
+                    <div class="mks-tile"><div class="v">${projects().length}</div><div class="k">projecten bezig</div></div>
+                </div>`;
+
+            const projHtml = projects().length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Gebouw</th><th>Stap</th><th>Sinds</th></tr></thead><tbody>
                     ${projects().map((p) => `<tr><td>${esc(VT[p.vt]?.[0] || p.vt)}</td><td>${esc(p.caption || '')}</td>
-                        <td>${{ train: `opleiding ${esc(p.training || '')} (${p.people.length} pers.)`, buy: 'kopen', assign: 'personeel koppelen' }[p.stage] || p.stage}${p.wait ? ` <span class="mks-dim">— ${esc(p.wait)}</span>` : ''}</td>
-                        <td class="mono mks-dim">${new Date(p.started).toLocaleDateString('nl-NL')}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                ${ranking.length ? `<h4 class="mks-h">Afweging (beste rendement eerst)</h4>
-                    <p class="mks-note">Waarde = credits van inzetten die hierdoor misten in 7 dagen (speciale voertuigen ×${ctx.cfg.specialWeight}),
+                        <td><span class="mks-pill ${p.wait ? 't-warn' : 't-busy'}">${esc(STAGE[p.stage] || p.stage)}${p.stage === 'train' && p.people ? ` · ${p.people.length} pers.` : ''}</span>
+                        ${p.wait ? `<div class="mks-dim" style="font-size:11.5px;margin-top:3px">${esc(p.wait)}</div>` : ''}</td>
+                        <td class="mono mks-dim">${new Date(p.started).toLocaleDateString('nl-NL')}</td></tr>`).join('')}</tbody></table></div>`
+                : '<p class="mks-note">Geen projecten bezig.</p>';
+
+            const rankHtml = ranking.length ? `<p class="mks-note">Waarde = credits van inzetten die hierdoor misten in 7 dagen (speciale voertuigen ×${ctx.cfg.specialWeight}),
                     of van nieuwe meldingsoorten. Rendement = waarde per uitgegeven credit.</p>
                     <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Stap</th><th>Waarde</th><th>Kosten</th><th>Rendement</th><th>Te betalen</th></tr></thead><tbody>
-                    ${ranking.map((r) => `<tr><td>${esc(r.label)}</td><td class="mono">${ctx.nl(r.value)}</td><td class="mono">${ctx.nl(r.cost)}</td>
-                        <td class="mono">${r.cost ? r.ratio.toFixed(2) : 'gratis'}</td><td class="mono">${r.cost ? esc(etaText(r.eta)) : 'nu'}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                <h4 class="mks-h">Volgende stap</h4>
-                <p class="mks-note">${next ? `${esc(next.label)} — ${ctx.nl(next.cost)} credits` : 'Nog niets gepland.'}</p>
-                ${(() => { const r = incomeRate(); return `<p class="mks-note">Inkomen: ${r ? `${ctx.nl(r.perHour)} credits per uur (gemiddeld over ${Math.round(r.hours)} u, ${esc(r.src)})` : 'nog onbekend (zet Inkomsten aan, of wacht een uur)'}. "Te betalen" = wanneer er genoeg is met de buffer erbij.</p>`; })()}
-                ${skipped.length ? `<h4 class="mks-h">Overgeslagen</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                    ${skipped.map((s) => `<tr><td>${esc(s)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                ${wishes.length ? `<h4 class="mks-h">Opleidingen nodig</h4>
-                    <p class="mks-note">Voertuigen die het niet kocht omdat opgeleid personeel ontbrak. Start deze opleidingen (nog niet automatisch).</p>
-                    <div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                    ${wishes.map(([n, k]) => `<tr><td>${esc(n)}</td><td class="mono">${k}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                <h4 class="mks-h">Logboek</h4>
-                ${state.log.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                    ${state.log.slice(0, 100).map((l) => `<tr><td class="mono">${new Date(l.at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                    <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td><td class="mono">${l.cost ? ctx.nl(l.cost) : ''}</td></tr>`).join('')}
-                    </tbody></table></div>` : '<p class="mks-note">Nog niets gedaan.</p>'}`;
+                    ${ranking.map((r) => `<tr${next && r.label === next.label ? ' style="font-weight:600"' : ''}><td>${esc(r.label)}</td><td class="mono">${ctx.nl(r.value)}</td><td class="mono">${ctx.nl(r.cost)}</td>
+                        <td class="mono">${r.cost ? r.ratio.toFixed(2) : 'gratis'}</td><td class="mono">${r.cost ? esc(etaText(r.eta)) : 'nu'}</td></tr>`).join('')}</tbody></table></div>`
+                : '<p class="mks-note">Nog geen afweging (wacht op de volgende ronde).</p>';
+
+            const skipHtml = skipped.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                    ${skipped.map((x) => { const i = x.indexOf(':'); return `<tr><td><b>${esc(i > 0 ? x.slice(0, i) : x)}</b>${i > 0 ? `<div class="mks-dim" style="font-size:11.5px;margin-top:2px">${esc(x.slice(i + 1).trim())}</div>` : ''}</td></tr>`; }).join('')}
+                    </tbody></table></div>` : '<p class="mks-note">Niets overgeslagen.</p>';
+
+            const wishHtml = `<p class="mks-note">Voertuigen die het niet kocht omdat opgeleid personeel ontbrak.</p>
+                    <div class="mks-tblwrap"><table class="mks-tbl"><tbody>${wishes.map(([n, k]) => `<tr><td>${esc(n)}</td><td class="mono">${k}</td></tr>`).join('')}</tbody></table></div>`;
+
+            const logHtml = state.log.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                    ${state.log.slice(0, 100).map((l) => `<tr><td class="mks-tone ${l.tone === 'ok' ? 't-ok' : l.tone === 'warn' ? 't-warn' : l.tone === 'error' ? 't-error' : ''}"></td>
+                        <td class="mono mks-dim" style="white-space:nowrap">${time(l.at)}</td><td>${esc(l.text)}</td><td class="mono">${l.cost ? ctx.nl(l.cost) : ''}</td></tr>`).join('')}
+                    </tbody></table></div>` : '<p class="mks-note">Nog niets gedaan.</p>';
+
+            el.innerHTML = hero + tiles
+                + ctx.fold('projects', 'Projecten (opleiden → kopen → koppelen)', projHtml, { open: true, count: projects().length })
+                + ctx.fold('ranking', 'Afweging (beste rendement eerst)', rankHtml, { count: ranking.length })
+                + ctx.fold('skipped', 'Overgeslagen', skipHtml, { count: skipped.length })
+                + (wishes.length ? ctx.fold('wishes', 'Opleidingen nodig', wishHtml, { count: wishes.length }) : '')
+                + ctx.fold('log', 'Logboek', logHtml, { open: true, count: state.log.length })
+                + `<p class="mks-note">"Te betalen" = wanneer er genoeg is met de buffer erbij. Inkomen: ${rate ? `gemiddeld over ${Math.round(rate.hours)} u (${esc(rate.src)})` : 'nog onbekend (zet Inkomsten aan, of wacht een uur)'}.</p>`;
         });
         ctx.actions([
             { label: 'Nu een stap', kind: 'primary', run: () => round() },

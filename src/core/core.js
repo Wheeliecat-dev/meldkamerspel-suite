@@ -28,6 +28,7 @@
  *   ctx.actions([...])      buttons in the dashboard: { label, run, kind: primary|danger, title, confirm }
  *   ctx.panel(render)       render(el) draws extra content in the dashboard detail view
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
+ *   ctx.fold(id, title, html, { open, count })  a folding panel section; open/closed is remembered
  *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
  *   ctx.settingExtra(key, render)  that setting's label unfolds; render(el) draws more under it
@@ -71,6 +72,9 @@ const MKS = (() => {
     state.enabled = state.enabled || {};
     state.settings = state.settings || {};
     const saveState = () => GM_setValue(STATE_KEY, JSON.stringify(state));
+    // Which folding panel sections are open (ctx.fold), by "module:section".
+    const FOLDS_KEY = 'mks.suite.folds.v1';
+    const folds = (() => { try { return JSON.parse(GM_getValue(FOLDS_KEY, '{}')) || {}; } catch (e) { return {}; } })();
 
     const defs = [];
     const byId = {};
@@ -121,6 +125,12 @@ const MKS = (() => {
             actions(list) { r.actions = list || []; ui.detailChanged(def.id, false); },
             panel(render) { r.panel = render; ui.detailChanged(def.id, true); },
             refresh() { ui.detailChanged(def.id, true); },
+            fold(id, title, html, opts = {}) {
+                const key = `${def.id}:${id}`;
+                const open = key in folds ? folds[key] : !!opts.open;
+                const count = opts.count != null ? `<span class="n">${esc(opts.count)}</span>` : '';
+                return `<details class="mks-fold" data-fold="${esc(key)}" ${open ? 'open' : ''}><summary><span class="t">${esc(title)}</span>${count}</summary><div class="b">${html}</div></details>`;
+            },
             menu(item) { r.menus.push(item); nav.render(); },
             onSettings(fn) { r.onSettings = fn; },
             settingExtra(key, render) { r.extras[key] = render; },
@@ -344,6 +354,26 @@ const MKS = (() => {
     #mks-dash .mks-tile .v { font:600 21px var(--m-mono); color:var(--m-tx); font-variant-numeric:tabular-nums; }
     #mks-dash .mks-tile .k { color:var(--m-faint); font-size:11.5px; margin-top:2px; }
     #mks-dash .mks-tile.t-warn .v { color:var(--m-wa); } #mks-dash .mks-tile.t-error .v { color:var(--m-er); } #mks-dash .mks-tile.t-ok .v { color:var(--m-ok); }
+    #mks-dash details.mks-fold { border:1px solid var(--m-bd); border-radius:10px; background:var(--m-s1); margin:10px 0; }
+    #mks-dash details.mks-fold > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; padding:11px 14px;
+        font:600 11.5px var(--m-sans); letter-spacing:.08em; text-transform:uppercase; color:var(--m-dim); user-select:none; }
+    #mks-dash details.mks-fold > summary::-webkit-details-marker { display:none; }
+    #mks-dash details.mks-fold > summary::before { content:'▸'; color:var(--m-faint); display:inline-block; transition:transform .15s; }
+    #mks-dash details.mks-fold[open] > summary::before { transform:rotate(90deg); }
+    #mks-dash details.mks-fold > summary:hover { color:var(--m-tx); }
+    #mks-dash details.mks-fold > summary .n { margin-left:auto; font:500 11.5px var(--m-mono); letter-spacing:0; color:var(--m-faint);
+        background:var(--m-s3); border-radius:20px; padding:1px 9px; }
+    #mks-dash details.mks-fold > .b { padding:0 14px 14px; }
+    #mks-dash details.mks-fold > .b > .mks-note:first-child { margin-top:0; }
+    #mks-dash .mks-hero { background:var(--m-s2); border:1px solid var(--m-bd2); border-radius:12px; padding:14px 16px; margin:4px 0 12px; }
+    #mks-dash .mks-hero .k { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); }
+    #mks-dash .mks-hero .t { font:600 15.5px var(--m-sans); color:var(--m-tx); margin-top:5px; line-height:1.35; }
+    #mks-dash .mks-hero .s { color:var(--m-dim); font-size:12.5px; margin-top:5px; line-height:1.45; }
+    #mks-dash .mks-hero.t-ok { border-left:4px solid var(--m-ok); } #mks-dash .mks-hero.t-warn { border-left:4px solid var(--m-wa); }
+    #mks-dash .mks-hero.t-busy { border-left:4px solid var(--m-ac); }
+    #mks-dash table.mks-tbl td.mks-tone { width:4px; padding:0 !important; }
+    #mks-dash table.mks-tbl td.mks-tone.t-ok { background:var(--m-ok) !important; } #mks-dash table.mks-tbl td.mks-tone.t-warn { background:var(--m-wa) !important; }
+    #mks-dash table.mks-tbl td.mks-tone.t-error { background:var(--m-er) !important; }
     #mks-dash .mks-tblwrap { max-height:340px; overflow:auto; border:1px solid var(--m-bd); border-radius:9px; }
     #mks-dash table.mks-tbl { width:100%; border-collapse:collapse; font-size:12.5px; background:transparent !important; margin:0; }
     #mks-dash table.mks-tbl th { position:sticky; top:0; background:var(--m-s3) !important; color:var(--m-dim) !important; text-align:left; font-weight:600;
@@ -733,6 +763,10 @@ const MKS = (() => {
             box.innerHTML = '';
             if (!r.running || !r.panel) return;
             try { r.panel(box); } catch (e) { box.innerHTML = `<p class="mks-note">Paneel kon niet laden: ${esc(e.message)}</p>`; console.error(e); }
+            box.querySelectorAll('details.mks-fold[data-fold]').forEach((d) => d.addEventListener('toggle', () => {
+                folds[d.dataset.fold] = d.open;
+                try { GM_setValue(FOLDS_KEY, JSON.stringify(folds)); } catch (e) { /* ignore */ }
+            }));
         }
 
         // Unfolded setting extras (ctx.settingExtra), by "module:key".

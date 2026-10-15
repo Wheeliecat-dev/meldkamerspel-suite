@@ -2328,10 +2328,10 @@ MKS.module({
                 const other = sorted(needs.other);
                 const now = Date.now();
                 const live = [...holds].filter(([, h]) => h.until > now).sort((a, b) => b[1].credits - a[1].credits);
-                const holdHtml = live.length ? `<h4 class="mks-h">Bewaard voor grote inzetten</h4>
+                const holdHtml = live.length ? ctx.fold('holds', 'Bewaard voor grote inzetten', `
                     <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Inzet</th><th>Credits</th><th>Bewaard</th><th>Nog</th></tr></thead><tbody>
                     ${live.map(([, h]) => `<tr><td>${esc(h.name)}</td><td class="mono">${ctx.nl(h.credits)}</td><td>${esc(Object.values(h.keys).map((v) => `${v.need}× ${v.cap}`).join(', '))}</td>
-                        <td class="mono mks-dim">${Math.ceil((h.until - now) / 60000)} min</td></tr>`).join('')}</tbody></table></div>` : '';
+                        <td class="mono mks-dim">${Math.ceil((h.until - now) / 60000)} min</td></tr>`).join('')}</tbody></table></div>`, { open: true, count: live.length }) : '';
                 el.innerHTML = `<div class="mks-tiles">
                         <div class="mks-tile"><div class="v">${stats.sent}</div><div class="k">gealarmeerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.transports}</div><div class="k">vervoerd</div></div>
@@ -2341,7 +2341,7 @@ MKS.module({
                             <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
-                    <h4 class="mks-h">Tekort per voertuigtype</h4>
+                    ${ctx.fold('needs', 'Tekort per voertuigtype', `
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
                         Bovenaan staat wat je het vaakst mist: daar heb je er meer van nodig (of dichterbij).</p>
@@ -2350,15 +2350,15 @@ MKS.module({
                         ${types.map(([n, t]) => `<tr title="${esc(`Laatste inzet: ${t.example}`)}"><td>${esc(n)}</td><td class="mono"><b>${t.missions}</b></td>
                             <td class="mono">${t.short || ''}</td><td class="mono">${t.far || ''}</td><td class="mono">${t.units || ''}</td>
                             <td class="mono mks-dim">${ago(t.last)}</td></tr>`).join('')}</tbody></table></div>`
-                        : '<p class="mks-note">Nog geen tekorten geteld.</p>'}
-                    ${other.length ? `<h4 class="mks-h">Kan het script niet sturen</h4>
+                        : '<p class="mks-note">Nog geen tekorten geteld.</p>'}`, { count: types.length })}
+                    ${other.length ? ctx.fold('other', 'Kan het script niet sturen', `
                         <p class="mks-note">Eisen die dit script (nog) niet kan vervullen. Deze inzetten moet je zelf alarmeren.</p>
                         <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Eis</th><th>Inzetten</th><th>Laatst</th></tr></thead><tbody>
                         ${other.map(([n, t]) => `<tr title="${esc(`Laatste inzet: ${t.example}`)}"><td>${esc(n)}</td><td class="mono"><b>${t.missions}</b></td>
-                            <td class="mono mks-dim">${ago(t.last)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                    ${log.length ? `<h4 class="mks-h">Logboek</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                        ${log.map((l) => `<tr><td class="mono">${l.at.toLocaleTimeString('nl-NL')}</td><td>${esc(l.name)}</td>
-                        <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td></tr>`).join('')}</tbody></table></div>`
+                            <td class="mono mks-dim">${ago(t.last)}</td></tr>`).join('')}</tbody></table></div>`, { open: true, count: other.length }) : ''}
+                    ${log.length ? ctx.fold('log', 'Logboek', `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                        ${log.map((l) => `<tr><td class="mks-tone ${tone[l.tone] || ''}"></td><td class="mono mks-dim" style="white-space:nowrap">${l.at.toLocaleTimeString('nl-NL')}</td>
+                        <td><b>${esc(l.name)}</b><div class="mks-dim" style="font-size:11.5px;margin-top:2px">${esc(l.text)}</div></td></tr>`).join('')}</tbody></table></div>`, { open: true, count: log.length })
                         : '<p class="mks-note">Nog niets gedaan. Klik op Start of op de knop <b>Auto</b> in de missiefilterbalk.</p>'}`;
             });
 

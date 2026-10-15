@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015105340 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015180919 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -30,6 +30,7 @@
  *   ctx.actions([...])      buttons in the dashboard: { label, run, kind: primary|danger, title, confirm }
  *   ctx.panel(render)       render(el) draws extra content in the dashboard detail view
  *   ctx.refresh()           re-draw that panel (when the dashboard shows it)
+ *   ctx.fold(id, title, html, { open, count })  a folding panel section; open/closed is remembered
  *   ctx.menu(item)          entry in the navbar menu: { icon, label, title, run }
  *   ctx.onSettings(fn)      settings apply live; without it a change asks for a reload
  *   ctx.settingExtra(key, render)  that setting's label unfolds; render(el) draws more under it
@@ -42,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261015105340';
+    const VERSION = '1.7.0.20261015180919';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -73,6 +74,9 @@ const MKS = (() => {
     state.enabled = state.enabled || {};
     state.settings = state.settings || {};
     const saveState = () => GM_setValue(STATE_KEY, JSON.stringify(state));
+    // Which folding panel sections are open (ctx.fold), by "module:section".
+    const FOLDS_KEY = 'mks.suite.folds.v1';
+    const folds = (() => { try { return JSON.parse(GM_getValue(FOLDS_KEY, '{}')) || {}; } catch (e) { return {}; } })();
 
     const defs = [];
     const byId = {};
@@ -123,6 +127,12 @@ const MKS = (() => {
             actions(list) { r.actions = list || []; ui.detailChanged(def.id, false); },
             panel(render) { r.panel = render; ui.detailChanged(def.id, true); },
             refresh() { ui.detailChanged(def.id, true); },
+            fold(id, title, html, opts = {}) {
+                const key = `${def.id}:${id}`;
+                const open = key in folds ? folds[key] : !!opts.open;
+                const count = opts.count != null ? `<span class="n">${esc(opts.count)}</span>` : '';
+                return `<details class="mks-fold" data-fold="${esc(key)}" ${open ? 'open' : ''}><summary><span class="t">${esc(title)}</span>${count}</summary><div class="b">${html}</div></details>`;
+            },
             menu(item) { r.menus.push(item); nav.render(); },
             onSettings(fn) { r.onSettings = fn; },
             settingExtra(key, render) { r.extras[key] = render; },
@@ -346,6 +356,26 @@ const MKS = (() => {
     #mks-dash .mks-tile .v { font:600 21px var(--m-mono); color:var(--m-tx); font-variant-numeric:tabular-nums; }
     #mks-dash .mks-tile .k { color:var(--m-faint); font-size:11.5px; margin-top:2px; }
     #mks-dash .mks-tile.t-warn .v { color:var(--m-wa); } #mks-dash .mks-tile.t-error .v { color:var(--m-er); } #mks-dash .mks-tile.t-ok .v { color:var(--m-ok); }
+    #mks-dash details.mks-fold { border:1px solid var(--m-bd); border-radius:10px; background:var(--m-s1); margin:10px 0; }
+    #mks-dash details.mks-fold > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; padding:11px 14px;
+        font:600 11.5px var(--m-sans); letter-spacing:.08em; text-transform:uppercase; color:var(--m-dim); user-select:none; }
+    #mks-dash details.mks-fold > summary::-webkit-details-marker { display:none; }
+    #mks-dash details.mks-fold > summary::before { content:'▸'; color:var(--m-faint); display:inline-block; transition:transform .15s; }
+    #mks-dash details.mks-fold[open] > summary::before { transform:rotate(90deg); }
+    #mks-dash details.mks-fold > summary:hover { color:var(--m-tx); }
+    #mks-dash details.mks-fold > summary .n { margin-left:auto; font:500 11.5px var(--m-mono); letter-spacing:0; color:var(--m-faint);
+        background:var(--m-s3); border-radius:20px; padding:1px 9px; }
+    #mks-dash details.mks-fold > .b { padding:0 14px 14px; }
+    #mks-dash details.mks-fold > .b > .mks-note:first-child { margin-top:0; }
+    #mks-dash .mks-hero { background:var(--m-s2); border:1px solid var(--m-bd2); border-radius:12px; padding:14px 16px; margin:4px 0 12px; }
+    #mks-dash .mks-hero .k { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); }
+    #mks-dash .mks-hero .t { font:600 15.5px var(--m-sans); color:var(--m-tx); margin-top:5px; line-height:1.35; }
+    #mks-dash .mks-hero .s { color:var(--m-dim); font-size:12.5px; margin-top:5px; line-height:1.45; }
+    #mks-dash .mks-hero.t-ok { border-left:4px solid var(--m-ok); } #mks-dash .mks-hero.t-warn { border-left:4px solid var(--m-wa); }
+    #mks-dash .mks-hero.t-busy { border-left:4px solid var(--m-ac); }
+    #mks-dash table.mks-tbl td.mks-tone { width:4px; padding:0 !important; }
+    #mks-dash table.mks-tbl td.mks-tone.t-ok { background:var(--m-ok) !important; } #mks-dash table.mks-tbl td.mks-tone.t-warn { background:var(--m-wa) !important; }
+    #mks-dash table.mks-tbl td.mks-tone.t-error { background:var(--m-er) !important; }
     #mks-dash .mks-tblwrap { max-height:340px; overflow:auto; border:1px solid var(--m-bd); border-radius:9px; }
     #mks-dash table.mks-tbl { width:100%; border-collapse:collapse; font-size:12.5px; background:transparent !important; margin:0; }
     #mks-dash table.mks-tbl th { position:sticky; top:0; background:var(--m-s3) !important; color:var(--m-dim) !important; text-align:left; font-weight:600;
@@ -735,6 +765,10 @@ const MKS = (() => {
             box.innerHTML = '';
             if (!r.running || !r.panel) return;
             try { r.panel(box); } catch (e) { box.innerHTML = `<p class="mks-note">Paneel kon niet laden: ${esc(e.message)}</p>`; console.error(e); }
+            box.querySelectorAll('details.mks-fold[data-fold]').forEach((d) => d.addEventListener('toggle', () => {
+                folds[d.dataset.fold] = d.open;
+                try { GM_setValue(FOLDS_KEY, JSON.stringify(folds)); } catch (e) { /* ignore */ }
+            }));
         }
 
         // Unfolded setting extras (ctx.settingExtra), by "module:key".
@@ -13146,10 +13180,10 @@ MKS.module({
                 const other = sorted(needs.other);
                 const now = Date.now();
                 const live = [...holds].filter(([, h]) => h.until > now).sort((a, b) => b[1].credits - a[1].credits);
-                const holdHtml = live.length ? `<h4 class="mks-h">Bewaard voor grote inzetten</h4>
+                const holdHtml = live.length ? ctx.fold('holds', 'Bewaard voor grote inzetten', `
                     <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Inzet</th><th>Credits</th><th>Bewaard</th><th>Nog</th></tr></thead><tbody>
                     ${live.map(([, h]) => `<tr><td>${esc(h.name)}</td><td class="mono">${ctx.nl(h.credits)}</td><td>${esc(Object.values(h.keys).map((v) => `${v.need}× ${v.cap}`).join(', '))}</td>
-                        <td class="mono mks-dim">${Math.ceil((h.until - now) / 60000)} min</td></tr>`).join('')}</tbody></table></div>` : '';
+                        <td class="mono mks-dim">${Math.ceil((h.until - now) / 60000)} min</td></tr>`).join('')}</tbody></table></div>`, { open: true, count: live.length }) : '';
                 el.innerHTML = `<div class="mks-tiles">
                         <div class="mks-tile"><div class="v">${stats.sent}</div><div class="k">gealarmeerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.transports}</div><div class="k">vervoerd</div></div>
@@ -13159,7 +13193,7 @@ MKS.module({
                             <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
-                    <h4 class="mks-h">Tekort per voertuigtype</h4>
+                    ${ctx.fold('needs', 'Tekort per voertuigtype', `
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
                         Bovenaan staat wat je het vaakst mist: daar heb je er meer van nodig (of dichterbij).</p>
@@ -13168,15 +13202,15 @@ MKS.module({
                         ${types.map(([n, t]) => `<tr title="${esc(`Laatste inzet: ${t.example}`)}"><td>${esc(n)}</td><td class="mono"><b>${t.missions}</b></td>
                             <td class="mono">${t.short || ''}</td><td class="mono">${t.far || ''}</td><td class="mono">${t.units || ''}</td>
                             <td class="mono mks-dim">${ago(t.last)}</td></tr>`).join('')}</tbody></table></div>`
-                        : '<p class="mks-note">Nog geen tekorten geteld.</p>'}
-                    ${other.length ? `<h4 class="mks-h">Kan het script niet sturen</h4>
+                        : '<p class="mks-note">Nog geen tekorten geteld.</p>'}`, { count: types.length })}
+                    ${other.length ? ctx.fold('other', 'Kan het script niet sturen', `
                         <p class="mks-note">Eisen die dit script (nog) niet kan vervullen. Deze inzetten moet je zelf alarmeren.</p>
                         <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Eis</th><th>Inzetten</th><th>Laatst</th></tr></thead><tbody>
                         ${other.map(([n, t]) => `<tr title="${esc(`Laatste inzet: ${t.example}`)}"><td>${esc(n)}</td><td class="mono"><b>${t.missions}</b></td>
-                            <td class="mono mks-dim">${ago(t.last)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                    ${log.length ? `<h4 class="mks-h">Logboek</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                        ${log.map((l) => `<tr><td class="mono">${l.at.toLocaleTimeString('nl-NL')}</td><td>${esc(l.name)}</td>
-                        <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td></tr>`).join('')}</tbody></table></div>`
+                            <td class="mono mks-dim">${ago(t.last)}</td></tr>`).join('')}</tbody></table></div>`, { open: true, count: other.length }) : ''}
+                    ${log.length ? ctx.fold('log', 'Logboek', `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                        ${log.map((l) => `<tr><td class="mks-tone ${tone[l.tone] || ''}"></td><td class="mono mks-dim" style="white-space:nowrap">${l.at.toLocaleTimeString('nl-NL')}</td>
+                        <td><b>${esc(l.name)}</b><div class="mks-dim" style="font-size:11.5px;margin-top:2px">${esc(l.text)}</div></td></tr>`).join('')}</tbody></table></div>`, { open: true, count: log.length })
                         : '<p class="mks-note">Nog niets gedaan. Klik op Start of op de knop <b>Auto</b> in de missiefilterbalk.</p>'}`;
             });
 
@@ -13266,6 +13300,18 @@ MKS.module({
 
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
+
+        { group: 'AI', key: 'aiOn', label: 'AI beslist (Gemini)', type: 'bool', default: false,
+            help: 'Een AI-model van Google kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
+                + 'of besluit te sparen. Het script voert de keuze meteen uit, met dezelfde regels: alleen credits, nooit coins, buffer blijft staan. '
+                + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'Gemini API-sleutel', type: 'text', default: '', placeholder: 'AIza…',
+            help: 'Blijft in je browser en gaat alleen naar Google (generativelanguage.googleapis.com). Staat nooit in het logboek of de log-upload.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
+            help: '"auto" = het nieuwste Flash-model dat je sleutel mag gebruiken (wordt bij Google opgevraagd). Of vul zelf een modelnaam in.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
+            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
+            help: 'Gaat elke keer mee naar de AI.' },
 
         { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
             help: 'Een voertuigsoort komt pas in aanmerking als die zo vaak in de tekortlijst van Automatisch alarmeren staat.' },
@@ -14859,6 +14905,122 @@ MKS.module({
             return { buildings, vehicles, byId, credits: credits.credits_user_current, total: credits.credits_user_total, home: ls ? posOf(ls) : [52.1, 5.3] };
         }
 
+        /* AI DECIDES — Gemini picks one of the options this round worked out (or to save).
+         * Asked again only when the options change or after 20 minutes, so a free key's
+         * daily limit is never reached. The key is read from the settings each time and
+         * never stored elsewhere, logged or uploaded. On any failure: the rules decide. */
+        let aiLast = null; // { sig, at, label, wait, reason }
+        let aiFailedAt = 0;
+        function aiRequest(model, key, prompt) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                    data: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+                    timeout: 60000,
+                    onload: (r) => {
+                        if (r.status < 200 || r.status >= 300) {
+                            let msg = String(r.responseText || '');
+                            try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                            const err = new Error(`Gemini ${r.status}: ${msg.slice(0, 300)}`);
+                            err.status = r.status;
+                            reject(err);
+                            return;
+                        }
+                        try {
+                            const j = JSON.parse(r.responseText);
+                            resolve(JSON.parse(j.candidates[0].content.parts.map((x) => x.text || '').join('')));
+                        } catch (e) { reject(new Error('Gemini: antwoord niet te lezen')); }
+                    },
+                    onerror: () => reject(new Error('Gemini: geen verbinding')),
+                    ontimeout: () => reject(new Error('Gemini: geen antwoord (60 s)')),
+                });
+            });
+        }
+        // "auto": the newest Flash model this key may use, asked from Google once per page.
+        let aiAutoModel = null;
+        function aiModels(key) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+                    headers: { 'x-goog-api-key': key },
+                    timeout: 30000,
+                    onload: (r) => {
+                        try {
+                            if (r.status !== 200) throw new Error(`Gemini ${r.status} bij modellen opvragen`);
+                            resolve((JSON.parse(r.responseText).models || []));
+                        } catch (e) { reject(e); }
+                    },
+                    onerror: () => reject(new Error('Gemini: geen verbinding')),
+                    ontimeout: () => reject(new Error('Gemini: geen antwoord')),
+                });
+            });
+        }
+        async function aiModelName(key, refresh) {
+            const set = String(ctx.cfg.aiModel || '').trim();
+            if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
+            if (aiAutoModel && !refresh) return aiAutoModel;
+            const usable = (await aiModels(key)).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map((m) => String(m.name || '').replace(/^models\//, ''))
+                .filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
+            const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
+            const rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
+            if (!usable.length) throw new Error('Gemini: geen bruikbaar model gevonden voor deze sleutel');
+            aiAutoModel = usable[0];
+            addLog(`AI gebruikt model ${aiAutoModel}`, 'idle');
+            return aiAutoModel;
+        }
+        async function aiDecide(ranking, data, spendable) {
+            if (Date.now() - aiFailedAt < 15 * 60000) return null; // after an error: the rules for a while
+            const options = ranking.slice(0, 15).map((r, i) => ({
+                i, step: r.label, need: r.need, cost: r.cost, blockedCreditsPerWeek: Math.round(r.value || 0),
+                returnPerCredit: Math.round((r.ratio || 0) * 1000) / 1000, affordableNow: r.cost <= spendable, readyIn: etaText(r.eta) }));
+            const sig = options.map((o) => `${o.step}|${o.affordableNow}`).join('~');
+            if (aiLast && aiLast.sig === sig && Date.now() - aiLast.at < 20 * 60000) {
+                return aiLast.wait ? { wait: true } : { option: ranking.find((r) => r.label === aiLast.label) || ranking[0] };
+            }
+            const rate = incomeRate();
+            const prompt = [
+                'You run the building and purchasing of a player in the browser game Meldkamerspel (Dutch emergency-dispatch game; missions earn credits).',
+                'Pick exactly one of the options below for this step, or decide to save credits for a better option. Goal: highest long-term income.',
+                'Facts: the game creates at most 180 missions per hour, so income grows mainly through better-paying missions and fixing shortages that block missions.',
+                'Missions that spawn from fire stations average 3,639 credits, police HQs 5,513, police stations 1,220, ambulance posts 241 (mostly unpaid transports).',
+                'Trainings wait for free classrooms; extensions and new buildings take time to build. Each option was worked out by the script and can be carried out as is.',
+                `Player wishes: ${String(ctx.cfg.aiNotes || '').slice(0, 600)}`,
+                `Credits now: ${data.credits}; spendable above the buffer: ${Math.max(0, spendable)}; income: ${rate && rate.perHour ? Math.round(rate.perHour) : 'unknown'} per hour.`,
+                `Options (JSON): ${JSON.stringify(options)}`,
+                'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
+            ].join('\n');
+            try {
+                const key = String(ctx.cfg.aiKey).trim();
+                let res;
+                try {
+                    res = await aiRequest(await aiModelName(key), key, prompt);
+                } catch (e) {
+                    // The model is gone or unknown (404): pick the newest one this key may use, once.
+                    if (e.status !== 404) throw e;
+                    res = await aiRequest(await aiModelName(key, true), key, prompt);
+                }
+                const c = Number(res && res.choice);
+                const reason = String((res && res.reason) || '').slice(0, 200);
+                const wait = c === -1;
+                const option = !wait && Number.isInteger(c) && c >= 0 && c < options.length ? ranking[c] : null;
+                if (!wait && !option) throw new Error(`Gemini: onbekende keuze ${JSON.stringify(res).slice(0, 80)}`);
+                const changed = !aiLast || aiLast.wait !== wait || aiLast.label !== (option && option.label);
+                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason };
+                if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
+                return wait ? { wait: true } : { option };
+            } catch (e) {
+                aiFailedAt = Date.now();
+                addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
+                return null;
+            }
+        }
+
         async function round() {
             if (busy || stopped) return;
             const other = lockHolder();
@@ -14908,7 +15070,7 @@ MKS.module({
                     let viable = 0;
                     for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
-                        if (viable >= ctx.cfg.planDepth) break;
+                        if (viable >= (ctx.cfg.aiOn && ctx.cfg.aiKey ? Math.max(ctx.cfg.planDepth, 12) : ctx.cfg.planDepth)) break;
                         const plan = c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
@@ -14921,6 +15083,10 @@ MKS.module({
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
+                    if (ctx.cfg.aiOn && String(ctx.cfg.aiKey || '').trim() && ranking.length) {
+                        const pick = await aiDecide(ranking, data, spendable);
+                        if (pick) next = pick.wait ? null : pick.option;
+                    }
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
                 state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped,
@@ -14928,6 +15094,11 @@ MKS.module({
                     ranking: ranking.map(({ need, label, cost, value, ratio, eta }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000, eta: etaText(eta) })),
                     income: incomeRate(), classBlocked: state.classBlocked };
                 if (!next) {
+                    if (ctx.cfg.aiOn && aiLast && aiLast.wait && Date.now() - aiFailedAt > 15 * 60000) {
+                        state.lastRound.result = `AI: sparen (${aiLast.reason})`;
+                        ctx.status(`AI wacht: ${aiLast.reason}`, { tone: 'idle' });
+                        return;
+                    }
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }
@@ -15000,7 +15171,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015105340' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015180919' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15009,37 +15180,66 @@ MKS.module({
 
         ctx.panel((el) => {
             const day = new Date().toISOString().slice(0, 10);
-            const tone = { ok: 't-ok', warn: 't-warn', error: 't-error', idle: '' };
+            const rate = incomeRate();
+            const lr = state.lastRound || {};
             const wishes = Object.entries(state.wishes).sort((a, b) => b[1] - a[1]);
-            el.innerHTML = `<div class="mks-tiles">
+            const STAGE = { train: 'opleiden', buy: 'kopen', assign: 'koppelen', prep: 'voorbereiden', grow: 'nieuwe post' };
+            const time = (t) => new Date(t).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+            // What happens next, in one card.
+            let hero;
+            if (next) {
+                const now = next.cost <= Math.max(0, (lr.credits || 0) - ctx.cfg.buffer);
+                hero = `<div class="mks-hero ${now ? 't-busy' : 't-warn'}"><div class="k">Volgende stap</div>
+                    <div class="t">${esc(next.label)}</div>
+                    <div class="s">${next.cost ? `${ctx.nl(next.cost)} credits · ${now ? 'nu te betalen' : `te betalen ${esc(next.eta ? etaText(next.eta) : "later")}`}` : 'gratis'}
+                    ${ctx.cfg.aiOn && aiLast && !aiLast.wait ? `<br>AI: ${esc(aiLast.reason)}` : ''}</div></div>`;
+            } else {
+                const why = ctx.cfg.aiOn && aiLast && aiLast.wait ? `AI spaart: ${esc(aiLast.reason)}`
+                    : skipped.length ? `Niets te doen: ${skipped.length} tekort(en) wachten (zie Overgeslagen).` : 'Geen tekorten om op te lossen.';
+                hero = `<div class="mks-hero"><div class="k">Volgende stap</div><div class="t">Niets gepland</div><div class="s">${why}</div></div>`;
+            }
+
+            const tiles = `<div class="mks-tiles">
+                    <div class="mks-tile"><div class="v">${lr.credits != null ? ctx.nl(Math.max(0, lr.credits - ctx.cfg.buffer)) : '–'}</div><div class="k">vrij boven buffer (${ctx.nl(ctx.cfg.buffer)})</div></div>
+                    <div class="mks-tile"><div class="v">${rate ? ctx.nl(rate.perHour) : '–'}</div><div class="k">inkomen per uur</div></div>
                     <div class="mks-tile"><div class="v">${ctx.nl(state.spent[day] || 0)}</div><div class="k">uitgegeven vandaag</div></div>
-                    <div class="mks-tile"><div class="v">${ctx.nl(ctx.cfg.buffer)}</div><div class="k">buffer</div></div>
-                </div>
-                ${projects().length ? `<h4 class="mks-h">Projecten (opleiden → kopen → koppelen)</h4>
-                    <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Gebouw</th><th>Stap</th><th>Sinds</th></tr></thead><tbody>
+                    <div class="mks-tile"><div class="v">${projects().length}</div><div class="k">projecten bezig</div></div>
+                </div>`;
+
+            const projHtml = projects().length ? `<div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Gebouw</th><th>Stap</th><th>Sinds</th></tr></thead><tbody>
                     ${projects().map((p) => `<tr><td>${esc(VT[p.vt]?.[0] || p.vt)}</td><td>${esc(p.caption || '')}</td>
-                        <td>${{ train: `opleiding ${esc(p.training || '')} (${p.people.length} pers.)`, buy: 'kopen', assign: 'personeel koppelen' }[p.stage] || p.stage}${p.wait ? ` <span class="mks-dim">— ${esc(p.wait)}</span>` : ''}</td>
-                        <td class="mono mks-dim">${new Date(p.started).toLocaleDateString('nl-NL')}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                ${ranking.length ? `<h4 class="mks-h">Afweging (beste rendement eerst)</h4>
-                    <p class="mks-note">Waarde = credits van inzetten die hierdoor misten in 7 dagen (speciale voertuigen ×${ctx.cfg.specialWeight}),
+                        <td><span class="mks-pill ${p.wait ? 't-warn' : 't-busy'}">${esc(STAGE[p.stage] || p.stage)}${p.stage === 'train' && p.people ? ` · ${p.people.length} pers.` : ''}</span>
+                        ${p.wait ? `<div class="mks-dim" style="font-size:11.5px;margin-top:3px">${esc(p.wait)}</div>` : ''}</td>
+                        <td class="mono mks-dim">${new Date(p.started).toLocaleDateString('nl-NL')}</td></tr>`).join('')}</tbody></table></div>`
+                : '<p class="mks-note">Geen projecten bezig.</p>';
+
+            const rankHtml = ranking.length ? `<p class="mks-note">Waarde = credits van inzetten die hierdoor misten in 7 dagen (speciale voertuigen ×${ctx.cfg.specialWeight}),
                     of van nieuwe meldingsoorten. Rendement = waarde per uitgegeven credit.</p>
                     <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Stap</th><th>Waarde</th><th>Kosten</th><th>Rendement</th><th>Te betalen</th></tr></thead><tbody>
-                    ${ranking.map((r) => `<tr><td>${esc(r.label)}</td><td class="mono">${ctx.nl(r.value)}</td><td class="mono">${ctx.nl(r.cost)}</td>
-                        <td class="mono">${r.cost ? r.ratio.toFixed(2) : 'gratis'}</td><td class="mono">${r.cost ? esc(etaText(r.eta)) : 'nu'}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                <h4 class="mks-h">Volgende stap</h4>
-                <p class="mks-note">${next ? `${esc(next.label)} — ${ctx.nl(next.cost)} credits` : 'Nog niets gepland.'}</p>
-                ${(() => { const r = incomeRate(); return `<p class="mks-note">Inkomen: ${r ? `${ctx.nl(r.perHour)} credits per uur (gemiddeld over ${Math.round(r.hours)} u, ${esc(r.src)})` : 'nog onbekend (zet Inkomsten aan, of wacht een uur)'}. "Te betalen" = wanneer er genoeg is met de buffer erbij.</p>`; })()}
-                ${skipped.length ? `<h4 class="mks-h">Overgeslagen</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                    ${skipped.map((s) => `<tr><td>${esc(s)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                ${wishes.length ? `<h4 class="mks-h">Opleidingen nodig</h4>
-                    <p class="mks-note">Voertuigen die het niet kocht omdat opgeleid personeel ontbrak. Start deze opleidingen (nog niet automatisch).</p>
-                    <div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                    ${wishes.map(([n, k]) => `<tr><td>${esc(n)}</td><td class="mono">${k}</td></tr>`).join('')}</tbody></table></div>` : ''}
-                <h4 class="mks-h">Logboek</h4>
-                ${state.log.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
-                    ${state.log.slice(0, 100).map((l) => `<tr><td class="mono">${new Date(l.at).toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                    <td><span class="mks-pill ${tone[l.tone] || ''}">${esc(l.text)}</span></td><td class="mono">${l.cost ? ctx.nl(l.cost) : ''}</td></tr>`).join('')}
-                    </tbody></table></div>` : '<p class="mks-note">Nog niets gedaan.</p>'}`;
+                    ${ranking.map((r) => `<tr${next && r.label === next.label ? ' style="font-weight:600"' : ''}><td>${esc(r.label)}</td><td class="mono">${ctx.nl(r.value)}</td><td class="mono">${ctx.nl(r.cost)}</td>
+                        <td class="mono">${r.cost ? r.ratio.toFixed(2) : 'gratis'}</td><td class="mono">${r.cost ? esc(etaText(r.eta)) : 'nu'}</td></tr>`).join('')}</tbody></table></div>`
+                : '<p class="mks-note">Nog geen afweging (wacht op de volgende ronde).</p>';
+
+            const skipHtml = skipped.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                    ${skipped.map((x) => { const i = x.indexOf(':'); return `<tr><td><b>${esc(i > 0 ? x.slice(0, i) : x)}</b>${i > 0 ? `<div class="mks-dim" style="font-size:11.5px;margin-top:2px">${esc(x.slice(i + 1).trim())}</div>` : ''}</td></tr>`; }).join('')}
+                    </tbody></table></div>` : '<p class="mks-note">Niets overgeslagen.</p>';
+
+            const wishHtml = `<p class="mks-note">Voertuigen die het niet kocht omdat opgeleid personeel ontbrak.</p>
+                    <div class="mks-tblwrap"><table class="mks-tbl"><tbody>${wishes.map(([n, k]) => `<tr><td>${esc(n)}</td><td class="mono">${k}</td></tr>`).join('')}</tbody></table></div>`;
+
+            const logHtml = state.log.length ? `<div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                    ${state.log.slice(0, 100).map((l) => `<tr><td class="mks-tone ${l.tone === 'ok' ? 't-ok' : l.tone === 'warn' ? 't-warn' : l.tone === 'error' ? 't-error' : ''}"></td>
+                        <td class="mono mks-dim" style="white-space:nowrap">${time(l.at)}</td><td>${esc(l.text)}</td><td class="mono">${l.cost ? ctx.nl(l.cost) : ''}</td></tr>`).join('')}
+                    </tbody></table></div>` : '<p class="mks-note">Nog niets gedaan.</p>';
+
+            el.innerHTML = hero + tiles
+                + ctx.fold('projects', 'Projecten (opleiden → kopen → koppelen)', projHtml, { open: true, count: projects().length })
+                + ctx.fold('ranking', 'Afweging (beste rendement eerst)', rankHtml, { count: ranking.length })
+                + ctx.fold('skipped', 'Overgeslagen', skipHtml, { count: skipped.length })
+                + (wishes.length ? ctx.fold('wishes', 'Opleidingen nodig', wishHtml, { count: wishes.length }) : '')
+                + ctx.fold('log', 'Logboek', logHtml, { open: true, count: state.log.length })
+                + `<p class="mks-note">"Te betalen" = wanneer er genoeg is met de buffer erbij. Inkomen: ${rate ? `gemiddeld over ${Math.round(rate.hours)} u (${esc(rate.src)})` : 'nog onbekend (zet Inkomsten aan, of wacht een uur)'}.</p>`;
         });
         ctx.actions([
             { label: 'Nu een stap', kind: 'primary', run: () => round() },
@@ -15142,7 +15342,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261015105340',
+                version: '1.7.0.20261015180919',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
