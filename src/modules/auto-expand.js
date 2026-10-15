@@ -1042,8 +1042,14 @@ MKS.module({
                     // station needs "Grootschalige Geneeskundige Bijstand" for NHT and GGB as
                     // well, so two 1.4M stations bought "for NHT" (De Bilt, Bunnik) did not help.
                     if (own != null && ctx.cfg.doBuild && c.at && await needsNoExtension(own, c.vt, data)) {
-                        const nb = await planBuilding(c, [own], `voor ${v[0]}, direct klaar in plaats van uitbreiding in ${b.caption}`, data);
-                        if (!nb.skip) return nb;
+                        // The small version (Brandweerkazerne / Politieopkomstbureau klein) costs half
+                        // and can be upgraded later: the cheaper of the two that can be built.
+                        const why = `voor ${v[0]}, direct klaar in plaats van uitbreiding in ${b.caption}`;
+                        const small = { 0: 17, 5: 18 }[own];
+                        const opts = [await planBuilding(c, [own], why, data)];
+                        if (small != null && v[3].includes(small)) opts.push(await planBuilding(c, [small], `${why}, klein (later uit te bouwen)`, data));
+                        const nb = opts.filter((x) => !x.skip).sort((x, y) => x.cost - y.cost)[0];
+                        if (nb) return nb;
                     }
                     if (staffLeft(b, data) < crewOf(c.vt)) { reasons.push(`${b.caption}: uitbreiding nodig, maar personeel ${Math.max(0, staffLeft(b, data))}/${crewOf(c.vt)} over`); continue; }
                     if (ctx.cfg.doExtensions && gate.cost) {
