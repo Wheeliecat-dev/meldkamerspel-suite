@@ -480,6 +480,9 @@ MKS.module({
             const out = [];
             for (const [name, t] of Object.entries(needs.types || {})) {
                 if (t.missions < ctx.cfg.minMissions) continue;
+                // MICU: Interfacilitair Transport comes about one per MICU you own and pays
+                // nothing itself, so its shortage never ends. Not worth buying against.
+                if (/MICU/i.test(name)) continue;
                 if ((state.cool[name] || 0) > now) continue;
                 // A project for this need is still under way (training, extension being
                 // built): wait for it instead of planning a second answer (a 400k police

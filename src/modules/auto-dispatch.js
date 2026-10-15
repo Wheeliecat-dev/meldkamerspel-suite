@@ -1941,6 +1941,9 @@ MKS.module({
                             // transported (Besteld vervoer, Interfacilitair): leave it alone for 20
                             // minutes instead of opening it again every minute.
                             if (res.result === 'sent' || res.result === 'unconfirmed') quickHold.set(id, Date.now() + 20 * 60000);
+                            // Waiting for a free MICU (Interfacilitair Transport): look again in 10 minutes,
+                            // not every round (49 such missions made 285 skips in one afternoon).
+                            else if (res.result === 'skip' && /MICU/.test(String(res.reason || ''))) quickHold.set(id, Date.now() + 10 * 60000);
                             else if (res.result === 'wait' || /niets te sturen|al voertuigen ter plaatse/.test(String(res.reason || ''))) {
                                 const k = quickEmpty.get(id) || 0;
                                 quickEmpty.set(id, k + 1);
