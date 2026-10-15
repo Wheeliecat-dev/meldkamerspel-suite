@@ -1691,6 +1691,7 @@ MKS.module({
         }
         // "auto": the newest Flash model this key may use, asked from Google once per page.
         let aiAutoModel = null;
+        let aiAlternatives = []; // next-best models, for when the first is overloaded
         function aiModels(key) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
@@ -1720,6 +1721,7 @@ MKS.module({
             const rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
             usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
             if (!usable.length) throw new Error('Gemini: geen bruikbaar model gevonden voor deze sleutel');
+            aiAlternatives = usable.slice(1, 4);
             aiAutoModel = usable[0];
             addLog(`AI gebruikt model ${aiAutoModel}`, 'idle');
             return aiAutoModel;
@@ -1748,12 +1750,24 @@ MKS.module({
             try {
                 const key = String(ctx.cfg.aiKey).trim();
                 let res;
+                let model = await aiModelName(key);
                 try {
-                    res = await aiRequest(await aiModelName(key), key, prompt);
+                    res = await aiRequest(model, key, prompt);
                 } catch (e) {
-                    // The model is gone or unknown (404): pick the newest one this key may use, once.
-                    if (e.status !== 404) throw e;
-                    res = await aiRequest(await aiModelName(key, true), key, prompt);
+                    // The model is gone or unknown (404): pick the newest one this key may use.
+                    if (e.status === 404) {
+                        model = await aiModelName(key, true);
+                        res = await aiRequest(model, key, prompt);
+                    } else if (e.status === 503 || e.status === 500 || e.status === 502) {
+                        // Busy at Google: once more after a short wait, then the next-best models.
+                        await sleep(8000);
+                        const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
+                        let last = e;
+                        for (const m of tries) {
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![500, 502, 503].includes(e2.status)) break; }
+                        }
+                        if (last) throw last;
+                    } else throw e;
                 }
                 const c = Number(res && res.choice);
                 const reason = String((res && res.reason) || '').slice(0, 200);
@@ -1765,7 +1779,8 @@ MKS.module({
                 if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
                 return wait ? { wait: true } : { option };
             } catch (e) {
-                aiFailedAt = Date.now();
+                // Busy or rate-limited: the rules for 5 minutes; anything else for 15.
+                aiFailedAt = Date.now() - ([429, 500, 502, 503].includes(e.status) ? 10 * 60000 : 0);
                 addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
                 return null;
             }
