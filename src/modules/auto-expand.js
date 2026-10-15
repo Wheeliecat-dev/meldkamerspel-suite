@@ -1686,8 +1686,12 @@ MKS.module({
                         { model, messages: [{ role: 'user', content: prompt }], response_format: { type: 'json_object' } }, 90000)
                     : await aiHttp('POST', `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
                         { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-                        { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }, 60000);
-            } catch (e) { throw new Error(`${name}: ${e.message}`); }
+                        { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }, 120000);
+            } catch (e) {
+                const err = new Error(`${name}: ${e.message}`);
+                err.status = 504; // no answer: handled like a busy server (retry, other models)
+                throw err;
+            }
             if (r.status < 200 || r.status >= 300) {
                 let msg = String(r.responseText || '');
                 try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
@@ -1813,13 +1817,13 @@ MKS.module({
                     if (e.status === 404) {
                         model = await aiModelName(key, true);
                         res = await aiRequest(model, key, prompt);
-                    } else if (e.status === 503 || e.status === 500 || e.status === 502) {
+                    } else if ([500, 502, 503, 504].includes(e.status)) {
                         // Busy at Google: once more after a short wait, then the next-best models.
                         await sleep(8000);
                         const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
                         let last = e;
                         for (const m of tries) {
-                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![500, 502, 503].includes(e2.status)) break; }
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![500, 502, 503, 504].includes(e2.status)) break; }
                         }
                         if (last) throw last;
                     } else throw e;
@@ -1844,7 +1848,7 @@ MKS.module({
                 return wait ? { wait: true } : { option };
             } catch (e) {
                 // Busy or rate-limited: the rules for 5 minutes; anything else for 15.
-                aiFailedAt = Date.now() - ([429, 500, 502, 503].includes(e.status) ? 10 * 60000 : 0);
+                aiFailedAt = Date.now() - ([429, 500, 502, 503, 504].includes(e.status) ? 10 * 60000 : 0);
                 aiJournalAdd({ id: `${Date.now().toString(36)}e`, at: Date.now(), model, ms: Date.now() - t0, error: String(e.message || e).slice(0, 300),
                     status: e.status || null, rules: ranking[0] ? ranking[0].label : null, credits: data.credits });
                 addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
