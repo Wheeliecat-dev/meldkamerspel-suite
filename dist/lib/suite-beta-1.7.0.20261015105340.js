@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261014114010 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015105340 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -42,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261014114010';
+    const VERSION = '1.7.0.20261015105340';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11005,7 +11005,7 @@ MKS.module({
             // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
             'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
             'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
-            'politie helikopters': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
+            'politie helikopters': 'police_helicopters', 'politiehelikopters': 'police_helicopters', 'politiehelikopter': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
             'db-icb of ts-spoor': 'railway_fire_engine', 'ovd-icb': 'railway_elw', 'ts-sth': 'disaster_response', 'hvh-sth': 'disaster_response_equipment',
             'berger-g': 'car_carrier_large', 'db-drone': 'drone_police', 'db-ri of ria': 'thatched_firefighting', 'sb-ba, sb-ib of as': 'industrial_response_engine',
@@ -11634,6 +11634,9 @@ MKS.module({
                         const tables = [...document.querySelectorAll('table[id]')].slice(0, 6)
                             .map((t) => `${t.id} ${t.querySelectorAll('tbody tr').length}`).join(', ') || 'geen tabellen';
                         const body = clean(document.body ? document.body.innerText : '').slice(0, 140);
+                        // The mission is already over ("De inzet is succesvol afgesloten."): its
+                        // entry can stay in the list a while. Nothing to send, not again.
+                        if (/succesvol afgesloten/i.test(body)) { report('skip', { emptyList: true, finished: true, reason: 'inzet is al afgesloten' }); return; }
                         report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'}; ${location.pathname.replace(/\d+/g, '#')}; tekst: ${body || 'leeg'})` });
                         return;
                     }
@@ -12939,7 +12942,7 @@ MKS.module({
                             reason: res.reason, short: res.shortText ? fewer(res.shortText) : undefined, far: res.farTypes, held: res.held || undefined,
                             ...(res.result === 'skip' && res.want ? { avail: res.avail, want: res.want } : {}) });
                         if (res.mode !== 'cell' && !isPlanned(entry)) updateHold(id, name, credits, res);
-                        if (res.emptyList) tried.set(id, Date.now() + 20 * 60000); // look again in about 20 minutes, not every round
+                        if (res.emptyList) tried.set(id, Date.now() + (res.finished ? 6 * 3600000 : 20 * 60000)); // finished: never again; else in about 20 minutes
                         if (res.result === 'sent' || res.result === 'unconfirmed') recordLongDrives(curPos, res.longDrives, credits);
                         if (res.mode === 'cell' && (res.result === 'sent' || res.result === 'unconfirmed')) {
                             // More cars with arrestants: the next one in a minute.
@@ -14547,10 +14550,15 @@ MKS.module({
         // cheaper: fewer parking spots, but more new areas for the money. Both go into the
         // ranking; the better return wins. No wait between builds: a spot just built on is
         // skipped for 30 minutes instead (recentSpots), as the API can lag behind.
+        // worth: what the missions a post of this kind spawns pay, against the average
+        // mission (8,409 missions, Oct 2026): fire 3,639 cr, police 1,220, ambulance 241
+        // (mostly Besteld vervoer at 0), average 1,867. A new ambulance post mostly turns
+        // spawns into near-free missions; ambulance shortages are met by vehicles and
+        // levels at existing posts instead.
         const GROW = [
-            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
-            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
+            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne', worth: 1.95 },
+            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau', worth: 0.65 },
+            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost', worth: 0.13 }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
         // Build mode: per kind the levels its first staff can man and its first vehicle
         // (fire: TST 4/5, ambulance post: ambulance, police: DA Noodhulp). The rest of
@@ -14670,7 +14678,7 @@ MKS.module({
                     // Build mode: new posts win outright, taking turns between fire, police and
                     // ambulance (else the 100k VWS-post would always be cheapest).
                     const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
-                    pick = { ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
+                    pick = { ...plan, need, value: value * g.worth, ratio: (boost * value * g.worth) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
@@ -14992,7 +15000,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261014114010' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015105340' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15134,7 +15142,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261014114010',
+                version: '1.7.0.20261015105340',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

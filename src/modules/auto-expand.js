@@ -1334,10 +1334,15 @@ MKS.module({
         // cheaper: fewer parking spots, but more new areas for the money. Both go into the
         // ranking; the better return wins. No wait between builds: a spot just built on is
         // skipped for 30 minutes instead (recentSpots), as the API can lag behind.
+        // worth: what the missions a post of this kind spawns pay, against the average
+        // mission (8,409 missions, Oct 2026): fire 3,639 cr, police 1,220, ambulance 241
+        // (mostly Besteld vervoer at 0), average 1,867. A new ambulance post mostly turns
+        // spawns into near-free missions; ambulance shortages are met by vehicles and
+        // levels at existing posts instead.
         const GROW = [
-            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
-            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
+            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne', worth: 1.95 },
+            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau', worth: 0.65 },
+            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost', worth: 0.13 }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
         // Build mode: per kind the levels its first staff can man and its first vehicle
         // (fire: TST 4/5, ambulance post: ambulance, police: DA Noodhulp). The rest of
@@ -1457,7 +1462,7 @@ MKS.module({
                     // Build mode: new posts win outright, taking turns between fire, police and
                     // ambulance (else the 100k VWS-post would always be cheapest).
                     const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
-                    pick = { ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
+                    pick = { ...plan, need, value: value * g.worth, ratio: (boost * value * g.worth) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
