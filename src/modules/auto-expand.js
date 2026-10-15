@@ -51,6 +51,18 @@ MKS.module({
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
+        { group: 'AI', key: 'aiOn', label: 'AI beslist (Gemini)', type: 'bool', default: false,
+            help: 'Een AI-model van Google kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
+                + 'of besluit te sparen. Het script voert de keuze meteen uit, met dezelfde regels: alleen credits, nooit coins, buffer blijft staan. '
+                + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'Gemini API-sleutel', type: 'text', default: '', placeholder: 'AIza…',
+            help: 'Blijft in je browser en gaat alleen naar Google (generativelanguage.googleapis.com). Staat nooit in het logboek of de log-upload.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'gemini-2.5-flash',
+            help: 'De naam van het Gemini-model, zoals Google die opgeeft.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
+            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
+            help: 'Gaat elke keer mee naar de AI.' },
+
         { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
             help: 'Een voertuigsoort komt pas in aanmerking als die zo vaak in de tekortlijst van Automatisch alarmeren staat.' },
         { advanced: true, key: 'specialWeight', label: 'Voorrang speciale voertuigen', type: 'number', default: 3, min: 1, max: 10, step: 1,
@@ -1643,6 +1655,72 @@ MKS.module({
             return { buildings, vehicles, byId, credits: credits.credits_user_current, total: credits.credits_user_total, home: ls ? posOf(ls) : [52.1, 5.3] };
         }
 
+        /* AI DECIDES — Gemini picks one of the options this round worked out (or to save).
+         * Asked again only when the options change or after 20 minutes, so a free key's
+         * daily limit is never reached. The key is read from the settings each time and
+         * never stored elsewhere, logged or uploaded. On any failure: the rules decide. */
+        let aiLast = null; // { sig, at, label, wait, reason }
+        let aiFailedAt = 0;
+        function aiRequest(model, key, prompt) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                    data: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+                    timeout: 60000,
+                    onload: (r) => {
+                        if (r.status < 200 || r.status >= 300) { reject(new Error(`Gemini ${r.status}: ${String(r.responseText || '').slice(0, 160)}`)); return; }
+                        try {
+                            const j = JSON.parse(r.responseText);
+                            resolve(JSON.parse(j.candidates[0].content.parts.map((x) => x.text || '').join('')));
+                        } catch (e) { reject(new Error('Gemini: antwoord niet te lezen')); }
+                    },
+                    onerror: () => reject(new Error('Gemini: geen verbinding')),
+                    ontimeout: () => reject(new Error('Gemini: geen antwoord (60 s)')),
+                });
+            });
+        }
+        async function aiDecide(ranking, data, spendable) {
+            if (Date.now() - aiFailedAt < 15 * 60000) return null; // after an error: the rules for a while
+            const options = ranking.slice(0, 15).map((r, i) => ({
+                i, step: r.label, need: r.need, cost: r.cost, blockedCreditsPerWeek: Math.round(r.value || 0),
+                returnPerCredit: Math.round((r.ratio || 0) * 1000) / 1000, affordableNow: r.cost <= spendable, readyIn: etaText(r.eta) }));
+            const sig = options.map((o) => `${o.step}|${o.affordableNow}`).join('~');
+            if (aiLast && aiLast.sig === sig && Date.now() - aiLast.at < 20 * 60000) {
+                return aiLast.wait ? { wait: true } : { option: ranking.find((r) => r.label === aiLast.label) || ranking[0] };
+            }
+            const rate = incomeRate();
+            const prompt = [
+                'You run the building and purchasing of a player in the browser game Meldkamerspel (Dutch emergency-dispatch game; missions earn credits).',
+                'Pick exactly one of the options below for this step, or decide to save credits for a better option. Goal: highest long-term income.',
+                'Facts: the game creates at most 180 missions per hour, so income grows mainly through better-paying missions and fixing shortages that block missions.',
+                'Missions that spawn from fire stations average 3,639 credits, police HQs 5,513, police stations 1,220, ambulance posts 241 (mostly unpaid transports).',
+                'Trainings wait for free classrooms; extensions and new buildings take time to build. Each option was worked out by the script and can be carried out as is.',
+                `Player wishes: ${String(ctx.cfg.aiNotes || '').slice(0, 600)}`,
+                `Credits now: ${data.credits}; spendable above the buffer: ${Math.max(0, spendable)}; income: ${rate && rate.perHour ? Math.round(rate.perHour) : 'unknown'} per hour.`,
+                `Options (JSON): ${JSON.stringify(options)}`,
+                'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
+            ].join('\n');
+            try {
+                const res = await aiRequest(String(ctx.cfg.aiModel || 'gemini-2.5-flash').trim(), String(ctx.cfg.aiKey).trim(), prompt);
+                const c = Number(res && res.choice);
+                const reason = String((res && res.reason) || '').slice(0, 200);
+                const wait = c === -1;
+                const option = !wait && Number.isInteger(c) && c >= 0 && c < options.length ? ranking[c] : null;
+                if (!wait && !option) throw new Error(`Gemini: onbekende keuze ${JSON.stringify(res).slice(0, 80)}`);
+                const changed = !aiLast || aiLast.wait !== wait || aiLast.label !== (option && option.label);
+                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason };
+                if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
+                return wait ? { wait: true } : { option };
+            } catch (e) {
+                aiFailedAt = Date.now();
+                addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
+                return null;
+            }
+        }
+
         async function round() {
             if (busy || stopped) return;
             const other = lockHolder();
@@ -1692,7 +1770,7 @@ MKS.module({
                     let viable = 0;
                     for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
-                        if (viable >= ctx.cfg.planDepth) break;
+                        if (viable >= (ctx.cfg.aiOn && ctx.cfg.aiKey ? Math.max(ctx.cfg.planDepth, 12) : ctx.cfg.planDepth)) break;
                         const plan = c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
@@ -1705,6 +1783,10 @@ MKS.module({
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
+                    if (ctx.cfg.aiOn && String(ctx.cfg.aiKey || '').trim() && ranking.length) {
+                        const pick = await aiDecide(ranking, data, spendable);
+                        if (pick) next = pick.wait ? null : pick.option;
+                    }
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
                 state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped,
@@ -1712,6 +1794,11 @@ MKS.module({
                     ranking: ranking.map(({ need, label, cost, value, ratio, eta }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000, eta: etaText(eta) })),
                     income: incomeRate(), classBlocked: state.classBlocked };
                 if (!next) {
+                    if (ctx.cfg.aiOn && aiLast && aiLast.wait && Date.now() - aiFailedAt > 15 * 60000) {
+                        state.lastRound.result = `AI: sparen (${aiLast.reason})`;
+                        ctx.status(`AI wacht: ${aiLast.reason}`, { tone: 'idle' });
+                        return;
+                    }
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }

@@ -22,6 +22,7 @@
 // @connect      overpass.private.coffee
 // @connect      raw.githubusercontent.com
 // @connect      api.github.com
+// @connect      generativelanguage.googleapis.com
 // @require      {{REQUIRE_URL}}
 // @run-at       document-start
 // ==/UserScript==
