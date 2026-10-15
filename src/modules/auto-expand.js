@@ -57,8 +57,8 @@ MKS.module({
                 + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
         { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'Gemini API-sleutel', type: 'text', default: '', placeholder: 'AIza…',
             help: 'Blijft in je browser en gaat alleen naar Google (generativelanguage.googleapis.com). Staat nooit in het logboek of de log-upload.' },
-        { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'gemini-2.5-flash',
-            help: 'De naam van het Gemini-model, zoals Google die opgeeft.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
+            help: '"auto" = het nieuwste Flash-model dat je sleutel mag gebruiken (wordt bij Google opgevraagd). Of vul zelf een modelnaam in.' },
         { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
             default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
             help: 'Gaat elke keer mee naar de AI.' },
@@ -1671,7 +1671,14 @@ MKS.module({
                         generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
                     timeout: 60000,
                     onload: (r) => {
-                        if (r.status < 200 || r.status >= 300) { reject(new Error(`Gemini ${r.status}: ${String(r.responseText || '').slice(0, 160)}`)); return; }
+                        if (r.status < 200 || r.status >= 300) {
+                            let msg = String(r.responseText || '');
+                            try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                            const err = new Error(`Gemini ${r.status}: ${msg.slice(0, 300)}`);
+                            err.status = r.status;
+                            reject(err);
+                            return;
+                        }
                         try {
                             const j = JSON.parse(r.responseText);
                             resolve(JSON.parse(j.candidates[0].content.parts.map((x) => x.text || '').join('')));
@@ -1681,6 +1688,41 @@ MKS.module({
                     ontimeout: () => reject(new Error('Gemini: geen antwoord (60 s)')),
                 });
             });
+        }
+        // "auto": the newest Flash model this key may use, asked from Google once per page.
+        let aiAutoModel = null;
+        function aiModels(key) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+                    headers: { 'x-goog-api-key': key },
+                    timeout: 30000,
+                    onload: (r) => {
+                        try {
+                            if (r.status !== 200) throw new Error(`Gemini ${r.status} bij modellen opvragen`);
+                            resolve((JSON.parse(r.responseText).models || []));
+                        } catch (e) { reject(e); }
+                    },
+                    onerror: () => reject(new Error('Gemini: geen verbinding')),
+                    ontimeout: () => reject(new Error('Gemini: geen antwoord')),
+                });
+            });
+        }
+        async function aiModelName(key, refresh) {
+            const set = String(ctx.cfg.aiModel || '').trim();
+            if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
+            if (aiAutoModel && !refresh) return aiAutoModel;
+            const usable = (await aiModels(key)).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map((m) => String(m.name || '').replace(/^models\//, ''))
+                .filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
+            const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
+            const rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
+            if (!usable.length) throw new Error('Gemini: geen bruikbaar model gevonden voor deze sleutel');
+            aiAutoModel = usable[0];
+            addLog(`AI gebruikt model ${aiAutoModel}`, 'idle');
+            return aiAutoModel;
         }
         async function aiDecide(ranking, data, spendable) {
             if (Date.now() - aiFailedAt < 15 * 60000) return null; // after an error: the rules for a while
@@ -1704,7 +1746,15 @@ MKS.module({
                 'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
             ].join('\n');
             try {
-                const res = await aiRequest(String(ctx.cfg.aiModel || 'gemini-2.5-flash').trim(), String(ctx.cfg.aiKey).trim(), prompt);
+                const key = String(ctx.cfg.aiKey).trim();
+                let res;
+                try {
+                    res = await aiRequest(await aiModelName(key), key, prompt);
+                } catch (e) {
+                    // The model is gone or unknown (404): pick the newest one this key may use, once.
+                    if (e.status !== 404) throw e;
+                    res = await aiRequest(await aiModelName(key, true), key, prompt);
+                }
                 const c = Number(res && res.choice);
                 const reason = String((res && res.reason) || '').slice(0, 200);
                 const wait = c === -1;

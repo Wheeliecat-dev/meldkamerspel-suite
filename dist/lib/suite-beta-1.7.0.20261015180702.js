@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015104336 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015180702 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -42,7 +42,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261015104336';
+    const VERSION = '1.7.0.20261015180702';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -13267,6 +13267,18 @@ MKS.module({
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
+        { group: 'AI', key: 'aiOn', label: 'AI beslist (Gemini)', type: 'bool', default: false,
+            help: 'Een AI-model van Google kiest elke stap uit alles wat dit script kan doen (voertuigen, uitbreidingen, levels, gebouwen, opleidingen, klaslokalen), '
+                + 'of besluit te sparen. Het script voert de keuze meteen uit, met dezelfde regels: alleen credits, nooit coins, buffer blijft staan. '
+                + 'Werkt de AI niet (geen sleutel, limiet, fout), dan kiest het script zelf zoals altijd.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiKey', label: 'Gemini API-sleutel', type: 'text', default: '', placeholder: 'AIza…',
+            help: 'Blijft in je browser en gaat alleen naar Google (generativelanguage.googleapis.com). Staat nooit in het logboek of de log-upload.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
+            help: '"auto" = het nieuwste Flash-model dat je sleutel mag gebruiken (wordt bij Google opgevraagd). Of vul zelf een modelnaam in.' },
+        { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
+            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
+            help: 'Gaat elke keer mee naar de AI.' },
+
         { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
             help: 'Een voertuigsoort komt pas in aanmerking als die zo vaak in de tekortlijst van Automatisch alarmeren staat.' },
         { advanced: true, key: 'specialWeight', label: 'Voorrang speciale voertuigen', type: 'number', default: 3, min: 1, max: 10, step: 1,
@@ -14550,10 +14562,15 @@ MKS.module({
         // cheaper: fewer parking spots, but more new areas for the money. Both go into the
         // ranking; the better return wins. No wait between builds: a spot just built on is
         // skipped for 30 minutes instead (recentSpots), as the API can lag behind.
+        // worth: what the missions a post of this kind spawns pay, against the average
+        // mission (8,409 missions, Oct 2026): fire 3,639 cr, police 1,220, ambulance 241
+        // (mostly Besteld vervoer at 0), average 1,867. A new ambulance post mostly turns
+        // spawns into near-free missions; ambulance shortages are met by vehicles and
+        // levels at existing posts instead.
         const GROW = [
-            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne' },
-            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau' },
-            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost' }, // 13 = Ambulance, VWS-post (100k vs 200k)
+            { types: [0, 17], same: [0, 17], vt: 1, name: 'brandweerkazerne', worth: 1.95 },
+            { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau', worth: 0.65 },
+            { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost', worth: 0.13 }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
         // Build mode: per kind the levels its first staff can man and its first vehicle
         // (fire: TST 4/5, ambulance post: ambulance, police: DA Noodhulp). The rest of
@@ -14673,7 +14690,7 @@ MKS.module({
                     // Build mode: new posts win outright, taking turns between fire, police and
                     // ambulance (else the 100k VWS-post would always be cheapest).
                     const boost = !ctx.cfg.buildMode ? 1 : g.name === state.growLast ? 100 : 1000;
-                    pick = { ...plan, need, value, ratio: (boost * value) / Math.max(plan.cost, 2000),
+                    pick = { ...plan, need, value: value * g.worth, ratio: (boost * value * g.worth) / Math.max(plan.cost, 2000),
                         run: async () => {
                             const before = new Set(data.buildings.map((b) => b.id));
                             await run();
@@ -14854,6 +14871,122 @@ MKS.module({
             return { buildings, vehicles, byId, credits: credits.credits_user_current, total: credits.credits_user_total, home: ls ? posOf(ls) : [52.1, 5.3] };
         }
 
+        /* AI DECIDES — Gemini picks one of the options this round worked out (or to save).
+         * Asked again only when the options change or after 20 minutes, so a free key's
+         * daily limit is never reached. The key is read from the settings each time and
+         * never stored elsewhere, logged or uploaded. On any failure: the rules decide. */
+        let aiLast = null; // { sig, at, label, wait, reason }
+        let aiFailedAt = 0;
+        function aiRequest(model, key, prompt) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+                    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+                    data: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+                    timeout: 60000,
+                    onload: (r) => {
+                        if (r.status < 200 || r.status >= 300) {
+                            let msg = String(r.responseText || '');
+                            try { msg = JSON.parse(msg).error.message || msg; } catch (e) { /* raw text */ }
+                            const err = new Error(`Gemini ${r.status}: ${msg.slice(0, 300)}`);
+                            err.status = r.status;
+                            reject(err);
+                            return;
+                        }
+                        try {
+                            const j = JSON.parse(r.responseText);
+                            resolve(JSON.parse(j.candidates[0].content.parts.map((x) => x.text || '').join('')));
+                        } catch (e) { reject(new Error('Gemini: antwoord niet te lezen')); }
+                    },
+                    onerror: () => reject(new Error('Gemini: geen verbinding')),
+                    ontimeout: () => reject(new Error('Gemini: geen antwoord (60 s)')),
+                });
+            });
+        }
+        // "auto": the newest Flash model this key may use, asked from Google once per page.
+        let aiAutoModel = null;
+        function aiModels(key) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+                    headers: { 'x-goog-api-key': key },
+                    timeout: 30000,
+                    onload: (r) => {
+                        try {
+                            if (r.status !== 200) throw new Error(`Gemini ${r.status} bij modellen opvragen`);
+                            resolve((JSON.parse(r.responseText).models || []));
+                        } catch (e) { reject(e); }
+                    },
+                    onerror: () => reject(new Error('Gemini: geen verbinding')),
+                    ontimeout: () => reject(new Error('Gemini: geen antwoord')),
+                });
+            });
+        }
+        async function aiModelName(key, refresh) {
+            const set = String(ctx.cfg.aiModel || '').trim();
+            if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
+            if (aiAutoModel && !refresh) return aiAutoModel;
+            const usable = (await aiModels(key)).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+                .map((m) => String(m.name || '').replace(/^models\//, ''))
+                .filter((n) => /^gemini-/.test(n) && !/(tts|image|audio|live|embed|vision|exp|learnlm)/i.test(n));
+            const version = (n) => { const m = n.match(/gemini-(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
+            const rank = (n) => version(n) * 10 + (/flash/.test(n) && !/lite/.test(n) ? 3 : /flash-lite/.test(n) ? 1 : 0) - (/preview/.test(n) ? 0.5 : 0);
+            usable.sort((a, b) => rank(b) - rank(a) || a.length - b.length);
+            if (!usable.length) throw new Error('Gemini: geen bruikbaar model gevonden voor deze sleutel');
+            aiAutoModel = usable[0];
+            addLog(`AI gebruikt model ${aiAutoModel}`, 'idle');
+            return aiAutoModel;
+        }
+        async function aiDecide(ranking, data, spendable) {
+            if (Date.now() - aiFailedAt < 15 * 60000) return null; // after an error: the rules for a while
+            const options = ranking.slice(0, 15).map((r, i) => ({
+                i, step: r.label, need: r.need, cost: r.cost, blockedCreditsPerWeek: Math.round(r.value || 0),
+                returnPerCredit: Math.round((r.ratio || 0) * 1000) / 1000, affordableNow: r.cost <= spendable, readyIn: etaText(r.eta) }));
+            const sig = options.map((o) => `${o.step}|${o.affordableNow}`).join('~');
+            if (aiLast && aiLast.sig === sig && Date.now() - aiLast.at < 20 * 60000) {
+                return aiLast.wait ? { wait: true } : { option: ranking.find((r) => r.label === aiLast.label) || ranking[0] };
+            }
+            const rate = incomeRate();
+            const prompt = [
+                'You run the building and purchasing of a player in the browser game Meldkamerspel (Dutch emergency-dispatch game; missions earn credits).',
+                'Pick exactly one of the options below for this step, or decide to save credits for a better option. Goal: highest long-term income.',
+                'Facts: the game creates at most 180 missions per hour, so income grows mainly through better-paying missions and fixing shortages that block missions.',
+                'Missions that spawn from fire stations average 3,639 credits, police HQs 5,513, police stations 1,220, ambulance posts 241 (mostly unpaid transports).',
+                'Trainings wait for free classrooms; extensions and new buildings take time to build. Each option was worked out by the script and can be carried out as is.',
+                `Player wishes: ${String(ctx.cfg.aiNotes || '').slice(0, 600)}`,
+                `Credits now: ${data.credits}; spendable above the buffer: ${Math.max(0, spendable)}; income: ${rate && rate.perHour ? Math.round(rate.perHour) : 'unknown'} per hour.`,
+                `Options (JSON): ${JSON.stringify(options)}`,
+                'Answer with JSON only: {"choice": <option i, or -1 to save>, "reason": "<one short sentence in Dutch>"}.',
+            ].join('\n');
+            try {
+                const key = String(ctx.cfg.aiKey).trim();
+                let res;
+                try {
+                    res = await aiRequest(await aiModelName(key), key, prompt);
+                } catch (e) {
+                    // The model is gone or unknown (404): pick the newest one this key may use, once.
+                    if (e.status !== 404) throw e;
+                    res = await aiRequest(await aiModelName(key, true), key, prompt);
+                }
+                const c = Number(res && res.choice);
+                const reason = String((res && res.reason) || '').slice(0, 200);
+                const wait = c === -1;
+                const option = !wait && Number.isInteger(c) && c >= 0 && c < options.length ? ranking[c] : null;
+                if (!wait && !option) throw new Error(`Gemini: onbekende keuze ${JSON.stringify(res).slice(0, 80)}`);
+                const changed = !aiLast || aiLast.wait !== wait || aiLast.label !== (option && option.label);
+                aiLast = { sig, at: Date.now(), wait, label: option ? option.label : null, reason };
+                if (changed) addLog(wait ? `AI: sparen — ${reason}` : `AI koos: ${option.label} — ${reason}`, 'idle');
+                return wait ? { wait: true } : { option };
+            } catch (e) {
+                aiFailedAt = Date.now();
+                addLog(`AI werkte niet, het script kiest zelf: ${e.message}`, 'warn');
+                return null;
+            }
+        }
+
         async function round() {
             if (busy || stopped) return;
             const other = lockHolder();
@@ -14903,7 +15036,7 @@ MKS.module({
                     let viable = 0;
                     for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
-                        if (viable >= ctx.cfg.planDepth) break;
+                        if (viable >= (ctx.cfg.aiOn && ctx.cfg.aiKey ? Math.max(ctx.cfg.planDepth, 12) : ctx.cfg.planDepth)) break;
                         const plan = c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
@@ -14916,6 +15049,10 @@ MKS.module({
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
+                    if (ctx.cfg.aiOn && String(ctx.cfg.aiKey || '').trim() && ranking.length) {
+                        const pick = await aiDecide(ranking, data, spendable);
+                        if (pick) next = pick.wait ? null : pick.option;
+                    }
                 }
                 // Saved, so Log naar GitHub uploads them from any tab.
                 state.lastRound = { at: Date.now(), credits: data.credits, spendable, skipped,
@@ -14923,6 +15060,11 @@ MKS.module({
                     ranking: ranking.map(({ need, label, cost, value, ratio, eta }) => ({ need, label, cost, value: Math.round(value || 0), ratio: Math.round((ratio || 0) * 1000) / 1000, eta: etaText(eta) })),
                     income: incomeRate(), classBlocked: state.classBlocked };
                 if (!next) {
+                    if (ctx.cfg.aiOn && aiLast && aiLast.wait && Date.now() - aiFailedAt > 15 * 60000) {
+                        state.lastRound.result = `AI: sparen (${aiLast.reason})`;
+                        ctx.status(`AI wacht: ${aiLast.reason}`, { tone: 'idle' });
+                        return;
+                    }
                     ctx.status(skipped.length ? 'Niets te kopen nu (zie "Overgeslagen").' : 'Geen tekorten om op te lossen.', { tone: 'idle' });
                     return;
                 }
@@ -14995,7 +15137,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015104336' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015180702' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15137,7 +15279,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261015104336',
+                version: '1.7.0.20261015180702',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
