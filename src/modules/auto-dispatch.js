@@ -256,7 +256,10 @@ MKS.module({
         }
 
         // Vehicle types chosen for team missions (panel menu); null = the default.
-        const loadTeamTypes = () => { try { const v = JSON.parse(GM_getValue('mks.autoDispatch.teamTypes', '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
+        // Separate lists for team missions and team events (planned team missions count as events).
+        // ['none'] = do not join that kind at all.
+        const TYPES_KEY = { team: 'mks.autoDispatch.teamTypes', event: 'mks.autoDispatch.eventTypes' };
+        const loadTeamTypes = (kind = 'team') => { try { const v = JSON.parse(GM_getValue(TYPES_KEY[kind], '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
 
         // Lower case, no " - ", and the long words the game abbreviates in type names.
         // "DB-BO, TS-BO or BOH-DC": the game sometimes writes "or" for "of".
@@ -2013,8 +2016,10 @@ MKS.module({
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
+                    const kindTypes = loadTeamTypes(isEvent(entry) ? 'event' : 'team');
+                    if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: loadTeamTypes() });
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
@@ -2299,28 +2304,38 @@ MKS.module({
                 } catch (e) { ctx.warn('team types', e); }
                 if (teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
             }
+            let typesTab = 'team';
             function drawTeamTypes(box) {
                 teamBox = box;
                 if ((!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
-                const chosen = new Set(loadTeamTypes() || []);
+                const kind = typesTab;
+                const key = TYPES_KEY[kind];
+                const list = loadTeamTypes(kind) || [];
+                const off = list.includes('none');
+                const chosen = new Set(list.filter((x) => x !== 'none'));
                 const rows = ownedTypes ? Object.entries(ownedTypes)
                     .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
                     .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
-                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid${off ? ';opacity:.4' : ''}"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''} ${off ? 'disabled' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
                     : '<p class="mks-note">Voertuigen laden…</p>';
-                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement van anderen gaat precies één voertuig: het dichtstbijzijnde vrije
-                        van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen. Loopt naast je eigen inzetten in een eigen
-                        onzichtbaar venster, ook als de teaminzetten verborgen zijn (Teamfilter, missiefilters).</p>
-                    <p class="mks-note"><b>Voertuigtypes</b> (${chosen.size ? `${chosen.size} gekozen` : 'niets gekozen: standaard, één noodhulp; bij een evenement een noodhulp of ambulance'})
-                        ${chosen.size ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                const tab = (k, label) => `<a class="mks-btn ${k === kind ? 'primary' : ''}" data-types-tab="${k}" style="cursor:pointer">${label}</a>`;
+                const deflt = kind === 'event' ? 'één noodhulp of ambulance' : 'één noodhulp';
+                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement (ook geplande teaminzetten) van anderen gaat precies één voertuig:
+                        het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen.</p>
+                    <div style="display:flex;gap:6px;margin:6px 0 10px">${tab('team', 'Teaminzetten')}${tab('event', 'Teamevenementen')}</div>
+                    <label style="display:block;margin:0 0 8px"><input type="checkbox" data-types-off ${off ? 'checked' : ''}> <b>Niet meedoen</b> aan ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'}</label>
+                    <p class="mks-note"><b>Voertuigtypes</b> (${off ? 'uit' : chosen.size ? `${chosen.size} gekozen` : `niets gekozen: standaard, ${deflt}`})
+                        ${chosen.size && !off ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
                     <div style="columns:2;column-gap:16px">${rows}</div>`;
+                const write = (arr) => { GM_setValue(key, JSON.stringify(arr)); drawTeamTypes(box); };
+                box.querySelectorAll('[data-types-tab]').forEach((a) => a.addEventListener('click', () => { typesTab = a.dataset.typesTab; drawTeamTypes(box); }));
+                box.querySelector('[data-types-off]').addEventListener('change', (ev) => write(ev.target.checked ? ['none', ...chosen] : [...chosen]));
                 box.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
-                    const set = new Set(loadTeamTypes() || []);
+                    const set = new Set(chosen);
                     if (cb.checked) set.add(cb.dataset.teamVt); else set.delete(cb.dataset.teamVt);
-                    GM_setValue(TEAM_TYPES_KEY, JSON.stringify([...set]));
-                    drawTeamTypes(box);
+                    write([...set]);
                 }));
-                box.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); drawTeamTypes(box); });
+                box.querySelector('[data-team-reset]')?.addEventListener('click', () => write([]));
             }
             ctx.settingExtra('teamMissions', drawTeamTypes);
 

@@ -4,7 +4,7 @@ MKS.module({
     icon: '🚦',
     category: 'tools',
     description: 'Een balk onder de kaart met hoeveel voertuigen er per status zijn: beschikbaar, aanrijdend, ter plaatse, '
-        + 'spraakaanvraag, transport en buiten dienst. Plus hoeveel procent van je inzetbare voertuigen bezig is. Werkt live mee.',
+        + 'spraakaanvraag, transport en buiten dienst. Plus hoeveel procent van je inzetbare voertuigen bezig is, ook per soort (brandweer, ambulance, politie, overig). Werkt live mee.',
     at: 'ready',
     frames: 'top',
     pages: /^\/$/,
@@ -16,6 +16,8 @@ MKS.module({
         { key: 'busy', label: 'Percentage bezig tonen', type: 'bool', default: true,
             help: 'Aanrijdend, ter plaatse, spraakaanvraag en transport, gedeeld door alles behalve buiten dienst.' },
         { key: 'hideZero', label: 'Statussen met 0 verbergen', type: 'bool', default: false },
+        { key: 'perKind', label: 'Bezig per soort tonen', type: 'bool', default: true,
+            help: 'Brandweer, ambulance, politie en overig apart, naar het gebouw waar het voertuig staat.' },
     ],
 
     run(ctx) {
@@ -37,6 +39,15 @@ MKS.module({
         const RESYNC_MS = 5 * 60 * 1000;
 
         const state = new Map(); // vehicleId -> fms
+        const kindOf = new Map(); // vehicleId -> 'F' | 'A' | 'P' | 'O' (by its home building)
+        // Building types: fire (incl. small), ambulance post / VWS-post / MMT / hospital, police (post, HQ, small, heli).
+        const KIND_BT = { 0: 'F', 17: 'F', 3: 'A', 13: 'A', 6: 'A', 2: 'A', 5: 'P', 11: 'P', 18: 'P', 9: 'P' };
+        const KINDS = [
+            { k: 'F', label: '🚒', title: 'Brandweer' },
+            { k: 'A', label: '🚑', title: 'Ambulance (ook MMT en VWS-post)' },
+            { k: 'P', label: '🚓', title: 'Politie (ook hoofdbureau en heli)' },
+            { k: 'O', label: '⚙️', title: 'Overig (berger, defensie, water, RWS, …)' },
+        ];
         let stopped = false;
 
         const bar = document.createElement('div');
@@ -54,6 +65,8 @@ MKS.module({
             .mks-vsb-meter { display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: rgba(128,128,128,.35);
                 vertical-align: middle; margin-left: 4px; overflow: hidden; }
             .mks-vsb-meter > span { display: block; height: 100%; }
+            .mks-vsb-kind { white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
+            .mks-vsb-kind .mks-vsb-meter { width: 36px; }
         `;
         document.head.appendChild(style);
 
@@ -86,7 +99,22 @@ MKS.module({
             const usable = total - (count[6] || 0);
             const busy = BUSY.reduce((sum, f) => sum + (count[f] || 0), 0);
             const pct = usable ? Math.round((busy / usable) * 100) : 0;
-            const meterColor = pct >= 75 ? '#c0392b' : pct >= 40 ? '#e08a00' : '#2e8b57';
+            const colorOf = (p) => (p >= 75 ? '#c0392b' : p >= 40 ? '#e08a00' : '#2e8b57');
+            const meterColor = colorOf(pct);
+            // Per kind: busy / usable (out of service left out), like the total.
+            const per = {};
+            for (const [id, f] of state) {
+                const k = kindOf.get(id) || 'O';
+                const x = (per[k] = per[k] || { busy: 0, usable: 0 });
+                if (f !== 6) x.usable++;
+                if (BUSY.includes(f)) x.busy++;
+            }
+            const kinds = ctx.cfg.perKind ? KINDS.filter((x) => per[x.k] && per[x.k].usable).map((x) => {
+                const q = per[x.k];
+                const p = Math.round((q.busy / q.usable) * 100);
+                return `<span class="mks-vsb-kind" title="${x.title}: ${q.busy} van ${q.usable} bezig, ${q.usable - q.busy} vrij">${x.label} ${p}%`
+                    + `<span class="mks-vsb-meter"><span style="width:${p}%;background:${colorOf(p)}"></span></span></span>`;
+            }).join('') : '';
 
             bar.innerHTML = rows
                 .filter((r) => !ctx.cfg.hideZero || r.n)
@@ -95,7 +123,8 @@ MKS.module({
                 + (ctx.cfg.busy
                     ? `<span class="mks-vsb-busy" title="${busy} van ${usable} inzetbare voertuigen bezig (${total} totaal)">`
                         + `Bezig ${pct}%<span class="mks-vsb-meter"><span style="width:${pct}%;background:${meterColor}"></span></span></span>`
-                    : '');
+                    : '')
+                + kinds;
             ctx.status(`${busy}/${usable} bezig (${pct}%)`, { tone: 'ok' });
         }
 
@@ -108,10 +137,18 @@ MKS.module({
 
         async function load() {
             try {
-                const list = await fetch('/api/vehicles', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null));
+                const [list, blds] = await Promise.all([
+                    fetch('/api/vehicles', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null)),
+                    fetch('/api/buildings', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+                ]);
                 if (stopped || !Array.isArray(list)) return;
+                const btOf = new Map((Array.isArray(blds) ? blds : []).map((b) => [Number(b.id), Number(b.building_type)]));
                 state.clear();
-                for (const v of list) state.set(Number(v.id), Number(v.fms_real));
+                kindOf.clear();
+                for (const v of list) {
+                    state.set(Number(v.id), Number(v.fms_real));
+                    kindOf.set(Number(v.id), KIND_BT[btOf.get(Number(v.building_id))] || 'O');
+                }
                 render();
             } catch (e) { ctx.warn('could not load vehicles', e); }
         }
