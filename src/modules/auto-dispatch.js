@@ -1980,6 +1980,9 @@ MKS.module({
 
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
             let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
+            // Nothing of the chosen types free for team missions or for events: that kind waits
+            // 5 minutes (459 window loads in one evening said "geen gekozen voertuigtype vrij").
+            const noCarUntil = { team: 0, event: 0 };
             async function teamCycle() {
                 if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
@@ -2017,7 +2020,9 @@ MKS.module({
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
-                    const kindTypes = loadTeamTypes(isEvent(entry) ? 'event' : 'team');
+                    const kind = isEvent(entry) ? 'event' : 'team';
+                    if (noCarUntil[kind] > Date.now()) continue;
+                    const kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
                     const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
@@ -2047,8 +2052,9 @@ MKS.module({
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
                         teamErrors = 0;
-                        teamNote('geen noodhulp vrij, de teaminzetten volgen later');
-                        return;
+                        noCarUntil[kind] = Date.now() + 5 * 60000;
+                        teamNote(`${res.reason}: ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'} wachten 5 minuten`);
+                        continue;
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');

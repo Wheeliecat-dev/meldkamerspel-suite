@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261016183859 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261016203828 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261016183859';
+    const VERSION = '1.7.0.20261016203828';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -8752,6 +8752,10 @@ MKS.module({
                 const C = W.L.Control.extend({ onAdd: () => bar });
                 control = new C({ position: 'bottomleft' }).addTo(W.map);
                 W.L.DomEvent.disableClickPropagation(bar);
+                // Lowest in the corner (below the scale) and flush with the map's bottom edge.
+                if (bar.parentElement) bar.parentElement.appendChild(bar);
+                bar.style.marginBottom = '0';
+                bar.style.marginLeft = '0';
                 return;
             }
             // #map_outer wraps the map (and its resize handle) on the main page.
@@ -12240,6 +12244,7 @@ MKS.module({
             }
 
             // /einsaetze.json is ~2.7 MB: keep only the requirements, once a day.
+            let dataRefreshedAt = 0;
             async function loadMissions() {
                 if (missions) return missions;
                 try {
@@ -12868,6 +12873,9 @@ MKS.module({
 
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
             let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
+            // Nothing of the chosen types free for team missions or for events: that kind waits
+            // 5 minutes (459 window loads in one evening said "geen gekozen voertuigtype vrij").
+            const noCarUntil = { team: 0, event: 0 };
             async function teamCycle() {
                 if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
@@ -12905,7 +12913,9 @@ MKS.module({
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
-                    const kindTypes = loadTeamTypes(isEvent(entry) ? 'event' : 'team');
+                    const kind = isEvent(entry) ? 'event' : 'team';
+                    if (noCarUntil[kind] > Date.now()) continue;
+                    const kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
                     const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
@@ -12935,8 +12945,9 @@ MKS.module({
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
                         teamErrors = 0;
-                        teamNote('geen noodhulp vrij, de teaminzetten volgen later');
-                        return;
+                        noCarUntil[kind] = Date.now() + 5 * 60000;
+                        teamNote(`${res.reason}: ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'} wachten 5 minuten`);
+                        continue;
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
@@ -12963,7 +12974,7 @@ MKS.module({
                 try {
                     await transports();
                     await sendBackDone();
-                    const req = await loadMissions();
+                    let req = await loadMissions();
                     const list = candidates();
                     const cellRuns = new Map();
                     for (const entry of list) {
@@ -12984,7 +12995,16 @@ MKS.module({
                         tried.set(id, Date.now());
                         const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
                         const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
-                        const r = req[keyOf(entry)];
+                        let r = req[keyOf(entry)];
+                        // A mission type the cached data does not know yet (new in the game): fetch
+                        // the mission data again, at most every 15 minutes.
+                        if (!r && Date.now() - dataRefreshedAt > 15 * 60000) {
+                            dataRefreshedAt = Date.now();
+                            missions = null;
+                            try { GM_setValue(DATA_KEY, 'null'); } catch (e) { /* ignore */ }
+                            try { req = await loadMissions(); r = req[keyOf(entry)]; } catch (e) { ctx.warn('mission data refresh', e); }
+                            if (r) addLog(name, 'nieuw inzettype: inzetgegevens vernieuwd', 'idle');
+                        }
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         // Care mission: one DB-VZ with the first wave, so the Verzorgers do not
                         // wait until the others have arrived and the red box asks for them.
@@ -15120,7 +15140,7 @@ MKS.module({
             if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
             if (aiAutoModel && !refresh) return aiAutoModel;
             const prov = aiProvider(key);
-            let usable = await aiModels(key);
+            let usable = (await aiModels(key)).filter((n) => !(state.aiBadModels || []).includes(n));
             let rank;
             if (prov === 'openrouter') {
                 // Free text models; well-known families first (they follow JSON instructions well).
@@ -15204,13 +15224,25 @@ MKS.module({
                     if (e.status === 404) {
                         model = await aiModelName(key, true);
                         res = await aiRequest(model, key, prompt);
-                    } else if ([429, 500, 502, 503, 504].includes(e.status)) {
+                    } else if ([403, 429, 500, 502, 503, 504].includes(e.status)) {
+                        // 403: this model is not open to this key or this kind of use ("only on
+                        // agentic harnesses"): never pick it again.
+                        if (e.status === 403) { state.aiBadModels = [...new Set([...(state.aiBadModels || []), model])].slice(-30); aiAutoModel = null; aiAlternatives = aiAlternatives.filter((m) => m !== model); }
                         // Busy at Google: once more after a short wait, then the next-best models.
-                        await sleep(8000);
-                        const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
+                        if (e.status !== 403) await sleep(8000);
+                        const tries = e.status === 403 ? aiAlternatives.filter((m) => m !== model) : [model, ...aiAlternatives.filter((m) => m !== model)];
+                        if (!tries.length) {
+                            // No alternatives known yet: ask the service for its models again.
+                            const fresh = await aiModelName(key, true);
+                            if (fresh && fresh !== model) tries.push(fresh);
+                        }
                         let last = e;
                         for (const m of tries) {
-                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![429, 500, 502, 503, 504].includes(e2.status)) break; }
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) {
+                                last = e2;
+                                if (e2.status === 403) state.aiBadModels = [...new Set([...(state.aiBadModels || []), m])].slice(-30);
+                                if (![403, 429, 500, 502, 503, 504].includes(e2.status)) break;
+                            }
                         }
                         if (last) throw last;
                     } else throw e;
@@ -15407,7 +15439,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261016183859' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261016203828' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15597,7 +15629,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261016183859',
+                version: '1.7.0.20261016203828',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

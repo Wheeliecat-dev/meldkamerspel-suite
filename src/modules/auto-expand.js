@@ -1815,7 +1815,7 @@ MKS.module({
             if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
             if (aiAutoModel && !refresh) return aiAutoModel;
             const prov = aiProvider(key);
-            let usable = await aiModels(key);
+            let usable = (await aiModels(key)).filter((n) => !(state.aiBadModels || []).includes(n));
             let rank;
             if (prov === 'openrouter') {
                 // Free text models; well-known families first (they follow JSON instructions well).
@@ -1899,13 +1899,25 @@ MKS.module({
                     if (e.status === 404) {
                         model = await aiModelName(key, true);
                         res = await aiRequest(model, key, prompt);
-                    } else if ([429, 500, 502, 503, 504].includes(e.status)) {
+                    } else if ([403, 429, 500, 502, 503, 504].includes(e.status)) {
+                        // 403: this model is not open to this key or this kind of use ("only on
+                        // agentic harnesses"): never pick it again.
+                        if (e.status === 403) { state.aiBadModels = [...new Set([...(state.aiBadModels || []), model])].slice(-30); aiAutoModel = null; aiAlternatives = aiAlternatives.filter((m) => m !== model); }
                         // Busy at Google: once more after a short wait, then the next-best models.
-                        await sleep(8000);
-                        const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
+                        if (e.status !== 403) await sleep(8000);
+                        const tries = e.status === 403 ? aiAlternatives.filter((m) => m !== model) : [model, ...aiAlternatives.filter((m) => m !== model)];
+                        if (!tries.length) {
+                            // No alternatives known yet: ask the service for its models again.
+                            const fresh = await aiModelName(key, true);
+                            if (fresh && fresh !== model) tries.push(fresh);
+                        }
                         let last = e;
                         for (const m of tries) {
-                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![429, 500, 502, 503, 504].includes(e2.status)) break; }
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) {
+                                last = e2;
+                                if (e2.status === 403) state.aiBadModels = [...new Set([...(state.aiBadModels || []), m])].slice(-30);
+                                if (![403, 429, 500, 502, 503, 504].includes(e2.status)) break;
+                            }
                         }
                         if (last) throw last;
                     } else throw e;
