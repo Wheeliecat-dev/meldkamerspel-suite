@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261015230838 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261016184326 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261015230838';
+    const VERSION = '1.7.0.20261016184326';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -8676,7 +8676,7 @@ MKS.module({
     icon: '🚦',
     category: 'tools',
     description: 'Een balk onder de kaart met hoeveel voertuigen er per status zijn: beschikbaar, aanrijdend, ter plaatse, '
-        + 'spraakaanvraag, transport en buiten dienst. Plus hoeveel procent van je inzetbare voertuigen bezig is. Werkt live mee.',
+        + 'spraakaanvraag, transport en buiten dienst. Plus hoeveel procent van je inzetbare voertuigen bezig is, ook per soort (brandweer, ambulance, politie, overig). Werkt live mee.',
     at: 'ready',
     frames: 'top',
     pages: /^\/$/,
@@ -8688,6 +8688,8 @@ MKS.module({
         { key: 'busy', label: 'Percentage bezig tonen', type: 'bool', default: true,
             help: 'Aanrijdend, ter plaatse, spraakaanvraag en transport, gedeeld door alles behalve buiten dienst.' },
         { key: 'hideZero', label: 'Statussen met 0 verbergen', type: 'bool', default: false },
+        { key: 'perKind', label: 'Bezig per soort tonen', type: 'bool', default: true,
+            help: 'Brandweer, ambulance, politie en overig apart, naar het gebouw waar het voertuig staat.' },
     ],
 
     run(ctx) {
@@ -8709,6 +8711,15 @@ MKS.module({
         const RESYNC_MS = 5 * 60 * 1000;
 
         const state = new Map(); // vehicleId -> fms
+        const kindOf = new Map(); // vehicleId -> 'F' | 'A' | 'P' | 'O' (by its home building)
+        // Building types: fire (incl. small), ambulance post / VWS-post / MMT / hospital, police (post, HQ, small, heli).
+        const KIND_BT = { 0: 'F', 17: 'F', 3: 'A', 13: 'A', 6: 'A', 2: 'A', 5: 'P', 11: 'P', 18: 'P', 9: 'P' };
+        const KINDS = [
+            { k: 'F', label: '🚒', title: 'Brandweer' },
+            { k: 'A', label: '🚑', title: 'Ambulance (ook MMT en VWS-post)' },
+            { k: 'P', label: '🚓', title: 'Politie (ook hoofdbureau en heli)' },
+            { k: 'O', label: '⚙️', title: 'Overig (berger, defensie, water, RWS, …)' },
+        ];
         let stopped = false;
 
         const bar = document.createElement('div');
@@ -8726,6 +8737,8 @@ MKS.module({
             .mks-vsb-meter { display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: rgba(128,128,128,.35);
                 vertical-align: middle; margin-left: 4px; overflow: hidden; }
             .mks-vsb-meter > span { display: block; height: 100%; }
+            .mks-vsb-kind { white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
+            .mks-vsb-kind .mks-vsb-meter { width: 36px; }
         `;
         document.head.appendChild(style);
 
@@ -8739,6 +8752,10 @@ MKS.module({
                 const C = W.L.Control.extend({ onAdd: () => bar });
                 control = new C({ position: 'bottomleft' }).addTo(W.map);
                 W.L.DomEvent.disableClickPropagation(bar);
+                // Lowest in the corner (below the scale) and flush with the map's bottom edge.
+                if (bar.parentElement) bar.parentElement.appendChild(bar);
+                bar.style.marginBottom = '0';
+                bar.style.marginLeft = '0';
                 return;
             }
             // #map_outer wraps the map (and its resize handle) on the main page.
@@ -8758,7 +8775,22 @@ MKS.module({
             const usable = total - (count[6] || 0);
             const busy = BUSY.reduce((sum, f) => sum + (count[f] || 0), 0);
             const pct = usable ? Math.round((busy / usable) * 100) : 0;
-            const meterColor = pct >= 75 ? '#c0392b' : pct >= 40 ? '#e08a00' : '#2e8b57';
+            const colorOf = (p) => (p >= 75 ? '#c0392b' : p >= 40 ? '#e08a00' : '#2e8b57');
+            const meterColor = colorOf(pct);
+            // Per kind: busy / usable (out of service left out), like the total.
+            const per = {};
+            for (const [id, f] of state) {
+                const k = kindOf.get(id) || 'O';
+                const x = (per[k] = per[k] || { busy: 0, usable: 0 });
+                if (f !== 6) x.usable++;
+                if (BUSY.includes(f)) x.busy++;
+            }
+            const kinds = ctx.cfg.perKind ? KINDS.filter((x) => per[x.k] && per[x.k].usable).map((x) => {
+                const q = per[x.k];
+                const p = Math.round((q.busy / q.usable) * 100);
+                return `<span class="mks-vsb-kind" title="${x.title}: ${q.busy} van ${q.usable} bezig, ${q.usable - q.busy} vrij">${x.label} ${p}%`
+                    + `<span class="mks-vsb-meter"><span style="width:${p}%;background:${colorOf(p)}"></span></span></span>`;
+            }).join('') : '';
 
             bar.innerHTML = rows
                 .filter((r) => !ctx.cfg.hideZero || r.n)
@@ -8767,7 +8799,8 @@ MKS.module({
                 + (ctx.cfg.busy
                     ? `<span class="mks-vsb-busy" title="${busy} van ${usable} inzetbare voertuigen bezig (${total} totaal)">`
                         + `Bezig ${pct}%<span class="mks-vsb-meter"><span style="width:${pct}%;background:${meterColor}"></span></span></span>`
-                    : '');
+                    : '')
+                + kinds;
             ctx.status(`${busy}/${usable} bezig (${pct}%)`, { tone: 'ok' });
         }
 
@@ -8780,10 +8813,18 @@ MKS.module({
 
         async function load() {
             try {
-                const list = await fetch('/api/vehicles', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null));
+                const [list, blds] = await Promise.all([
+                    fetch('/api/vehicles', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null)),
+                    fetch('/api/buildings', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+                ]);
                 if (stopped || !Array.isArray(list)) return;
+                const btOf = new Map((Array.isArray(blds) ? blds : []).map((b) => [Number(b.id), Number(b.building_type)]));
                 state.clear();
-                for (const v of list) state.set(Number(v.id), Number(v.fms_real));
+                kindOf.clear();
+                for (const v of list) {
+                    state.set(Number(v.id), Number(v.fms_real));
+                    kindOf.set(Number(v.id), KIND_BT[btOf.get(Number(v.building_id))] || 'O');
+                }
                 render();
             } catch (e) { ctx.warn('could not load vehicles', e); }
         }
@@ -11108,7 +11149,10 @@ MKS.module({
         }
 
         // Vehicle types chosen for team missions (panel menu); null = the default.
-        const loadTeamTypes = () => { try { const v = JSON.parse(GM_getValue('mks.autoDispatch.teamTypes', '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
+        // Separate lists for team missions and team events (planned team missions count as events).
+        // ['none'] = do not join that kind at all.
+        const TYPES_KEY = { team: 'mks.autoDispatch.teamTypes', event: 'mks.autoDispatch.eventTypes' };
+        const loadTeamTypes = (kind = 'team') => { try { const v = JSON.parse(GM_getValue(TYPES_KEY[kind], '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
 
         // Lower case, no " - ", and the long words the game abbreviates in type names.
         // "DB-BO, TS-BO or BOH-DC": the game sometimes writes "or" for "of".
@@ -12200,6 +12244,7 @@ MKS.module({
             }
 
             // /einsaetze.json is ~2.7 MB: keep only the requirements, once a day.
+            let dataRefreshedAt = 0;
             async function loadMissions() {
                 if (missions) return missions;
                 try {
@@ -12865,8 +12910,10 @@ MKS.module({
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
+                    const kindTypes = loadTeamTypes(isEvent(entry) ? 'event' : 'team');
+                    if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: loadTeamTypes() });
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined });
                     if (res.result === 'sent') {
@@ -12921,7 +12968,7 @@ MKS.module({
                 try {
                     await transports();
                     await sendBackDone();
-                    const req = await loadMissions();
+                    let req = await loadMissions();
                     const list = candidates();
                     const cellRuns = new Map();
                     for (const entry of list) {
@@ -12942,7 +12989,16 @@ MKS.module({
                         tried.set(id, Date.now());
                         const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
                         const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
-                        const r = req[keyOf(entry)];
+                        let r = req[keyOf(entry)];
+                        // A mission type the cached data does not know yet (new in the game): fetch
+                        // the mission data again, at most every 15 minutes.
+                        if (!r && Date.now() - dataRefreshedAt > 15 * 60000) {
+                            dataRefreshedAt = Date.now();
+                            missions = null;
+                            try { GM_setValue(DATA_KEY, 'null'); } catch (e) { /* ignore */ }
+                            try { req = await loadMissions(); r = req[keyOf(entry)]; } catch (e) { ctx.warn('mission data refresh', e); }
+                            if (r) addLog(name, 'nieuw inzettype: inzetgegevens vernieuwd', 'idle');
+                        }
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         // Care mission: one DB-VZ with the first wave, so the Verzorgers do not
                         // wait until the others have arrived and the red box asks for them.
@@ -13151,28 +13207,38 @@ MKS.module({
                 } catch (e) { ctx.warn('team types', e); }
                 if (teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
             }
+            let typesTab = 'team';
             function drawTeamTypes(box) {
                 teamBox = box;
                 if ((!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
-                const chosen = new Set(loadTeamTypes() || []);
+                const kind = typesTab;
+                const key = TYPES_KEY[kind];
+                const list = loadTeamTypes(kind) || [];
+                const off = list.includes('none');
+                const chosen = new Set(list.filter((x) => x !== 'none'));
                 const rows = ownedTypes ? Object.entries(ownedTypes)
                     .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
                     .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
-                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid${off ? ';opacity:.4' : ''}"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''} ${off ? 'disabled' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
                     : '<p class="mks-note">Voertuigen laden…</p>';
-                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement van anderen gaat precies één voertuig: het dichtstbijzijnde vrije
-                        van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen. Loopt naast je eigen inzetten in een eigen
-                        onzichtbaar venster, ook als de teaminzetten verborgen zijn (Teamfilter, missiefilters).</p>
-                    <p class="mks-note"><b>Voertuigtypes</b> (${chosen.size ? `${chosen.size} gekozen` : 'niets gekozen: standaard, één noodhulp; bij een evenement een noodhulp of ambulance'})
-                        ${chosen.size ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                const tab = (k, label) => `<a class="mks-btn ${k === kind ? 'primary' : ''}" data-types-tab="${k}" style="cursor:pointer">${label}</a>`;
+                const deflt = kind === 'event' ? 'één noodhulp of ambulance' : 'één noodhulp';
+                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement (ook geplande teaminzetten) van anderen gaat precies één voertuig:
+                        het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen.</p>
+                    <div style="display:flex;gap:6px;margin:6px 0 10px">${tab('team', 'Teaminzetten')}${tab('event', 'Teamevenementen')}</div>
+                    <label style="display:block;margin:0 0 8px"><input type="checkbox" data-types-off ${off ? 'checked' : ''}> <b>Niet meedoen</b> aan ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'}</label>
+                    <p class="mks-note"><b>Voertuigtypes</b> (${off ? 'uit' : chosen.size ? `${chosen.size} gekozen` : `niets gekozen: standaard, ${deflt}`})
+                        ${chosen.size && !off ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
                     <div style="columns:2;column-gap:16px">${rows}</div>`;
+                const write = (arr) => { GM_setValue(key, JSON.stringify(arr)); drawTeamTypes(box); };
+                box.querySelectorAll('[data-types-tab]').forEach((a) => a.addEventListener('click', () => { typesTab = a.dataset.typesTab; drawTeamTypes(box); }));
+                box.querySelector('[data-types-off]').addEventListener('change', (ev) => write(ev.target.checked ? ['none', ...chosen] : [...chosen]));
                 box.querySelectorAll('[data-team-vt]').forEach((cb) => cb.addEventListener('change', () => {
-                    const set = new Set(loadTeamTypes() || []);
+                    const set = new Set(chosen);
                     if (cb.checked) set.add(cb.dataset.teamVt); else set.delete(cb.dataset.teamVt);
-                    GM_setValue(TEAM_TYPES_KEY, JSON.stringify([...set]));
-                    drawTeamTypes(box);
+                    write([...set]);
                 }));
-                box.querySelector('[data-team-reset]')?.addEventListener('click', () => { GM_setValue(TEAM_TYPES_KEY, '[]'); drawTeamTypes(box); });
+                box.querySelector('[data-team-reset]')?.addEventListener('click', () => write([]));
             }
             ctx.settingExtra('teamMissions', drawTeamTypes);
 
@@ -15355,7 +15421,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261015230838' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261016184326' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15545,7 +15611,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261015230838',
+                version: '1.7.0.20261016184326',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

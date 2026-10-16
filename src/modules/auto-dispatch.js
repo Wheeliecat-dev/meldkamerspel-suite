@@ -1351,6 +1351,7 @@ MKS.module({
             }
 
             // /einsaetze.json is ~2.7 MB: keep only the requirements, once a day.
+            let dataRefreshedAt = 0;
             async function loadMissions() {
                 if (missions) return missions;
                 try {
@@ -2074,7 +2075,7 @@ MKS.module({
                 try {
                     await transports();
                     await sendBackDone();
-                    const req = await loadMissions();
+                    let req = await loadMissions();
                     const list = candidates();
                     const cellRuns = new Map();
                     for (const entry of list) {
@@ -2095,7 +2096,16 @@ MKS.module({
                         tried.set(id, Date.now());
                         const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
                         const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
-                        const r = req[keyOf(entry)];
+                        let r = req[keyOf(entry)];
+                        // A mission type the cached data does not know yet (new in the game): fetch
+                        // the mission data again, at most every 15 minutes.
+                        if (!r && Date.now() - dataRefreshedAt > 15 * 60000) {
+                            dataRefreshedAt = Date.now();
+                            missions = null;
+                            try { GM_setValue(DATA_KEY, 'null'); } catch (e) { /* ignore */ }
+                            try { req = await loadMissions(); r = req[keyOf(entry)]; } catch (e) { ctx.warn('mission data refresh', e); }
+                            if (r) addLog(name, 'nieuw inzettype: inzetgegevens vernieuwd', 'idle');
+                        }
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         // Care mission: one DB-VZ with the first wave, so the Verzorgers do not
                         // wait until the others have arrived and the red box asks for them.
