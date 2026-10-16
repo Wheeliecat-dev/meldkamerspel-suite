@@ -80,6 +80,10 @@ MKS.module({
                 const C = W.L.Control.extend({ onAdd: () => bar });
                 control = new C({ position: 'bottomleft' }).addTo(W.map);
                 W.L.DomEvent.disableClickPropagation(bar);
+                // Lowest in the corner (below the scale) and flush with the map's bottom edge.
+                if (bar.parentElement) bar.parentElement.appendChild(bar);
+                bar.style.marginBottom = '0';
+                bar.style.marginLeft = '0';
                 return;
             }
             // #map_outer wraps the map (and its resize handle) on the main page.
