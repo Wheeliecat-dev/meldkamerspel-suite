@@ -52,12 +52,13 @@ const MODULES = [
     'vehicle-scrap',
     'personnel-assign',
     'auto-dispatch',
+    'mission-share',
     'auto-expand',
     'log-github',
 ];
 
 // Only in the beta build, still being tested. Stable leaves them out.
-const BETA_ONLY = ['auto-dispatch', 'vehicle-status-bar', 'building-price', 'building-share', 'vehicle-scrap', 'personnel-assign', 'auto-expand', 'log-github', 'hide-mission-markers', 'build-queue'];
+const BETA_ONLY = ['auto-dispatch', 'vehicle-status-bar', 'building-price', 'building-share', 'vehicle-scrap', 'personnel-assign', 'mission-share', 'auto-expand', 'log-github', 'hide-mission-markers', 'build-queue'];
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), 'utf8').replace(/\r\n/g, '\n').trimEnd();
 

@@ -68,6 +68,10 @@ MKS.module({
         { key: 'quickUnits', parent: 'quickLane', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
         { key: 'teamMissions', group: 'Extra rondes', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
             help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
+        { key: 'teamFull', parent: 'teamMissions', label: 'Teaminzetten: alles sturen wat nodig is', type: 'bool', default: false,
+            help: 'Niet één voertuig, maar alles wat de teaminzet nog mist, zoals bij je eigen inzetten: de rode melding "Missende voertuigen", '
+                + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
+                + '"Alleen als alles beschikbaar is" gelden ook hier. Teamevenementen krijgen nog steeds één voertuig.' },
         { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', parent: 'maxPerHour', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', parent: 'maxPerHour', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -558,7 +562,10 @@ MKS.module({
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
                 // A team mission first checks whether we are in already (nothing to load then).
-                if (job.team) { await teamWorker(job, report, doneKey); return; }
+                if (job.team && !job.full) { await teamWorker(job, report, doneKey); return; }
+                // Team mission, everything it needs ("Teaminzetten: alles sturen"): the same
+                // flow as our own missions below, once it can receive vehicles.
+                if (job.team && !document.getElementById('alert_btn')) { report('skip', { reason: 'kan (nog) geen voertuigen ontvangen', notYet: true }); return; }
                 // The quick lane first tries with the nearest vehicles the window lists: for one
                 // unit those are enough, and loading the full list costs seconds per mission.
                 if (!job.fast) await loadMissing(); // all vehicles, not only the nearest listed
@@ -603,7 +610,7 @@ MKS.module({
                     }
                 }
                 if (driving && !earlyCare) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
-                if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding' }); return; }
+                if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding', covered: true }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
                 if (pNeed.unknown.length) {
                     report('skip', { reason: `patiënten, kan niet sturen: ${pNeed.unknown.join(', ')}`, unknownNeeds: pNeed.unknown.map((u) => `Patiënt: ${u}`) });
@@ -1603,7 +1610,7 @@ MKS.module({
                         finish = setTimeout(() => cleanup({ ...result, result: 'unconfirmed' }), 20000);
                         poll = setInterval(() => {
                             if (transport) { if (!talk.has(String(job.id))) cleanup({ ...result, result: 'sent' }); return; }
-                            if (result.mode !== 'full') return;
+                            if (result.mode !== 'full' || job.team) return;
                             const entry = document.getElementById(`mission_${job.id}`);
                             if (!entry || entry.getAttribute('data-mission-state-filter') !== 'unattended') cleanup({ ...result, result: 'sent' });
                         }, 500);
@@ -1613,7 +1620,7 @@ MKS.module({
                                 // A team mission always has other players' rows: only our own counts.
                                 ok = result.mode === 'cell' || (transport
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
-                                    : result.mode === 'team' ? ownRowOn(frame.contentDocument, job.me)
+                                    : job.team ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
@@ -2025,10 +2032,37 @@ MKS.module({
                     const kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
+                    // "Alles sturen": team missions (not events) get what they need, like our own.
+                    const full = kind === 'team' && !!ctx.cfg.teamFull;
+                    let fullJob = {};
+                    if (full) {
+                        const r = (await loadMissions())[keyOf(entry)];
+                        const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
+                        fullJob = { full: true, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: true,
+                            ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, transport: false, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] };
+                    }
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes, ...fullJob });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined });
-                    if (res.result === 'sent') {
+                    if (full && (res.result === 'sent' || res.result === 'unconfirmed')) {
+                        // Not marked joined: after retryMin it is looked at again, and anything
+                        // still missing then (red box) goes too.
+                        stats.sent++;
+                        teamErrors = 0;
+                        sent.push(Date.now());
+                        addLog(name, `${res.mode === 'full' ? 'gealarmeerd' : 'bijgestuurd'}${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.short ? `, te weinig: ${res.short}` : ''}`, 'ok');
+                    } else if (full && res.result === 'wait') {
+                        // Vehicles still driving there: look again in a minute.
+                        tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                        continue;
+                    } else if (full && res.result === 'skip' && res.covered) {
+                        // Vehicles on scene, nothing missing: done for now.
+                        teamDone.set(id, Date.now());
+                        continue;
+                    } else if (res.result === 'sent') {
                         teamDone.set(id, Date.now());
                         stats.sent++;
                         teamErrors = 0;

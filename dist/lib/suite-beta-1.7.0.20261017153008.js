@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261017150218 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261017153008 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261017150218';
+    const VERSION = '1.7.0.20261017153008';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10972,6 +10972,10 @@ MKS.module({
         { key: 'quickUnits', parent: 'quickLane', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
         { key: 'teamMissions', group: 'Extra rondes', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
             help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
+        { key: 'teamFull', parent: 'teamMissions', label: 'Teaminzetten: alles sturen wat nodig is', type: 'bool', default: false,
+            help: 'Niet één voertuig, maar alles wat de teaminzet nog mist, zoals bij je eigen inzetten: de rode melding "Missende voertuigen", '
+                + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
+                + '"Alleen als alles beschikbaar is" gelden ook hier. Teamevenementen krijgen nog steeds één voertuig.' },
         { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', parent: 'maxPerHour', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', parent: 'maxPerHour', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -11462,7 +11466,10 @@ MKS.module({
                 if (document.readyState !== 'complete') await new Promise((r) => window.addEventListener('load', r, { once: true }));
                 await sleep(300);
                 // A team mission first checks whether we are in already (nothing to load then).
-                if (job.team) { await teamWorker(job, report, doneKey); return; }
+                if (job.team && !job.full) { await teamWorker(job, report, doneKey); return; }
+                // Team mission, everything it needs ("Teaminzetten: alles sturen"): the same
+                // flow as our own missions below, once it can receive vehicles.
+                if (job.team && !document.getElementById('alert_btn')) { report('skip', { reason: 'kan (nog) geen voertuigen ontvangen', notYet: true }); return; }
                 // The quick lane first tries with the nearest vehicles the window lists: for one
                 // unit those are enough, and loading the full list costs seconds per mission.
                 if (!job.fast) await loadMissing(); // all vehicles, not only the nearest listed
@@ -11507,7 +11514,7 @@ MKS.module({
                     }
                 }
                 if (driving && !earlyCare) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
-                if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding' }); return; }
+                if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding', covered: true }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
                 if (pNeed.unknown.length) {
                     report('skip', { reason: `patiënten, kan niet sturen: ${pNeed.unknown.join(', ')}`, unknownNeeds: pNeed.unknown.map((u) => `Patiënt: ${u}`) });
@@ -12507,7 +12514,7 @@ MKS.module({
                         finish = setTimeout(() => cleanup({ ...result, result: 'unconfirmed' }), 20000);
                         poll = setInterval(() => {
                             if (transport) { if (!talk.has(String(job.id))) cleanup({ ...result, result: 'sent' }); return; }
-                            if (result.mode !== 'full') return;
+                            if (result.mode !== 'full' || job.team) return;
                             const entry = document.getElementById(`mission_${job.id}`);
                             if (!entry || entry.getAttribute('data-mission-state-filter') !== 'unattended') cleanup({ ...result, result: 'sent' });
                         }, 500);
@@ -12517,7 +12524,7 @@ MKS.module({
                                 // A team mission always has other players' rows: only our own counts.
                                 ok = result.mode === 'cell' || (transport
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
-                                    : result.mode === 'team' ? ownRowOn(frame.contentDocument, job.me)
+                                    : job.team ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
@@ -12929,10 +12936,37 @@ MKS.module({
                     const kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
-                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
+                    // "Alles sturen": team missions (not events) get what they need, like our own.
+                    const full = kind === 'team' && !!ctx.cfg.teamFull;
+                    let fullJob = {};
+                    if (full) {
+                        const r = (await loadMissions())[keyOf(entry)];
+                        const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
+                        fullJob = { full: true, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: true,
+                            ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, transport: false, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] };
+                    }
+                    const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes, ...fullJob });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined });
-                    if (res.result === 'sent') {
+                    if (full && (res.result === 'sent' || res.result === 'unconfirmed')) {
+                        // Not marked joined: after retryMin it is looked at again, and anything
+                        // still missing then (red box) goes too.
+                        stats.sent++;
+                        teamErrors = 0;
+                        sent.push(Date.now());
+                        addLog(name, `${res.mode === 'full' ? 'gealarmeerd' : 'bijgestuurd'}${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.short ? `, te weinig: ${res.short}` : ''}`, 'ok');
+                    } else if (full && res.result === 'wait') {
+                        // Vehicles still driving there: look again in a minute.
+                        tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                        continue;
+                    } else if (full && res.result === 'skip' && res.covered) {
+                        // Vehicles on scene, nothing missing: done for now.
+                        teamDone.set(id, Date.now());
+                        continue;
+                    } else if (res.result === 'sent') {
                         teamDone.set(id, Date.now());
                         stats.sent++;
                         teamErrors = 0;
@@ -13333,6 +13367,147 @@ MKS.module({
     },
 });
 
+/* ==== module: mission-share =============================================== */
+MKS.module({
+    id: 'mission-share',
+    name: 'Grote inzetten delen met je team',
+    short: 'Inzetten delen',
+    icon: '📣',
+    category: 'auto',
+    description: 'Deelt je eigen inzetten die minstens zoveel credits opleveren (standaard 2.000) automatisch met je team, '
+        + 'zodat teamleden kunnen meehelpen. Elke inzet één keer.',
+    tagline: 'Automatisch',
+    warning: '<b>Dit verandert je inzetten in het spel.</b> Gedeelde inzetten zijn direct zichtbaar voor je hele team; '
+        + 'delen kan niet worden teruggedraaid.',
+    confirmOn: 'Let op: deze module deelt je inzetten vanaf de ingestelde credits automatisch met je team.\n\n'
+        + 'Delen kan niet ongedaan worden gemaakt.\n\nAanzetten?',
+    at: 'ready',
+    frames: 'top',
+    live: true,
+    settings: [
+        { key: 'minCredits', label: 'Delen vanaf', type: 'number', default: 2000, min: 0, max: 100000, step: 500, unit: 'credits',
+            help: 'Gemiddelde credits van de inzet, zoals het spel ze in de lijst toont.' },
+        { key: 'onlyVisible', label: 'Alleen zichtbare inzetten', type: 'bool', default: false,
+            help: 'Inzetten die je met de missiefilters verbergt, worden niet gedeeld.' },
+        { key: 'scanSec', label: 'Lijst opnieuw bekijken', type: 'number', default: 30, min: 10, max: 600, step: 10, unit: 'sec' },
+        { key: 'pauseSec', label: 'Pauze tussen inzetten', type: 'number', default: 2, min: 1, max: 30, step: 1, unit: 'sec' },
+    ],
+
+    run(ctx) {
+        const esc = ctx.esc;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        // Missions handled (shared by us, or found already shared): id -> when. Kept over
+        // reloads, so a mission is never looked at twice.
+        const DONE_KEY = 'mks.missionShare.done.v1';
+        let done;
+        try { done = new Map(JSON.parse(GM_getValue(DONE_KEY, '[]'))); } catch (e) { done = new Map(); }
+        const save = () => {
+            const cut = Date.now() - 48 * 3600000;
+            for (const [id, t] of done) if (t < cut) done.delete(id);
+            try { GM_setValue(DONE_KEY, JSON.stringify([...done])); } catch (e) { /* ignore */ }
+        };
+        const log = [];
+        const stats = { shared: 0, already: 0, failed: 0 };
+        let busy = false, stopped = false, noButton = 0;
+
+        const caption = (e) => { try { return JSON.parse(e.getAttribute('data-sortable-by')).caption; } catch (x) { return e.getAttribute('mission_id'); } };
+        const creditsOf = (e) => { try { return Number(JSON.parse(e.getAttribute('data-sortable-by')).average_credits) || 0; } catch (x) { return 0; } };
+        const addLog = (name, text, tone) => {
+            log.unshift({ t: new Date().toLocaleTimeString('nl-NL'), name, text, tone });
+            if (log.length > 200) log.length = 200;
+            ctx.refresh();
+        };
+
+        async function get(url) {
+            const ac = new AbortController();
+            const t = setTimeout(() => ac.abort(), 15000);
+            try {
+                return await fetch(url, { credentials: 'same-origin', signal: ac.signal });
+            } finally {
+                clearTimeout(t);
+            }
+        }
+
+        // One mission: its page has the share button ("Delen met team") only while it is
+        // not shared yet. Following that link shares it, like a click.
+        async function share(id) {
+            const res = await get(`/missions/${id}`);
+            if (!res.ok) throw new Error(`status ${res.status}`);
+            const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+            const btn = doc.getElementById('mission_alliance_share_btn');
+            if (!btn || !btn.getAttribute('href')) {
+                // Shared already, or the game gives this account no share button at all.
+                const next = doc.querySelector('.alert_next_alliance');
+                return next ? 'no-button' : 'already';
+            }
+            const r = await get(btn.getAttribute('href'));
+            if (!r.ok) throw new Error(`delen: status ${r.status}`);
+            return 'shared';
+        }
+
+        async function round() {
+            if (busy || stopped) return;
+            busy = true;
+            try {
+                const min = Number(ctx.cfg.minCredits) || 0;
+                const todo = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_id]')]
+                    .filter((e) => !done.has(e.getAttribute('mission_id')) && creditsOf(e) >= min
+                        && !(ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none'))
+                    .sort((a, b) => creditsOf(b) - creditsOf(a));
+                for (const e of todo) {
+                    if (stopped) return;
+                    const id = e.getAttribute('mission_id');
+                    if (!document.getElementById(`mission_${id}`)) continue; // ended meanwhile
+                    const name = caption(e);
+                    ctx.status(`Delen: ${name}`, { tone: 'busy' });
+                    try {
+                        const r = await share(id);
+                        if (r === 'shared') { stats.shared++; done.set(id, Date.now()); noButton = 0; addLog(name, `gedeeld (${ctx.nl(creditsOf(e))} cr)`, 'ok'); }
+                        else if (r === 'already') { stats.already++; done.set(id, Date.now()); }
+                        else {
+                            // No share button anywhere: the account may not be allowed to share.
+                            done.set(id, Date.now());
+                            if (++noButton === 3) addLog('—', 'het spel toont geen deelknop: delen lijkt voor dit account niet mogelijk', 'warn');
+                        }
+                    } catch (x) {
+                        stats.failed++;
+                        addLog(name, `mislukt: ${x.message}`, 'error');
+                    }
+                    save();
+                    await sleep(ctx.cfg.pauseSec * 1000);
+                }
+                status();
+            } catch (x) {
+                ctx.err(x);
+            } finally {
+                busy = false;
+            }
+        }
+
+        function status() {
+            ctx.status(noButton >= 3 ? 'Geen deelknop: delen lijkt geblokkeerd voor dit account'
+                : `Actief: ${stats.shared} gedeeld deze sessie (vanaf ${ctx.nl(Number(ctx.cfg.minCredits) || 0)} cr)`,
+            { tone: noButton >= 3 ? 'warn' : 'ok' });
+        }
+
+        ctx.panel((el) => {
+            el.innerHTML = `<p class="mks-note">${stats.shared} gedeeld, ${stats.already} waren al gedeeld, ${stats.failed} mislukt (deze sessie).</p>
+                ${log.length ? `<h4 class="mks-h">Logboek</h4><div class="mks-tblwrap"><table class="mks-tbl"><tbody>
+                    ${log.map((l) => `<tr><td class="mono">${esc(l.t)}</td><td>${esc(l.name)}</td><td class="mks-st t-${l.tone}">${esc(l.text)}</td></tr>`).join('')}
+                    </tbody></table></div>` : '<p class="mks-dim">Nog niets gedeeld.</p>'}`;
+        });
+
+        let timer = null;
+        const restart = () => { clearInterval(timer); timer = setInterval(round, Math.max(10, Number(ctx.cfg.scanSec) || 30) * 1000); };
+        ctx.onSettings((cfg, key) => { if (key === 'scanSec') restart(); else round(); });
+        status();
+        restart();
+        setTimeout(round, 4000);
+
+        return { stop() { stopped = true; clearInterval(timer); } };
+    },
+});
+
 /* ==== module: auto-expand ================================================= */
 MKS.module({
     id: 'auto-expand',
@@ -13365,7 +13540,7 @@ MKS.module({
 
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
-                + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
+                + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -14607,6 +14782,15 @@ MKS.module({
                         run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
                 }
             }
+            // A whole new hospital: beds right away. On a real hospital spot, near where
+            // patients ran out of beds (or near the dispatch centre when that is not known).
+            if (ctx.cfg.doBuild) {
+                const t = (readNeeds().other || {});
+                const bedNeed = Object.entries(t).find(([n]) => /^Ziekenhuis(bedden| binnen)/i.test(n));
+                const at = (bedNeed && centroid(bedNeed[1].pos)) || data.home;
+                const nb = await planBuilding({ name: 'Focus: nieuw ziekenhuis', at }, [2], 'focus: ziekenhuizen, meteen meer bedden', data, 40);
+                if (!nb.skip) steps.push({ ...nb, need: 'Focus: ziekenhuizen' });
+            }
             steps.sort((a, b) => a.cost - b.cost);
             return { steps, pending: list.filter(([b]) => !state.hcScan[b.id]).length };
         }
@@ -15533,7 +15717,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261017150218' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261017153008' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15723,7 +15907,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261017150218',
+                version: '1.7.0.20261017153008',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
