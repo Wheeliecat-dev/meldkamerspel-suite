@@ -29,7 +29,7 @@ MKS.module({
 
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
-                + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
+                + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -1270,6 +1270,15 @@ MKS.module({
                     steps.push({ label: `level ${lvl.level} voor ${b.caption} (focus: ziekenhuizen, meer bedden)`, cost: lvl.cost, need, hcB: b.id,
                         run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
                 }
+            }
+            // A whole new hospital: beds right away. On a real hospital spot, near where
+            // patients ran out of beds (or near the dispatch centre when that is not known).
+            if (ctx.cfg.doBuild) {
+                const t = (readNeeds().other || {});
+                const bedNeed = Object.entries(t).find(([n]) => /^Ziekenhuis(bedden| binnen)/i.test(n));
+                const at = (bedNeed && centroid(bedNeed[1].pos)) || data.home;
+                const nb = await planBuilding({ name: 'Focus: nieuw ziekenhuis', at }, [2], 'focus: ziekenhuizen, meteen meer bedden', data, 40);
+                if (!nb.skip) steps.push({ ...nb, need: 'Focus: ziekenhuizen' });
             }
             steps.sort((a, b) => a.cost - b.cost);
             return { steps, pending: list.filter(([b]) => !state.hcScan[b.id]).length };
