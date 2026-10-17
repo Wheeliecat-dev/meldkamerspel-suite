@@ -68,10 +68,10 @@ MKS.module({
         { key: 'quickUnits', parent: 'quickLane', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
         { key: 'teamMissions', group: 'Extra rondes', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
             help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
-        { key: 'teamFull', parent: 'teamMissions', label: 'Teaminzetten: alles sturen wat nodig is', type: 'bool', default: false,
+        { key: 'teamFull', parent: 'teamMissions', label: 'Teaminzetten en -evenementen: alles sturen wat nodig is', type: 'bool', default: false,
             help: 'Niet één voertuig, maar alles wat de teaminzet nog mist, zoals bij je eigen inzetten: de rode melding "Missende voertuigen", '
                 + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
-                + '"Alleen als alles beschikbaar is" gelden ook hier. Teamevenementen krijgen nog steeds één voertuig.' },
+                + '"Alleen als alles beschikbaar is" gelden ook hier. Geldt ook voor teamevenementen en geplande teaminzetten.' },
         { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', parent: 'maxPerHour', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', parent: 'maxPerHour', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -2032,8 +2032,8 @@ MKS.module({
                     const kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
-                    // "Alles sturen": team missions (not events) get what they need, like our own.
-                    const full = kind === 'team' && !!ctx.cfg.teamFull;
+                    // "Alles sturen": team missions and events get what they need, like our own.
+                    const full = !!ctx.cfg.teamFull;
                     let fullJob = {};
                     if (full) {
                         const r = (await loadMissions())[keyOf(entry)];
