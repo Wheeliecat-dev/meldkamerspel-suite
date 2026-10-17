@@ -27,6 +27,9 @@ MKS.module({
             help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
         { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
 
+        { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
+            help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
+                + 'goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -1226,6 +1229,44 @@ MKS.module({
             const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
             return (b.personal_count || 0) - crews - planned;
         }
+        /* FOCUS HOSPITALS AND CELLS — every hospital gets its levels (beds) and missing
+         * departments, every police station its cell extensions, cheapest first. Building
+         * pages are read 15 per round and remembered for 3 hours (re-read after a purchase). */
+        async function planHcFocus(data) {
+            state.hcScan = state.hcScan || {};
+            const list = [
+                ...data.buildings.filter((b) => b.building_type === 2).map((b) => [b, 'H']),
+                ...data.buildings.filter((b) => [5, 11].includes(b.building_type) && b.enabled !== false).map((b) => [b, 'P']),
+            ];
+            let scanned = 0;
+            for (const [b, k] of list) {
+                const e = state.hcScan[b.id];
+                if (e && Date.now() - e.at < 3 * 3600000) continue;
+                if (scanned >= 15 || stopped) break;
+                scanned++;
+                const info = await buildingInfo(b.id);
+                const exts = info.exts.filter((x) => x.cost && (k === 'H' || /\bcel(len)?\b/i.test(x.text)) && !extBlocked(b, x));
+                const lvl = k === 'H' && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
+                state.hcScan[b.id] = { at: Date.now(), k, lvl, exts: exts.map((x) => ({ id: x.id, href: x.href, cost: x.cost, text: x.text.slice(0, 160) })) };
+            }
+            const steps = [];
+            for (const [b, k] of list) {
+                const e = state.hcScan[b.id];
+                if (!e) continue;
+                const need = k === 'H' ? 'Focus: ziekenhuizen' : 'Focus: cellen';
+                if (ctx.cfg.doExtensions) for (const x of e.exts) {
+                    if (extBlocked(b, x)) continue;
+                    steps.push({ ...extStep(b, x, `uitbreiding "${extName(x.text)}" in ${b.caption} (${need.toLowerCase()})`), need, hcB: b.id });
+                }
+                if (e.lvl) {
+                    const lvl = e.lvl;
+                    steps.push({ label: `level ${lvl.level} voor ${b.caption} (focus: ziekenhuizen, meer bedden)`, cost: lvl.cost, need, hcB: b.id,
+                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
+                }
+            }
+            steps.sort((a, b) => a.cost - b.cost);
+            return { steps, pending: list.filter(([b]) => !state.hcScan[b.id]).length };
+        }
         // More beds: the next level of the nearest own hospital (beds grow with its level),
         // else a new hospital.
         async function planBeds(c, data) {
@@ -2019,7 +2060,13 @@ MKS.module({
                 emptySweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
-                if (!next) {
+                const hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
+                if (hc && (hc.steps.length || hc.pending)) {
+                    ranking = hc.steps.map((x) => ({ ...x, value: 0, ratio: 0 }));
+                    for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
+                    next = ranking[0] || null;
+                    skipped = [`Focus ziekenhuizen en cellen: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`];
+                } else if (!next) {
                     if (Date.now() - unlocksAt > 3600000) { await computeUnlocks(data); unlocksAt = Date.now(); }
                     // Plan the most valuable needs, then take the step with the most blocked
                     // credits per credit spent (a free training step wins outright).
@@ -2086,6 +2133,7 @@ MKS.module({
                 if (await next.check()) {
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
+                    if (next.hcB && state.hcScan) delete state.hcScan[next.hcB];
                     // A new building: plan its vehicle again soon, not after half an hour.
                     // Growth has no wait: the next post may follow at once (recentSpots keeps it off this one).
                     if (!String(next.need).startsWith('Groei:')) state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
@@ -2119,6 +2167,7 @@ MKS.module({
                     const why = (next.onFail && await next.onFail()) || {};
                     addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
+                    if (next.hcB && state.hcScan) delete state.hcScan[next.hcB];
                     if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'failed', said: lastSaid || null });
                     // A failure the script understands (an extension a small station cannot
                     // have yet) is handled, not a reason to stop everything.
