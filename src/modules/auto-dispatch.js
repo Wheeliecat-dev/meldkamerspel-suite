@@ -66,6 +66,9 @@ MKS.module({
         { key: 'quickWindows', parent: 'quickLane', label: 'Snelle baan: vensters', type: 'number', default: 2, min: 1, max: 3, step: 1,
             help: 'Zoveel onzichtbare vensters werken tegelijk de kleine inzetten af.' },
         { key: 'quickUnits', parent: 'quickLane', label: 'Snelle baan: hooguit', type: 'number', default: 1, min: 1, max: 5, step: 1, unit: 'voertuig(en)' },
+        { key: 'singleCar', group: 'Voertuigen kiezen', label: 'Eén voertuig per inzet', type: 'bool', default: false,
+            help: 'Elke inzet krijgt precies één voertuig van de aangevinkte types (eigen lijst), het dichtstbijzijnde vrije: je eigen inzetten, '
+                + 'en met "Meedoen aan teaminzetten" ook teaminzetten en -evenementen. Gaat voor "alles sturen". Klik op de naam voor de lijst.' },
         { key: 'teamMissions', group: 'Extra rondes', label: 'Meedoen aan teaminzetten', type: 'bool', default: false,
             help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
         { key: 'teamFull', parent: 'teamMissions', label: 'Teaminzetten en -evenementen: alles sturen wat nodig is', type: 'bool', default: false,
@@ -262,7 +265,7 @@ MKS.module({
         // Vehicle types chosen for team missions (panel menu); null = the default.
         // Separate lists for team missions and team events (planned team missions count as events).
         // ['none'] = do not join that kind at all.
-        const TYPES_KEY = { team: 'mks.autoDispatch.teamTypes', event: 'mks.autoDispatch.eventTypes' };
+        const TYPES_KEY = { team: 'mks.autoDispatch.teamTypes', event: 'mks.autoDispatch.eventTypes', single: 'mks.autoDispatch.singleTypes' };
         const loadTeamTypes = (kind = 'team') => { try { const v = JSON.parse(GM_getValue(TYPES_KEY[kind], '[]')); return Array.isArray(v) && v.length ? v.map(String) : null; } catch (e) { return null; } };
 
         // Lower case, no " - ", and the long words the game abbreviates in type names.
@@ -593,6 +596,8 @@ MKS.module({
                 // sent. Does not wait for vehicles still driving.
                 const prisonerCars = [...document.querySelectorAll('.prison-select')].filter((b) => b.querySelector('a[href*="/gefangener/"]'));
                 if (prisonerCars.length) { await prisonerCell(job, prisonerCars[0], report, doneKey); return; }
+                // "Eén voertuig per inzet": one of the ticked types, like a team mission.
+                if (job.single) { await teamWorker(job, report, doneKey); return; }
                 // Verzorgers and Arbeidshygiëne grow with the responders on scene, so the red
                 // box only asks for them once units arrive. Waiting for everything still driving
                 // before sending them left missions open a long time: send those now, unless
@@ -1455,7 +1460,7 @@ MKS.module({
                     if (ctx.cfg.onlyVisible && getComputedStyle(e).display === 'none' && !(ctx.cfg.transport && prisonersWaiting(e))) return false;
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).filter((e) => !(ctx.cfg.quickLane && !onQuickHold(e) && (isQuick(e) || isTopUp(e))))
+                }).filter((e) => !(ctx.cfg.quickLane && !ctx.cfg.singleCar && !onQuickHold(e) && (isQuick(e) || isTopUp(e))))
                     .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
@@ -1620,7 +1625,7 @@ MKS.module({
                                 // A team mission always has other players' rows: only our own counts.
                                 ok = result.mode === 'cell' || (transport
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
-                                    : job.team ? ownRowOn(frame.contentDocument, job.me)
+                                    : job.team || job.single ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
@@ -1880,7 +1885,7 @@ MKS.module({
             }
             let quickBusy = false, quickTimer = null;
             async function quickCycle() {
-                if (!running || stopped || quickBusy || reloadWanted || !ctx.cfg.quickLane || !missions) return;
+                if (!running || stopped || quickBusy || reloadWanted || !ctx.cfg.quickLane || ctx.cfg.singleCar || !missions) return;
                 quickBusy = true;
                 try {
                     const now = Date.now();
@@ -2029,11 +2034,13 @@ MKS.module({
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
                     const kind = isEvent(entry) ? 'event' : 'team';
                     if (noCarUntil[kind] > Date.now()) continue;
-                    const kindTypes = loadTeamTypes(kind);
+                    let kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
+                    // "Eén voertuig per inzet" goes first, with its own list.
+                    if (ctx.cfg.singleCar) kindTypes = loadTeamTypes('single');
                     tried.set(id, Date.now());
                     // "Alles sturen": team missions and events get what they need, like our own.
-                    const full = !!ctx.cfg.teamFull;
+                    const full = !!ctx.cfg.teamFull && !ctx.cfg.singleCar;
                     let fullJob = {};
                     if (full) {
                         const r = (await loadMissions())[keyOf(entry)];
@@ -2145,6 +2152,31 @@ MKS.module({
                             try { GM_setValue(DATA_KEY, 'null'); } catch (e) { /* ignore */ }
                             try { req = await loadMissions(); r = req[keyOf(entry)]; } catch (e) { ctx.warn('mission data refresh', e); }
                             if (r) addLog(name, 'nieuw inzettype: inzetgegevens vernieuwd', 'idle');
+                        }
+                        if (ctx.cfg.singleCar) {
+                            // One vehicle of the ticked types, nothing else.
+                            status(`Bezig: ${name}`, 'busy');
+                            const res = await runJob({ id, token: Date.now(), single: true, avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '',
+                                teamTypes: loadTeamTypes('single'), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                            recordEvent({ kind: 'mission', single: true, id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, km: res.km, car: res.car || undefined, reason: res.reason });
+                            if (res.result === 'sent' || res.result === 'unconfirmed') {
+                                if (res.mode === 'cell') { stats.transports++; tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000); } else { stats.sent++; sent.push(Date.now()); }
+                                errorStreak = 0;
+                                addLog(name, res.mode === 'cell' ? `arrestanten ${res.car}: naar ${res.dest}` : `${res.car || 'voertuig'}, ${Number(res.km).toFixed(1)} km${res.result === 'sent' ? '' : ' (niet bevestigd)'}`, 'ok');
+                            } else if (res.result === 'skip' && res.joined) {
+                                // Our vehicle is there: leave it alone for half an hour.
+                                tried.set(id, Date.now() + 30 * 60000 - ctx.cfg.retryMin * 60000);
+                            } else if (res.result === 'skip' || res.result === 'wait') {
+                                stats.skipped++;
+                                errorStreak = 0;
+                                addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                            } else {
+                                stats.errors++;
+                                addLog(name, `fout: ${res.reason}`, 'error');
+                                if (++errorStreak >= 3) { threeErrors(res.reason); break; }
+                            }
+                            await sleep(ctx.cfg.pauseSec * 1000);
+                            continue;
                         }
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         // Care mission: one DB-VZ with the first wave, so the Verzorgers do not
@@ -2343,7 +2375,7 @@ MKS.module({
             const TEAM_TYPES_KEY = 'mks.autoDispatch.teamTypes';
             const VT_LABEL = {};
             for (const [n, vt] of Object.entries(VT_NAMES)) if (!(vt in VT_LABEL)) VT_LABEL[vt] = n;
-            let ownedTypes = null, ownedAt = 0, teamBox = null;
+            let ownedTypes = null, ownedAt = 0, teamBox = null, singleBox = null;
             async function loadOwnedTypes() {
                 ownedAt = Date.now();
                 try {
@@ -2353,6 +2385,7 @@ MKS.module({
                     ownedTypes = m;
                 } catch (e) { ctx.warn('team types', e); }
                 if (teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
+                if (singleBox && singleBox.isConnected) drawSingleTypes(singleBox);
             }
             let typesTab = 'team';
             function drawTeamTypes(box) {
@@ -2388,6 +2421,31 @@ MKS.module({
                 box.querySelector('[data-team-reset]')?.addEventListener('click', () => write([]));
             }
             ctx.settingExtra('teamMissions', drawTeamTypes);
+
+            // "Eén voertuig per inzet": its own list, apart from the team lists.
+            function drawSingleTypes(box) {
+                singleBox = box;
+                if ((!ownedTypes || Date.now() - ownedAt > 30 * 60000) && Date.now() - ownedAt > 10000) loadOwnedTypes();
+                const chosen = new Set(loadTeamTypes('single') || []);
+                const rows = ownedTypes ? Object.entries(ownedTypes)
+                    .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
+                    .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid"><input type="checkbox" data-single-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    : '<p class="mks-note">Voertuigen laden…</p>';
+                box.innerHTML = `<p class="mks-note">Elke inzet krijgt precies één voertuig: het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook.
+                        Alleen als er nog geen voertuig van jou is; geen bijsturen. Arrestanten gaan nog wel naar een cel.</p>
+                    <p class="mks-note"><b>Voertuigtypes</b> (${chosen.size ? `${chosen.size} gekozen` : 'niets gekozen: standaard, één noodhulp'})
+                        ${chosen.size ? ' · <a class="mks-link" data-single-reset>Standaard herstellen</a>' : ''}</p>
+                    <div style="columns:2;column-gap:16px">${rows}</div>`;
+                const write = (arr) => { GM_setValue(TYPES_KEY.single, JSON.stringify(arr)); drawSingleTypes(box); };
+                box.querySelectorAll('[data-single-vt]').forEach((cb) => cb.addEventListener('change', () => {
+                    const set = new Set(chosen);
+                    if (cb.checked) set.add(cb.dataset.singleVt); else set.delete(cb.dataset.singleVt);
+                    write([...set]);
+                }));
+                box.querySelector('[data-single-reset]')?.addEventListener('click', () => write([]));
+            }
+            ctx.settingExtra('singleCar', drawSingleTypes);
 
             ctx.panel((el) => {
                 const esc = ctx.esc;
