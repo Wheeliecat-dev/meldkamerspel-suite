@@ -29,7 +29,7 @@ MKS.module({
 
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
-                + 'goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
+                + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -1247,13 +1247,20 @@ MKS.module({
                 const info = await buildingInfo(b.id);
                 const exts = info.exts.filter((x) => x.cost && (k === 'H' || /\bcel(len)?\b/i.test(x.text)) && !extBlocked(b, x));
                 const lvl = k === 'H' && ctx.cfg.doLevels ? await nextLevel(b.id) : null;
-                state.hcScan[b.id] = { at: Date.now(), k, lvl, exts: exts.map((x) => ({ id: x.id, href: x.href, cost: x.cost, text: x.text.slice(0, 160) })) };
+                // A small police station gets no cells until it is a full one: upgrade it.
+                const se = k === 'P' && isSmall(b) && info.smallExpand && info.smallExpand.cost ? info.smallExpand : null;
+                state.hcScan[b.id] = { at: Date.now(), k, lvl, se, exts: exts.map((x) => ({ id: x.id, href: x.href, cost: x.cost, text: x.text.slice(0, 160) })) };
             }
             const steps = [];
             for (const [b, k] of list) {
                 const e = state.hcScan[b.id];
                 if (!e) continue;
                 const need = k === 'H' ? 'Focus: ziekenhuizen' : 'Focus: cellen';
+                if (e.se && ctx.cfg.doLevels && !upgrading(b)) {
+                    steps.push({ ...upgradeStep(b, e.se, 'focus: cellen, daarna celuitbreidingen'), need, hcB: b.id });
+                    continue; // its cells come after the upgrade
+                }
+                if (isSmall(b) && upgrading(b)) continue; // being upgraded: cells after that
                 if (ctx.cfg.doExtensions) for (const x of e.exts) {
                     if (extBlocked(b, x)) continue;
                     steps.push({ ...extStep(b, x, `uitbreiding "${extName(x.text)}" in ${b.caption} (${need.toLowerCase()})`), need, hcB: b.id });
