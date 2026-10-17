@@ -2395,20 +2395,25 @@ MKS.module({
                 const key = TYPES_KEY[kind];
                 const list = loadTeamTypes(kind) || [];
                 const off = list.includes('none');
+                // "Alles sturen" or "Eén voertuig per inzet" on: this list is not used, only "Niet meedoen".
+                const unused = !!ctx.cfg.teamFull || !!ctx.cfg.singleCar;
+                const dim = off || unused;
                 const chosen = new Set(list.filter((x) => x !== 'none'));
                 const rows = ownedTypes ? Object.entries(ownedTypes)
                     .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
                     .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
-                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid${off ? ';opacity:.4' : ''}"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''} ${off ? 'disabled' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid${dim ? ';opacity:.4' : ''}"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''} ${dim ? 'disabled' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
                     : '<p class="mks-note">Voertuigen laden…</p>';
                 const tab = (k, label) => `<a class="mks-btn ${k === kind ? 'primary' : ''}" data-types-tab="${k}" style="cursor:pointer">${label}</a>`;
                 const deflt = kind === 'event' ? 'één noodhulp of ambulance' : 'één noodhulp';
-                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement (ook geplande teaminzetten) van anderen gaat precies één voertuig:
-                        het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen.</p>
+                box.innerHTML = `${unused ? `<p class="mks-note"><b>${ctx.cfg.singleCar ? '"Eén voertuig per inzet"' : '"Alles sturen wat nodig is"'} staat aan:</b>
+                        de voertuigtypes hieronder worden niet gebruikt. "Niet meedoen" geldt nog wel.</p>`
+                    : `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement (ook geplande teaminzetten) van anderen gaat precies één voertuig:
+                        het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen.</p>`}
                     <div style="display:flex;gap:6px;margin:6px 0 10px">${tab('team', 'Teaminzetten')}${tab('event', 'Teamevenementen')}</div>
                     <label style="display:block;margin:0 0 8px"><input type="checkbox" data-types-off ${off ? 'checked' : ''}> <b>Niet meedoen</b> aan ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'}</label>
-                    <p class="mks-note"><b>Voertuigtypes</b> (${off ? 'uit' : chosen.size ? `${chosen.size} gekozen` : `niets gekozen: standaard, ${deflt}`})
-                        ${chosen.size && !off ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                    <p class="mks-note"${unused && !off ? ' style="opacity:.4"' : ''}><b>Voertuigtypes</b> (${off ? 'uit' : unused ? 'niet gebruikt' : chosen.size ? `${chosen.size} gekozen` : `niets gekozen: standaard, ${deflt}`})
+                        ${chosen.size && !dim ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
                     <div style="columns:2;column-gap:16px">${rows}</div>`;
                 const write = (arr) => { GM_setValue(key, JSON.stringify(arr)); drawTeamTypes(box); };
                 box.querySelectorAll('[data-types-tab]').forEach((a) => a.addEventListener('click', () => { typesTab = a.dataset.typesTab; drawTeamTypes(box); }));
@@ -2489,6 +2494,7 @@ MKS.module({
             });
 
             ctx.onSettings((cfg, key) => {
+                if ((key === 'teamFull' || key === 'singleCar' || key == null) && teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
                 // key null = settings reset to defaults.
                 if ((key === 'scanSec' || key == null) && running) {
                     clearInterval(timer);
