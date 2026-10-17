@@ -499,8 +499,12 @@ MKS.module({
                 const edu = name.match(/^Opleiding (.+?) \(/);
                 const pers = name.match(/^Personeel: (.+)$/);
                 if (edu || pers) { state.wishes[(edu || pers)[1]] = t.missions; continue; }
-                const value = value7d(t, name) * ctx.cfg.specialWeight;
-                if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
+                // Without a team there are no team hospitals and cells: every patient and
+                // prisoner needs one of your own, so these count double.
+                const beds = /^Ziekenhuis(bedden| binnen)/i.test(name);
+                const value = value7d(t, name) * ctx.cfg.specialWeight * (dep || cells || beds ? 2 : 1);
+                if (beds) out.push({ kind: 'beds', name, value, at: centroid(t.pos), t });
+                else if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
                 else if (cells) out.push({ kind: 'ext', name, types: [5, 11, 18], match: /\bcel\b|cel$/i, value, at: centroid(t.pos), t });
             }
             for (const u of unlocks7d) if ((state.cool[u.name] || 0) <= now) out.push(u);
@@ -1221,6 +1225,28 @@ MKS.module({
             const crews = data.vehicles.filter((x) => x.building_id === b.id).reduce((sum, x) => sum + crewOf(x.vehicle_type), 0);
             const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
             return (b.personal_count || 0) - crews - planned;
+        }
+        // More beds: the next level of the nearest own hospital (beds grow with its level),
+        // else a new hospital.
+        async function planBeds(c, data) {
+            const ref = c.at || data.home;
+            const hosp = data.buildings.filter((b) => b.building_type === 2)
+                .map((b) => ({ b, d: km(posOf(b), ref) })).sort((a, b) => a.d - b.d).slice(0, 3);
+            const why = [];
+            if (ctx.cfg.doLevels) {
+                for (const { b, d } of hosp) {
+                    const lvl = await nextLevel(b.id);
+                    if (!lvl) { why.push(`${b.caption}: hoogste level`); continue; }
+                    return { label: `level ${lvl.level} voor ${b.caption} (meer bedden, ${d.toFixed(1)} km van de patiënten)`, cost: lvl.cost,
+                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } };
+                }
+            }
+            if (ctx.cfg.doBuild) {
+                const nb = await planBuilding(c, [2], 'meer ziekenhuisbedden', data);
+                if (!nb.skip) return nb;
+                why.push(nb.skip);
+            }
+            return { skip: `${c.name}: ${why.join('; ') || 'geen ziekenhuis om uit te breiden'}` };
         }
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
@@ -2011,7 +2037,8 @@ MKS.module({
                     for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
                         if (viable >= (ctx.cfg.aiOn && ctx.cfg.aiKey ? Math.max(ctx.cfg.planDepth, 12) : ctx.cfg.planDepth)) break;
-                        const plan = c.kind === 'ext' ? await planExtension(c, data)
+                        const plan = c.kind === 'beds' ? await planBeds(c, data)
+                            : c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
                         viable++;

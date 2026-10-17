@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261016203828 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261017143142 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261016203828';
+    const VERSION = '1.7.0.20261017143142';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -3792,6 +3792,13 @@ MKS.module({
             146: { digit: '8', label: 'VW-VZ-ICB' }, 147: { digit: '8', label: 'HA-ICB' }, 148: { digit: '0', label: 'GM-ICB' },
             149: { digit: '7', label: 'HSH-ICB' }, 150: { digit: '8', label: 'VW-HS' }, 151: { digit: '7', label: 'BM-VTHS' },
             152: { digit: '3', label: 'TS-Spoor' },
+            // Medical support stationed at a fire station (GGB unit, Noodhulpteam): support /
+            // logistics bucket 8, like the other containers and support vehicles.
+            100: { digit: '8', label: 'GGB' }, 101: { digit: '8', label: 'NHT' },
+            // Rail and aircraft incident teams: the crew bus in the personnel bucket 0 (like DB),
+            // its trailer in support 8.
+            153: { digit: '0', label: 'DB-RI' }, 154: { digit: '8', label: 'RIA' },
+            155: { digit: '0', label: 'DB-VI' }, 156: { digit: '8', label: 'VIA' },
         };
 
         // Type captions/vehicles that already got a "can't classify" warning this
@@ -4230,8 +4237,11 @@ MKS.module({
         // vehicle_type below is name-independent and can't silently collapse to NH.
         const POLICE_TYPE_ID_TO_ROLE = {
             22: 'NH', 25: 'NH', 28: 'HELI', 35: 'OVD-P', 39: 'ME-CO', 40: 'ME-FB',
-            46: 'DM-P', 47: 'HK9', 48: 'HK9', 58: 'DB', 59: 'NH-OV', 60: 'BIKE',
-            64: 'ME-AE', 73: 'BER', 74: 'BER-AH', 98: 'SIV', 99: 'VOA',
+            46: 'DM-P', 47: 'HK9', 48: 'HK9', 59: 'NH-OV', 60: 'BIKE',
+            // Arrestantenvervoer and the Arrestatieteam each get their own code: before, AV was
+            // "DB" and the three AT vehicles fell through to "NH", so they looked like noodhulp.
+            58: 'AV', 53: 'AT-C', 54: 'AT-O', 55: 'AT-M',
+            64: 'ME-AE', 73: 'BER', 74: 'BER-AH', 84: 'ME-WW', 98: 'SIV', 99: 'VOA', 128: 'DRONE',
             108: 'BRG-K', 109: 'BRG-G', 110: 'KMAR', 111: 'KMAR', 112: 'KMAR-M',
         };
         function generatePoliceTarget(building, vehicle) {
@@ -4252,7 +4262,8 @@ MKS.module({
                 role = 'NH';
                 if (typeNorm.includes('officier')) role = 'OVD-P';
                 else if (typeNorm.includes('motor')) role = 'DM-P';
-                else if (typeNorm.includes('bus') || typeNorm.includes('arrestant')) role = 'DB';
+                else if (typeNorm.includes('arrestant')) role = 'AV';
+                else if (typeNorm.includes('bus')) role = 'DB';
                 else if (typeNorm.includes('hond')) role = 'HK9';
                 else if (typeNorm.includes('paard')) role = 'BP';
             }
@@ -13824,8 +13835,12 @@ MKS.module({
                 const edu = name.match(/^Opleiding (.+?) \(/);
                 const pers = name.match(/^Personeel: (.+)$/);
                 if (edu || pers) { state.wishes[(edu || pers)[1]] = t.missions; continue; }
-                const value = value7d(t, name) * ctx.cfg.specialWeight;
-                if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
+                // Without a team there are no team hospitals and cells: every patient and
+                // prisoner needs one of your own, so these count double.
+                const beds = /^Ziekenhuis(bedden| binnen)/i.test(name);
+                const value = value7d(t, name) * ctx.cfg.specialWeight * (dep || cells || beds ? 2 : 1);
+                if (beds) out.push({ kind: 'beds', name, value, at: centroid(t.pos), t });
+                else if (dep) out.push({ kind: 'ext', name, types: [2], match: new RegExp(dep[1].trim(), 'i'), value, at: centroid(t.pos), t });
                 else if (cells) out.push({ kind: 'ext', name, types: [5, 11, 18], match: /\bcel\b|cel$/i, value, at: centroid(t.pos), t });
             }
             for (const u of unlocks7d) if ((state.cool[u.name] || 0) <= now) out.push(u);
@@ -14546,6 +14561,28 @@ MKS.module({
             const crews = data.vehicles.filter((x) => x.building_id === b.id).reduce((sum, x) => sum + crewOf(x.vehicle_type), 0);
             const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
             return (b.personal_count || 0) - crews - planned;
+        }
+        // More beds: the next level of the nearest own hospital (beds grow with its level),
+        // else a new hospital.
+        async function planBeds(c, data) {
+            const ref = c.at || data.home;
+            const hosp = data.buildings.filter((b) => b.building_type === 2)
+                .map((b) => ({ b, d: km(posOf(b), ref) })).sort((a, b) => a.d - b.d).slice(0, 3);
+            const why = [];
+            if (ctx.cfg.doLevels) {
+                for (const { b, d } of hosp) {
+                    const lvl = await nextLevel(b.id);
+                    if (!lvl) { why.push(`${b.caption}: hoogste level`); continue; }
+                    return { label: `level ${lvl.level} voor ${b.caption} (meer bedden, ${d.toFixed(1)} km van de patiënten)`, cost: lvl.cost,
+                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } };
+                }
+            }
+            if (ctx.cfg.doBuild) {
+                const nb = await planBuilding(c, [2], 'meer ziekenhuisbedden', data);
+                if (!nb.skip) return nb;
+                why.push(nb.skip);
+            }
+            return { skip: `${c.name}: ${why.join('; ') || 'geen ziekenhuis om uit te breiden'}` };
         }
         async function planExtension(c, data, tries = 3) {
             const ref = c.at || data.home;
@@ -15336,7 +15373,8 @@ MKS.module({
                     for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
                         if (viable >= (ctx.cfg.aiOn && ctx.cfg.aiKey ? Math.max(ctx.cfg.planDepth, 12) : ctx.cfg.planDepth)) break;
-                        const plan = c.kind === 'ext' ? await planExtension(c, data)
+                        const plan = c.kind === 'beds' ? await planBeds(c, data)
+                            : c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
                         if (plan.skip) { skipped.push(plan.skip); continue; }
                         viable++;
@@ -15439,7 +15477,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261016203828' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261017143142' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15629,7 +15667,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261016203828',
+                version: '1.7.0.20261017143142',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
