@@ -1001,8 +1001,11 @@ MKS.module({
         // vehicle_type below is name-independent and can't silently collapse to NH.
         const POLICE_TYPE_ID_TO_ROLE = {
             22: 'NH', 25: 'NH', 28: 'HELI', 35: 'OVD-P', 39: 'ME-CO', 40: 'ME-FB',
-            46: 'DM-P', 47: 'HK9', 48: 'HK9', 58: 'DB', 59: 'NH-OV', 60: 'BIKE',
-            64: 'ME-AE', 73: 'BER', 74: 'BER-AH', 98: 'SIV', 99: 'VOA',
+            46: 'DM-P', 47: 'HK9', 48: 'HK9', 59: 'NH-OV', 60: 'BIKE',
+            // Arrestantenvervoer and the Arrestatieteam each get their own code: before, AV was
+            // "DB" and the three AT vehicles fell through to "NH", so they looked like noodhulp.
+            58: 'AV', 53: 'AT-C', 54: 'AT-O', 55: 'AT-M',
+            64: 'ME-AE', 73: 'BER', 74: 'BER-AH', 84: 'ME-WW', 98: 'SIV', 99: 'VOA', 128: 'DRONE',
             108: 'BRG-K', 109: 'BRG-G', 110: 'KMAR', 111: 'KMAR', 112: 'KMAR-M',
         };
         function generatePoliceTarget(building, vehicle) {
@@ -1023,7 +1026,8 @@ MKS.module({
                 role = 'NH';
                 if (typeNorm.includes('officier')) role = 'OVD-P';
                 else if (typeNorm.includes('motor')) role = 'DM-P';
-                else if (typeNorm.includes('bus') || typeNorm.includes('arrestant')) role = 'DB';
+                else if (typeNorm.includes('arrestant')) role = 'AV';
+                else if (typeNorm.includes('bus')) role = 'DB';
                 else if (typeNorm.includes('hond')) role = 'HK9';
                 else if (typeNorm.includes('paard')) role = 'BP';
             }
