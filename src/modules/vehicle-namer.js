@@ -563,6 +563,13 @@ MKS.module({
             146: { digit: '8', label: 'VW-VZ-ICB' }, 147: { digit: '8', label: 'HA-ICB' }, 148: { digit: '0', label: 'GM-ICB' },
             149: { digit: '7', label: 'HSH-ICB' }, 150: { digit: '8', label: 'VW-HS' }, 151: { digit: '7', label: 'BM-VTHS' },
             152: { digit: '3', label: 'TS-Spoor' },
+            // Medical support stationed at a fire station (GGB unit, Noodhulpteam): support /
+            // logistics bucket 8, like the other containers and support vehicles.
+            100: { digit: '8', label: 'GGB' }, 101: { digit: '8', label: 'NHT' },
+            // Rail and aircraft incident teams: the crew bus in the personnel bucket 0 (like DB),
+            // its trailer in support 8.
+            153: { digit: '0', label: 'DB-RI' }, 154: { digit: '8', label: 'RIA' },
+            155: { digit: '0', label: 'DB-VI' }, 156: { digit: '8', label: 'VIA' },
         };
 
         // Type captions/vehicles that already got a "can't classify" warning this

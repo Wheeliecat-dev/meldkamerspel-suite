@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261016184326 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261017121836 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261016184326';
+    const VERSION = '1.7.0.20261017121836';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -3792,6 +3792,13 @@ MKS.module({
             146: { digit: '8', label: 'VW-VZ-ICB' }, 147: { digit: '8', label: 'HA-ICB' }, 148: { digit: '0', label: 'GM-ICB' },
             149: { digit: '7', label: 'HSH-ICB' }, 150: { digit: '8', label: 'VW-HS' }, 151: { digit: '7', label: 'BM-VTHS' },
             152: { digit: '3', label: 'TS-Spoor' },
+            // Medical support stationed at a fire station (GGB unit, Noodhulpteam): support /
+            // logistics bucket 8, like the other containers and support vehicles.
+            100: { digit: '8', label: 'GGB' }, 101: { digit: '8', label: 'NHT' },
+            // Rail and aircraft incident teams: the crew bus in the personnel bucket 0 (like DB),
+            // its trailer in support 8.
+            153: { digit: '0', label: 'DB-RI' }, 154: { digit: '8', label: 'RIA' },
+            155: { digit: '0', label: 'DB-VI' }, 156: { digit: '8', label: 'VIA' },
         };
 
         // Type captions/vehicles that already got a "can't classify" warning this
@@ -4230,8 +4237,11 @@ MKS.module({
         // vehicle_type below is name-independent and can't silently collapse to NH.
         const POLICE_TYPE_ID_TO_ROLE = {
             22: 'NH', 25: 'NH', 28: 'HELI', 35: 'OVD-P', 39: 'ME-CO', 40: 'ME-FB',
-            46: 'DM-P', 47: 'HK9', 48: 'HK9', 58: 'DB', 59: 'NH-OV', 60: 'BIKE',
-            64: 'ME-AE', 73: 'BER', 74: 'BER-AH', 98: 'SIV', 99: 'VOA',
+            46: 'DM-P', 47: 'HK9', 48: 'HK9', 59: 'NH-OV', 60: 'BIKE',
+            // Arrestantenvervoer and the Arrestatieteam each get their own code: before, AV was
+            // "DB" and the three AT vehicles fell through to "NH", so they looked like noodhulp.
+            58: 'AV', 53: 'AT-C', 54: 'AT-O', 55: 'AT-M',
+            64: 'ME-AE', 73: 'BER', 74: 'BER-AH', 84: 'ME-WW', 98: 'SIV', 99: 'VOA', 128: 'DRONE',
             108: 'BRG-K', 109: 'BRG-G', 110: 'KMAR', 111: 'KMAR', 112: 'KMAR-M',
         };
         function generatePoliceTarget(building, vehicle) {
@@ -4252,7 +4262,8 @@ MKS.module({
                 role = 'NH';
                 if (typeNorm.includes('officier')) role = 'OVD-P';
                 else if (typeNorm.includes('motor')) role = 'DM-P';
-                else if (typeNorm.includes('bus') || typeNorm.includes('arrestant')) role = 'DB';
+                else if (typeNorm.includes('arrestant')) role = 'AV';
+                else if (typeNorm.includes('bus')) role = 'DB';
                 else if (typeNorm.includes('hond')) role = 'HK9';
                 else if (typeNorm.includes('paard')) role = 'BP';
             }
@@ -12873,6 +12884,9 @@ MKS.module({
 
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
             let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
+            // Nothing of the chosen types free for team missions or for events: that kind waits
+            // 5 minutes (459 window loads in one evening said "geen gekozen voertuigtype vrij").
+            const noCarUntil = { team: 0, event: 0 };
             async function teamCycle() {
                 if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
@@ -12910,7 +12924,9 @@ MKS.module({
                     // Ended while the round ran (other players' missions finish all the time).
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
-                    const kindTypes = loadTeamTypes(isEvent(entry) ? 'event' : 'team');
+                    const kind = isEvent(entry) ? 'event' : 'team';
+                    if (noCarUntil[kind] > Date.now()) continue;
+                    const kindTypes = loadTeamTypes(kind);
                     if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
                     tried.set(id, Date.now());
                     const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes });
@@ -12940,8 +12956,9 @@ MKS.module({
                     } else if (res.result === 'skip' && res.noCar) {
                         // No noodhulp free anywhere: the same for every other team mission now.
                         teamErrors = 0;
-                        teamNote('geen noodhulp vrij, de teaminzetten volgen later');
-                        return;
+                        noCarUntil[kind] = Date.now() + 5 * 60000;
+                        teamNote(`${res.reason}: ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'} wachten 5 minuten`);
+                        continue;
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
@@ -15134,7 +15151,7 @@ MKS.module({
             if (set && set.toLowerCase() !== 'auto' && !refresh) return set;
             if (aiAutoModel && !refresh) return aiAutoModel;
             const prov = aiProvider(key);
-            let usable = await aiModels(key);
+            let usable = (await aiModels(key)).filter((n) => !(state.aiBadModels || []).includes(n));
             let rank;
             if (prov === 'openrouter') {
                 // Free text models; well-known families first (they follow JSON instructions well).
@@ -15218,13 +15235,25 @@ MKS.module({
                     if (e.status === 404) {
                         model = await aiModelName(key, true);
                         res = await aiRequest(model, key, prompt);
-                    } else if ([429, 500, 502, 503, 504].includes(e.status)) {
+                    } else if ([403, 429, 500, 502, 503, 504].includes(e.status)) {
+                        // 403: this model is not open to this key or this kind of use ("only on
+                        // agentic harnesses"): never pick it again.
+                        if (e.status === 403) { state.aiBadModels = [...new Set([...(state.aiBadModels || []), model])].slice(-30); aiAutoModel = null; aiAlternatives = aiAlternatives.filter((m) => m !== model); }
                         // Busy at Google: once more after a short wait, then the next-best models.
-                        await sleep(8000);
-                        const tries = [model, ...aiAlternatives.filter((m) => m !== model)];
+                        if (e.status !== 403) await sleep(8000);
+                        const tries = e.status === 403 ? aiAlternatives.filter((m) => m !== model) : [model, ...aiAlternatives.filter((m) => m !== model)];
+                        if (!tries.length) {
+                            // No alternatives known yet: ask the service for its models again.
+                            const fresh = await aiModelName(key, true);
+                            if (fresh && fresh !== model) tries.push(fresh);
+                        }
                         let last = e;
                         for (const m of tries) {
-                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) { last = e2; if (![429, 500, 502, 503, 504].includes(e2.status)) break; }
+                            try { res = await aiRequest(m, key, prompt); last = null; if (m !== model) addLog(`AI: ${model} was druk, ${m} gebruikt`, 'idle'); break; } catch (e2) {
+                                last = e2;
+                                if (e2.status === 403) state.aiBadModels = [...new Set([...(state.aiBadModels || []), m])].slice(-30);
+                                if (![403, 429, 500, 502, 503, 504].includes(e2.status)) break;
+                            }
                         }
                         if (last) throw last;
                     } else throw e;
@@ -15421,7 +15450,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261016184326' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261017121836' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15611,7 +15640,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261016184326',
+                version: '1.7.0.20261017121836',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
