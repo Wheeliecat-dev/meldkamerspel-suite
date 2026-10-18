@@ -2099,6 +2099,9 @@ MKS.module({
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                        // Something we do not have (DB-Handcrew, FBO-helicopters for a Natuurbrand
+                        // event): look again in 20 minutes, not every round (861 tries in an afternoon).
+                        if (/te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
                     } else {
                         // Errors here pause only the team loop; own missions go on.
                         stats.errors++;

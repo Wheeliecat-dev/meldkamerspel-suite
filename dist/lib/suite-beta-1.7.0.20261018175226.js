@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261017160204 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261018175226 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261017160204';
+    const VERSION = '1.7.0.20261018175226';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11097,7 +11097,7 @@ MKS.module({
             'strandvoertuigen (quad, dat-rb of khv)': 'water_rescue', 'bereden brigade (paarden)': 'police_horse', 'bereden brigade eenheden (paarden)': 'police_horse',
             // Singular with a count of 1: "1 Bereden Brigade eenheid (paard)".
             'bereden brigade (paard)': 'police_horse', 'bereden brigade eenheid (paard)': 'police_horse',
-            'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
+            'waterwerper': 'wasserwerfer', 'db-av': 'gefkw', 'rb-k of rb-g': 'coastal_boat', 'kleine of grote reddingsboot': 'coastal_boat', 'kleine of grote reddingsboten': 'coastal_boat', 'sar-heli(s)': 'coastal_helicopter', 'kw-boot': 'coastal_guard_boat',
             'politie helikopters': 'police_helicopters', 'politiehelikopters': 'police_helicopters', 'politiehelikopter': 'police_helicopters', 'nht': 'mass_casualty', 'ggb': 'mass_casualty_advanced', 'berger-k': 'car_carrier',
             'hulpverleningsvoertuigen of redvoertuigen': 'oneof_fire_rescue_or_ladder', 'kmar eenheid': 'military_police', 'db-tev': 'bomb_disposal_patrol',
             'db-icb of ts-spoor': 'railway_fire_engine', 'ovd-icb': 'railway_elw', 'ts-sth': 'disaster_response', 'hvh-sth': 'disaster_response_equipment',
@@ -13003,6 +13003,9 @@ MKS.module({
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                        // Something we do not have (DB-Handcrew, FBO-helicopters for a Natuurbrand
+                        // event): look again in 20 minutes, not every round (861 tries in an afternoon).
+                        if (/te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
                     } else {
                         // Errors here pause only the team loop; own missions go on.
                         stats.errors++;
@@ -13299,20 +13302,25 @@ MKS.module({
                 const key = TYPES_KEY[kind];
                 const list = loadTeamTypes(kind) || [];
                 const off = list.includes('none');
+                // "Alles sturen" or "Eén voertuig per inzet" on: this list is not used, only "Niet meedoen".
+                const unused = !!ctx.cfg.teamFull || !!ctx.cfg.singleCar;
+                const dim = off || unused;
                 const chosen = new Set(list.filter((x) => x !== 'none'));
                 const rows = ownedTypes ? Object.entries(ownedTypes)
                     .map(([vt, n]) => ({ vt, n, name: VT_LABEL[vt] || `type ${vt}` }))
                     .sort((x, y) => x.name.localeCompare(y.name, 'nl'))
-                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid${off ? ';opacity:.4' : ''}"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''} ${off ? 'disabled' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
+                    .map((r) => `<label style="display:block;margin:2px 0;break-inside:avoid${dim ? ';opacity:.4' : ''}"><input type="checkbox" data-team-vt="${ctx.esc(r.vt)}" ${chosen.has(String(r.vt)) ? 'checked' : ''} ${dim ? 'disabled' : ''}> ${ctx.esc(r.name)} <span class="mks-dim">(${r.n})</span></label>`).join('')
                     : '<p class="mks-note">Voertuigen laden…</p>';
                 const tab = (k, label) => `<a class="mks-btn ${k === kind ? 'primary' : ''}" data-types-tab="${k}" style="cursor:pointer">${label}</a>`;
                 const deflt = kind === 'event' ? 'één noodhulp of ambulance' : 'één noodhulp';
-                box.innerHTML = `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement (ook geplande teaminzetten) van anderen gaat precies één voertuig:
-                        het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen.</p>
+                box.innerHTML = `${unused ? `<p class="mks-note"><b>${ctx.cfg.singleCar ? '"Eén voertuig per inzet"' : '"Alles sturen wat nodig is"'} staat aan:</b>
+                        de voertuigtypes hieronder worden niet gebruikt. "Niet meedoen" geldt nog wel.</p>`
+                    : `<p class="mks-note">Naar elke gedeelde teaminzet en elk teamevenement (ook geplande teaminzetten) van anderen gaat precies één voertuig:
+                        het dichtstbijzijnde vrije van de aangevinkte types, hoe ver ook. Alleen als je er nog niet aan meedoet; geen bijsturen.</p>`}
                     <div style="display:flex;gap:6px;margin:6px 0 10px">${tab('team', 'Teaminzetten')}${tab('event', 'Teamevenementen')}</div>
                     <label style="display:block;margin:0 0 8px"><input type="checkbox" data-types-off ${off ? 'checked' : ''}> <b>Niet meedoen</b> aan ${kind === 'event' ? 'teamevenementen' : 'teaminzetten'}</label>
-                    <p class="mks-note"><b>Voertuigtypes</b> (${off ? 'uit' : chosen.size ? `${chosen.size} gekozen` : `niets gekozen: standaard, ${deflt}`})
-                        ${chosen.size && !off ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
+                    <p class="mks-note"${unused && !off ? ' style="opacity:.4"' : ''}><b>Voertuigtypes</b> (${off ? 'uit' : unused ? 'niet gebruikt' : chosen.size ? `${chosen.size} gekozen` : `niets gekozen: standaard, ${deflt}`})
+                        ${chosen.size && !dim ? ' · <a class="mks-link" data-team-reset>Standaard herstellen</a>' : ''}</p>
                     <div style="columns:2;column-gap:16px">${rows}</div>`;
                 const write = (arr) => { GM_setValue(key, JSON.stringify(arr)); drawTeamTypes(box); };
                 box.querySelectorAll('[data-types-tab]').forEach((a) => a.addEventListener('click', () => { typesTab = a.dataset.typesTab; drawTeamTypes(box); }));
@@ -13393,6 +13401,7 @@ MKS.module({
             });
 
             ctx.onSettings((cfg, key) => {
+                if ((key === 'teamFull' || key === 'singleCar' || key == null) && teamBox && teamBox.isConnected) drawTeamTypes(teamBox);
                 // key null = settings reset to defaults.
                 if ((key === 'scanSec' || key == null) && running) {
                     clearInterval(timer);
@@ -15775,7 +15784,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261017160204' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261018175226' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15965,7 +15974,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261017160204',
+                version: '1.7.0.20261018175226',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
