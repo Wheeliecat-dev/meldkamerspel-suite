@@ -184,7 +184,7 @@ MKS.module({
             'schuimblusvoertuig': 'foam', 'svm': 'foam_needed', "hovd's": 'mobile_command_vehicles', 'biketeams': 'bike_police',
             'adviseurs gevaarlijke stoffen': 'hazmat_vehicles', 'me flexbussen': 'grukw', 'ambulances': 'ambulances', 'dm-p': 'police_motorcycle',
             'tankautospuiten of hulpverleningsvoertuigen': 'oneof_fire_engine_or_rescue', 'voorlichters': 'spokesman', 'da-la-nb': 'wildfire_command',
-            'fbo-heli': 'fire_aviation', 'commandowagen': 'elw3', 'adembeschermingsvoertuigen': 'mobile_air_vehicles',
+            'fbo-heli': 'fire_aviation', 'fbo-helicopters': 'fire_aviation', 'fbo-helicopter': 'fire_aviation', 'fbo-helikopters': 'fire_aviation', 'fbo-helikopter': 'fire_aviation', 'commandowagen': 'elw3', 'adembeschermingsvoertuigen': 'mobile_air_vehicles',
             'waterongevallenvoertuigen / oppervlaktereddingsteams': 'diver_units', 'min. pomp capaciteit': 'min_pump_speed',
             'officiers van dienst politie': 'ovdp', 'officieren van dienst - politie': 'ovdp', 'officieren van dienst politie': 'ovdp', 'natuurbrandbestrijding uitrusting': 'wildfire_equipment', 'natuurbrandbestrijding vrachtwagen of haakarmbak': 'wildfire_equipment', 'me commandovoertuigen': 'lebefkw',
             'crashtender': 'arff', 'afo/osc': 'elw_airport', 'bootaanhanger (woa of ba-rb)': 'boats', 'verkenningseenheden': 'gwmess',
@@ -2099,9 +2099,13 @@ MKS.module({
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
-                        // Something we do not have (DB-Handcrew, FBO-helicopters for a Natuurbrand
-                        // event): look again in 20 minutes, not every round (861 tries in an afternoon).
-                        if (/te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
+                        // A big team mission or event short of rare units (handcrew, FBO-heli for a
+                        // 70k Natuurbrand): held like our own big missions, so small ones leave
+                        // those units for it and it is looked at again every minute.
+                        if (full) updateHold(id, name, creditsOf(entry), res);
+                        // Otherwise (nothing to hold, or something we cannot send at all): look
+                        // again in 20 minutes, not every round (861 tries in one afternoon).
+                        if (!holds.has(id) && /te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
                     } else {
                         // Errors here pause only the team loop; own missions go on.
                         stats.errors++;
