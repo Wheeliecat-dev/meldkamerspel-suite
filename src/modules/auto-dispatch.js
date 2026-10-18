@@ -752,7 +752,9 @@ MKS.module({
                     el.setAttribute('reset', firstPass ? 'true' : 'false');
                     firstPass = false;
                     el.setAttribute('building_ids', '');
-                    el.setAttribute('equipment_mode', '0');
+                    // aaoEquipmentModes = ["default", "auto_assign"]: 1 lets the game pick vehicles
+                    // that carry the needed equipment (RC-Explosievenrobot on a VW-EOD) and ticks it.
+                    el.setAttribute('equipment_mode', '1');
                     el.setAttribute('custom', '{}');
                     for (const [k, v] of Object.entries(slots)) el.setAttribute(k, String(v));
                     if (Object.keys(vt).length) {
@@ -1015,7 +1017,7 @@ MKS.module({
                 el.id = 'aao_mks_team';
                 el.className = 'aao_btn';
                 el.style.display = 'none';
-                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', ...want })) el.setAttribute(k, String(v));
+                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '1', custom: '{}', ...want })) el.setAttribute(k, String(v));
                 document.body.appendChild(el);
                 const realAlert = W.alert;
                 W.alert = () => {}; // "Niet beschikbaar: 1 noodhulp": no popup in the hidden window

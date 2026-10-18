@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261017160533 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261018225413 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261017160533';
+    const VERSION = '1.7.0.20261018225413';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11088,7 +11088,7 @@ MKS.module({
             'schuimblusvoertuig': 'foam', 'svm': 'foam_needed', "hovd's": 'mobile_command_vehicles', 'biketeams': 'bike_police',
             'adviseurs gevaarlijke stoffen': 'hazmat_vehicles', 'me flexbussen': 'grukw', 'ambulances': 'ambulances', 'dm-p': 'police_motorcycle',
             'tankautospuiten of hulpverleningsvoertuigen': 'oneof_fire_engine_or_rescue', 'voorlichters': 'spokesman', 'da-la-nb': 'wildfire_command',
-            'fbo-heli': 'fire_aviation', 'commandowagen': 'elw3', 'adembeschermingsvoertuigen': 'mobile_air_vehicles',
+            'fbo-heli': 'fire_aviation', 'fbo-helicopters': 'fire_aviation', 'fbo-helicopter': 'fire_aviation', 'fbo-helikopters': 'fire_aviation', 'fbo-helikopter': 'fire_aviation', 'commandowagen': 'elw3', 'adembeschermingsvoertuigen': 'mobile_air_vehicles',
             'waterongevallenvoertuigen / oppervlaktereddingsteams': 'diver_units', 'min. pomp capaciteit': 'min_pump_speed',
             'officiers van dienst politie': 'ovdp', 'officieren van dienst - politie': 'ovdp', 'officieren van dienst politie': 'ovdp', 'natuurbrandbestrijding uitrusting': 'wildfire_equipment', 'natuurbrandbestrijding vrachtwagen of haakarmbak': 'wildfire_equipment', 'me commandovoertuigen': 'lebefkw',
             'crashtender': 'arff', 'afo/osc': 'elw_airport', 'bootaanhanger (woa of ba-rb)': 'boats', 'verkenningseenheden': 'gwmess',
@@ -11656,7 +11656,9 @@ MKS.module({
                     el.setAttribute('reset', firstPass ? 'true' : 'false');
                     firstPass = false;
                     el.setAttribute('building_ids', '');
-                    el.setAttribute('equipment_mode', '0');
+                    // aaoEquipmentModes = ["default", "auto_assign"]: 1 lets the game pick vehicles
+                    // that carry the needed equipment (RC-Explosievenrobot on a VW-EOD) and ticks it.
+                    el.setAttribute('equipment_mode', '1');
                     el.setAttribute('custom', '{}');
                     for (const [k, v] of Object.entries(slots)) el.setAttribute(k, String(v));
                     if (Object.keys(vt).length) {
@@ -11919,7 +11921,7 @@ MKS.module({
                 el.id = 'aao_mks_team';
                 el.className = 'aao_btn';
                 el.style.display = 'none';
-                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '0', custom: '{}', ...want })) el.setAttribute(k, String(v));
+                for (const [k, v] of Object.entries({ aao_id: 'mks_team', reset: 'true', building_ids: '', equipment_mode: '1', custom: '{}', ...want })) el.setAttribute(k, String(v));
                 document.body.appendChild(el);
                 const realAlert = W.alert;
                 W.alert = () => {}; // "Niet beschikbaar: 1 noodhulp": no popup in the hidden window
@@ -13003,6 +13005,13 @@ MKS.module({
                     } else if (res.result === 'skip') {
                         teamErrors = 0;
                         addLog(name, `overgeslagen: ${res.reason}`, 'idle');
+                        // A big team mission or event short of rare units (handcrew, FBO-heli for a
+                        // 70k Natuurbrand): held like our own big missions, so small ones leave
+                        // those units for it and it is looked at again every minute.
+                        if (full) updateHold(id, name, creditsOf(entry), res);
+                        // Otherwise (nothing to hold, or something we cannot send at all): look
+                        // again in 20 minutes, not every round (861 tries in one afternoon).
+                        if (!holds.has(id) && /te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
                     } else {
                         // Errors here pause only the team loop; own missions go on.
                         stats.errors++;
@@ -15781,7 +15790,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261017160533' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261018225413' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15971,7 +15980,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261017160533',
+                version: '1.7.0.20261018225413',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
