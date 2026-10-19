@@ -240,6 +240,18 @@ function sweepAll(ctx) {
                 const confirmed = pool.filter((r) => after.querySelector(`a[personal_id="${r.pid}"]`)?.classList.contains('btn-assigned')).length;
                 people += confirmed;
                 if (confirmed) done++;
+                // Out of service by Auto-alarmeren for missing crew: back in service now.
+                if (confirmed) {
+                    try {
+                        const m = JSON.parse(GM_getValue('mks.autoDispatch.uncrewed.v1', '{}')) || {};
+                        if (m[v.id]) {
+                            await fetch(`/vehicles/${v.id}/set_fms/2`, { credentials: 'same-origin' });
+                            delete m[v.id];
+                            GM_setValue('mks.autoDispatch.uncrewed.v1', JSON.stringify(m));
+                            note(`${v.caption}: weer in dienst (stond uit dienst wegens ontbrekend personeel)`, 'ok');
+                        }
+                    } catch (e) { /* ignore */ }
+                }
                 if (confirmed < need) {
                     short++;
                     note(`${v.caption}: ${confirmed} van ${need} met "${opt.textContent.trim()}" gekoppeld${pool.length < need ? ' (niet genoeg vrij opgeleid personeel in dit gebouw)' : ''}`, 'warn');

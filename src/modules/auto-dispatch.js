@@ -1569,6 +1569,56 @@ MKS.module({
                 tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
             }
 
+            /* UNCREWED VEHICLES — out of service (status 6) while the trained crew is missing.
+             * Back in service as soon as someone is assigned to it (checked every 10 minutes,
+             * or right away by Personeel toewijzen), and after 12 hours for a new try. */
+            const BLOCK_KEY = 'mks.autoDispatch.uncrewed.v1';
+            const loadBlocked = () => { try { return JSON.parse(GM_getValue(BLOCK_KEY, '{}')) || {}; } catch (e) { return {}; } };
+            const saveBlocked = (m) => { try { GM_setValue(BLOCK_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ } };
+            async function crewCount(vid) {
+                const r = await fetch(`/vehicles/${vid}/zuweisung`, { credentials: 'same-origin' });
+                if (!r.ok) return null;
+                const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+                return d.querySelectorAll('a.btn-assigned[personal_id]').length;
+            }
+            async function blockUncrewed(ids, said) {
+                const m = loadBlocked();
+                for (const vid of ids) {
+                    if (m[vid]) continue;
+                    try {
+                        const crew = await crewCount(vid);
+                        const r = await fetch(`/vehicles/${vid}/set_fms/6`, { credentials: 'same-origin' });
+                        if (!r.ok) continue;
+                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+                        m[vid] = { at: Date.now(), crew, caption: v && v.caption, said: String(said).slice(0, 160) };
+                        addLog(v && v.caption ? v.caption : `voertuig ${vid}`, `bleef staan (personeel/opleiding ontbreekt): uit dienst gezet (status 6) tot er mensen op staan`, 'warn');
+                    } catch (e) { ctx.warn('block uncrewed', e); }
+                }
+                saveBlocked(m);
+            }
+            async function checkUncrewed() {
+                const m = loadBlocked();
+                const ids = Object.keys(m);
+                if (!ids.length) return;
+                for (const vid of ids) {
+                    try {
+                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+                        if (!v) { delete m[vid]; continue; }               // sold or gone
+                        if (Number(v.fms_real) !== 6) { delete m[vid]; continue; } // put back by hand
+                        const crew = await crewCount(vid);
+                        const more = crew != null && m[vid].crew != null && crew > m[vid].crew;
+                        if (more || Date.now() - m[vid].at > 12 * 3600000) {
+                            await fetch(`/vehicles/${vid}/set_fms/2`, { credentials: 'same-origin' });
+                            addLog(v.caption || `voertuig ${vid}`, more ? `weer in dienst: ${crew} personeel toegewezen` : 'weer in dienst na 12 uur, nieuwe poging', 'ok');
+                            delete m[vid];
+                        }
+                    } catch (e) { ctx.warn('check uncrewed', e); }
+                }
+                saveBlocked(m);
+            }
+            setInterval(() => { if (!stopped) checkUncrewed(); }, 10 * 60000);
+            setTimeout(() => checkUncrewed(), 60000);
+
             // One mission in a hidden iframe. Resolves with the worker's report.
             // Mission jobs running right now in either loop, so maxPerHour holds for both together.
             let inFlight = 0;
@@ -1629,6 +1679,28 @@ MKS.module({
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
                                     : job.team || job.single ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
+                            } catch (e) { /* ignore */ }
+                            // "Stayed behind: not enough trained personnel": the game names it on
+                            // the page after the alarm. Those vehicles go out of service (status 6)
+                            // until people are assigned, instead of being picked every round.
+                            try {
+                                const doc = frame.contentDocument;
+                                const said = [...doc.querySelectorAll('.alert')].map((a) => a.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
+                                // "KNRM-2 RB-K heeft geen geschikt personeel beschikbaar (minimaal 2 personen)
+                                // of het personeel heeft niet de juiste opleiding." One line per vehicle.
+                                const names = [...said.matchAll(/(?:^|\|\s*|×)\s*([^|×]+?) heeft geen geschikt personeel/gi)].map((m) => m[1].trim());
+                                if (!transport && names.length) {
+                                    const there = new Set([...doc.querySelectorAll('#mission_vehicle_driving a[href^="/vehicles/"], #mission_vehicle_at_mission a[href^="/vehicles/"]')]
+                                        .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)/) || [])[1]));
+                                    // The chosen vehicles that did not leave and whose row carries one of those names.
+                                    const stayed = (result.ids || []).map(String).filter((v) => {
+                                        if (there.has(v)) return false;
+                                        const row = doc.querySelector(`input.vehicle_checkbox[value="${v}"]`)?.closest('tr');
+                                        const t = row ? row.textContent.replace(/\s+/g, ' ') : '';
+                                        return !row || names.some((n) => t.includes(n));
+                                    });
+                                    if (stayed.length) blockUncrewed(stayed, said);
+                                }
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
                         }, { once: true });

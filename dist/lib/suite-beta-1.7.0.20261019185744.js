@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261019184856 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261019185744 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261019184856';
+    const VERSION = '1.7.0.20261019185744';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10871,6 +10871,18 @@ function sweepAll(ctx) {
                 const confirmed = pool.filter((r) => after.querySelector(`a[personal_id="${r.pid}"]`)?.classList.contains('btn-assigned')).length;
                 people += confirmed;
                 if (confirmed) done++;
+                // Out of service by Auto-alarmeren for missing crew: back in service now.
+                if (confirmed) {
+                    try {
+                        const m = JSON.parse(GM_getValue('mks.autoDispatch.uncrewed.v1', '{}')) || {};
+                        if (m[v.id]) {
+                            await fetch(`/vehicles/${v.id}/set_fms/2`, { credentials: 'same-origin' });
+                            delete m[v.id];
+                            GM_setValue('mks.autoDispatch.uncrewed.v1', JSON.stringify(m));
+                            note(`${v.caption}: weer in dienst (stond uit dienst wegens ontbrekend personeel)`, 'ok');
+                        }
+                    } catch (e) { /* ignore */ }
+                }
                 if (confirmed < need) {
                     short++;
                     note(`${v.caption}: ${confirmed} van ${need} met "${opt.textContent.trim()}" gekoppeld${pool.length < need ? ' (niet genoeg vrij opgeleid personeel in dit gebouw)' : ''}`, 'warn');
@@ -12473,6 +12485,56 @@ MKS.module({
                 tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
             }
 
+            /* UNCREWED VEHICLES — out of service (status 6) while the trained crew is missing.
+             * Back in service as soon as someone is assigned to it (checked every 10 minutes,
+             * or right away by Personeel toewijzen), and after 12 hours for a new try. */
+            const BLOCK_KEY = 'mks.autoDispatch.uncrewed.v1';
+            const loadBlocked = () => { try { return JSON.parse(GM_getValue(BLOCK_KEY, '{}')) || {}; } catch (e) { return {}; } };
+            const saveBlocked = (m) => { try { GM_setValue(BLOCK_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ } };
+            async function crewCount(vid) {
+                const r = await fetch(`/vehicles/${vid}/zuweisung`, { credentials: 'same-origin' });
+                if (!r.ok) return null;
+                const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+                return d.querySelectorAll('a.btn-assigned[personal_id]').length;
+            }
+            async function blockUncrewed(ids, said) {
+                const m = loadBlocked();
+                for (const vid of ids) {
+                    if (m[vid]) continue;
+                    try {
+                        const crew = await crewCount(vid);
+                        const r = await fetch(`/vehicles/${vid}/set_fms/6`, { credentials: 'same-origin' });
+                        if (!r.ok) continue;
+                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+                        m[vid] = { at: Date.now(), crew, caption: v && v.caption, said: String(said).slice(0, 160) };
+                        addLog(v && v.caption ? v.caption : `voertuig ${vid}`, `bleef staan (personeel/opleiding ontbreekt): uit dienst gezet (status 6) tot er mensen op staan`, 'warn');
+                    } catch (e) { ctx.warn('block uncrewed', e); }
+                }
+                saveBlocked(m);
+            }
+            async function checkUncrewed() {
+                const m = loadBlocked();
+                const ids = Object.keys(m);
+                if (!ids.length) return;
+                for (const vid of ids) {
+                    try {
+                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+                        if (!v) { delete m[vid]; continue; }               // sold or gone
+                        if (Number(v.fms_real) !== 6) { delete m[vid]; continue; } // put back by hand
+                        const crew = await crewCount(vid);
+                        const more = crew != null && m[vid].crew != null && crew > m[vid].crew;
+                        if (more || Date.now() - m[vid].at > 12 * 3600000) {
+                            await fetch(`/vehicles/${vid}/set_fms/2`, { credentials: 'same-origin' });
+                            addLog(v.caption || `voertuig ${vid}`, more ? `weer in dienst: ${crew} personeel toegewezen` : 'weer in dienst na 12 uur, nieuwe poging', 'ok');
+                            delete m[vid];
+                        }
+                    } catch (e) { ctx.warn('check uncrewed', e); }
+                }
+                saveBlocked(m);
+            }
+            setInterval(() => { if (!stopped) checkUncrewed(); }, 10 * 60000);
+            setTimeout(() => checkUncrewed(), 60000);
+
             // One mission in a hidden iframe. Resolves with the worker's report.
             // Mission jobs running right now in either loop, so maxPerHour holds for both together.
             let inFlight = 0;
@@ -12533,6 +12595,28 @@ MKS.module({
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
                                     : job.team || job.single ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
+                            } catch (e) { /* ignore */ }
+                            // "Stayed behind: not enough trained personnel": the game names it on
+                            // the page after the alarm. Those vehicles go out of service (status 6)
+                            // until people are assigned, instead of being picked every round.
+                            try {
+                                const doc = frame.contentDocument;
+                                const said = [...doc.querySelectorAll('.alert')].map((a) => a.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
+                                // "KNRM-2 RB-K heeft geen geschikt personeel beschikbaar (minimaal 2 personen)
+                                // of het personeel heeft niet de juiste opleiding." One line per vehicle.
+                                const names = [...said.matchAll(/(?:^|\|\s*|×)\s*([^|×]+?) heeft geen geschikt personeel/gi)].map((m) => m[1].trim());
+                                if (!transport && names.length) {
+                                    const there = new Set([...doc.querySelectorAll('#mission_vehicle_driving a[href^="/vehicles/"], #mission_vehicle_at_mission a[href^="/vehicles/"]')]
+                                        .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)/) || [])[1]));
+                                    // The chosen vehicles that did not leave and whose row carries one of those names.
+                                    const stayed = (result.ids || []).map(String).filter((v) => {
+                                        if (there.has(v)) return false;
+                                        const row = doc.querySelector(`input.vehicle_checkbox[value="${v}"]`)?.closest('tr');
+                                        const t = row ? row.textContent.replace(/\s+/g, ' ') : '';
+                                        return !row || names.some((n) => t.includes(n));
+                                    });
+                                    if (stayed.length) blockUncrewed(stayed, said);
+                                }
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
                         }, { once: true });
@@ -13614,9 +13698,10 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
-        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: bestaande posten uitbouwen en vullen', type: 'bool', default: false,
-            help: 'Elke credit gaat naar je bestaande brandweerkazernes, ambulanceposten en politiebureaus: eerst lege plekken vullen met een voertuig '
-                + '(TST 4/5, ambulance, noodhulp; alleen als er personeel voor is), daarna het volgende level. Goedkoopste eerst. Geen nieuwe gebouwen. '
+        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen en alles uitbouwen', type: 'bool', default: false,
+            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna gaat alles naar levels: elke brandweerkazerne, '
+                + 'ambulancepost, politiebureau, VWS-post, MMT- en heliplaats naar het hoogste level, goedkoopste eerst. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
@@ -14817,48 +14902,51 @@ MKS.module({
             const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
             return (b.personal_count || 0) - crews - planned;
         }
-        /* FOCUS EXISTING POSTS — fire stations, ambulance posts and police stations (full-size):
-         * an empty spot gets the post's basic vehicle when there is staff for it; a full post
-         * gets its next level when there is staff for one more vehicle. Cheapest first. Pages are
-         * read 15 per round and remembered 6 hours (re-read after a purchase). */
-        const LVL_DEF = { 0: 8, 3: 16, 5: 22 }; // TST 4/5, Ambulance, DA Noodhulp
+        /* FOCUS EXISTING POSTS — only vehicles that fix shortages (MMT, OvD-G, police heli, …),
+         * placed at existing buildings: a free spot, a level for parking, an extension or a
+         * training, whatever planVehicle finds. Never a new building, never filler vehicles.
+         * The best credits-per-credit step first, like the normal ranking. */
         async function planLvlFocus(data) {
-            state.lvlScan = state.lvlScan || {};
-            const list = data.buildings.filter((b) => LVL_DEF[b.building_type] != null && !isSmall(b) && b.enabled !== false);
-            let scanned = 0;
-            for (const b of list) {
-                const e = state.lvlScan[b.id];
-                if (e && Date.now() - e.at < 6 * 3600000) continue;
-                if (scanned >= 15 || stopped) break;
-                scanned++;
-                const info = await buildingInfo(b.id);
-                const lvl = ctx.cfg.doLevels ? await nextLevel(b.id) : null;
-                state.lvlScan[b.id] = { at: Date.now(), lvl, used: info.used, max: info.max };
-            }
+            const cands = candidates(readNeeds()).filter((c) => c.kind === 'vehicle' && c.value > 0);
             const steps = [];
-            for (const b of list) {
-                const e = state.lvlScan[b.id];
-                if (!e || projects().some((p) => p.building === b.id)) continue;
-                const vt = LVL_DEF[b.building_type];
-                if (staffLeft(b, data) < crewOf(vt)) continue; // no people for one more vehicle: neither a vehicle nor a level helps now
-                if (e.max != null && e.used != null && e.used < e.max) {
-                    if (!ctx.cfg.doVehicles) continue;
-                    steps.push({ label: `${VT[vt][0]} voor ${b.caption} (focus: plekken vullen, ${e.used}/${e.max})`, cost: VT[vt][1], need: 'Focus: bestaande posten', lvB: b.id,
-                        run: async () => {
-                            const market = await getDoc(`/buildings/${b.id}/vehicles/new`);
-                            const btn = [...market.querySelectorAll('a.buy-vehicle-btn')].find((a) => new RegExp(`/vehicle/\\d+/${vt}/credits`).test(a.getAttribute('href')));
-                            if (!btn || btn.classList.contains('disabled')) throw new Error(`${VT[vt][0]} niet te koop in ${b.caption}`);
-                            await hit(btn.getAttribute('href'));
-                        },
-                        check: async () => ((await buildingInfo(b.id)).used || 0) > (e.used || 0) });
-                } else if (e.lvl) {
+            let looked = 0;
+            for (const c of cands) {
+                if (stopped || steps.length >= 10 || looked >= 30) break;
+                looked++;
+                const plan = await planVehicle(c, data);
+                if (plan.skip) { skipped.push(plan.skip); continue; }
+                if (plan.newBuilding) { skipped.push(`${c.name}: zou een nieuw gebouw worden (focus: alleen bestaande posten)`); continue; }
+                steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
+            }
+            steps.sort((a, b) => b.ratio - a.ratio);
+            // Then: every existing post to its highest level, cheapest level first (fire,
+            // ambulance, police, VWS-post, MMT, police heli, police HQ). Pages are read 15 per
+            // round and remembered 6 hours, re-read after a purchase there.
+            const levels = [];
+            let pending = 0;
+            if (ctx.cfg.doLevels) {
+                state.lvlScan = state.lvlScan || {};
+                const LVL_TYPES = [0, 3, 5, 6, 9, 11, 13];
+                const list = data.buildings.filter((b) => LVL_TYPES.includes(b.building_type) && b.enabled !== false);
+                let scanned = 0;
+                for (const b of list) {
+                    const e = state.lvlScan[b.id];
+                    if (e && Date.now() - e.at < 6 * 3600000) continue;
+                    if (scanned >= 15 || stopped) break;
+                    scanned++;
+                    state.lvlScan[b.id] = { at: Date.now(), lvl: await nextLevel(b.id) };
+                }
+                for (const b of list) {
+                    const e = state.lvlScan[b.id];
+                    if (!e) { pending++; continue; }
+                    if (!e.lvl || steps.some((x) => x.lvB === b.id)) continue;
                     const lvl = e.lvl;
-                    steps.push({ label: `level ${lvl.level} voor ${b.caption} (focus: bestaande posten uitbouwen)`, cost: lvl.cost, need: 'Focus: bestaande posten', lvB: b.id,
+                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: alles uitbouwen)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
                         run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
                 }
+                levels.sort((a, b) => a.cost - b.cost);
             }
-            steps.sort((a, b) => a.cost - b.cost);
-            return { steps, pending: list.filter((b) => !state.lvlScan[b.id]).length };
+            return { steps: [...steps, ...levels], pending };
         }
 
         /* FOCUS HOSPITALS AND CELLS — every hospital gets its levels (beds) and missing
@@ -15711,13 +15799,13 @@ MKS.module({
                 let hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
                 if (!(hc && (hc.steps.length || hc.pending)) && !next && ctx.cfg.lvlFocus) {
                     hc = await planLvlFocus(data);
-                    if (hc.steps.length || hc.pending) hc.label = 'Focus bestaande posten';
+                    if (hc.steps.length || hc.pending) hc.label = 'Focus tekorten bij bestaande posten';
                 }
                 if (hc && (hc.steps.length || hc.pending)) {
-                    ranking = hc.steps.map((x) => ({ ...x, value: 0, ratio: 0 }));
+                    ranking = hc.steps.map((x) => ({ ...x, value: x.value || 0, ratio: x.ratio || 0 }));
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
-                    skipped = [`${hc.label || 'Focus ziekenhuizen en cellen'}: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`];
+                    skipped = [`${hc.label || 'Focus ziekenhuizen en cellen'}: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`, ...skipped];
                 } else if (!next) {
                     if (Date.now() - unlocksAt > 3600000) { await computeUnlocks(data); unlocksAt = Date.now(); }
                     // Plan the most valuable needs, then take the step with the most blocked
@@ -15844,7 +15932,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261019184856' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261019185744' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16034,7 +16122,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261019184856',
+                version: '1.7.0.20261019185744',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
