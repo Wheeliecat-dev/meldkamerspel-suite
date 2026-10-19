@@ -75,6 +75,7 @@ MKS.module({
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
+                    uncrewed: read('mks.autoDispatch.uncrewed.v1', {}),
                     needs: read('mks.autoDispatch.needs.v1', {}),
                     live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, spawned1h: dispatch.spawned1h, holds: dispatch.holds, team: dispatch.team,
                         log: (dispatch.log || []).slice(0, 200) }) : null,
