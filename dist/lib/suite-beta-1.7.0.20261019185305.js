@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261018225413 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261019185305 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261018225413';
+    const VERSION = '1.7.0.20261019185305';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -13614,6 +13614,11 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
+        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen en alles uitbouwen', type: 'bool', default: false,
+            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna gaat alles naar levels: elke brandweerkazerne, '
+                + 'ambulancepost, politiebureau, VWS-post, MMT- en heliplaats naar het hoogste level, goedkoopste eerst. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
+                + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -14813,6 +14818,53 @@ MKS.module({
             const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
             return (b.personal_count || 0) - crews - planned;
         }
+        /* FOCUS EXISTING POSTS — only vehicles that fix shortages (MMT, OvD-G, police heli, …),
+         * placed at existing buildings: a free spot, a level for parking, an extension or a
+         * training, whatever planVehicle finds. Never a new building, never filler vehicles.
+         * The best credits-per-credit step first, like the normal ranking. */
+        async function planLvlFocus(data) {
+            const cands = candidates(readNeeds()).filter((c) => c.kind === 'vehicle' && c.value > 0);
+            const steps = [];
+            let looked = 0;
+            for (const c of cands) {
+                if (stopped || steps.length >= 10 || looked >= 30) break;
+                looked++;
+                const plan = await planVehicle(c, data);
+                if (plan.skip) { skipped.push(plan.skip); continue; }
+                if (plan.newBuilding) { skipped.push(`${c.name}: zou een nieuw gebouw worden (focus: alleen bestaande posten)`); continue; }
+                steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
+            }
+            steps.sort((a, b) => b.ratio - a.ratio);
+            // Then: every existing post to its highest level, cheapest level first (fire,
+            // ambulance, police, VWS-post, MMT, police heli, police HQ). Pages are read 15 per
+            // round and remembered 6 hours, re-read after a purchase there.
+            const levels = [];
+            let pending = 0;
+            if (ctx.cfg.doLevels) {
+                state.lvlScan = state.lvlScan || {};
+                const LVL_TYPES = [0, 3, 5, 6, 9, 11, 13];
+                const list = data.buildings.filter((b) => LVL_TYPES.includes(b.building_type) && b.enabled !== false);
+                let scanned = 0;
+                for (const b of list) {
+                    const e = state.lvlScan[b.id];
+                    if (e && Date.now() - e.at < 6 * 3600000) continue;
+                    if (scanned >= 15 || stopped) break;
+                    scanned++;
+                    state.lvlScan[b.id] = { at: Date.now(), lvl: await nextLevel(b.id) };
+                }
+                for (const b of list) {
+                    const e = state.lvlScan[b.id];
+                    if (!e) { pending++; continue; }
+                    if (!e.lvl || steps.some((x) => x.lvB === b.id)) continue;
+                    const lvl = e.lvl;
+                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: alles uitbouwen)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
+                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
+                }
+                levels.sort((a, b) => a.cost - b.cost);
+            }
+            return { steps: [...steps, ...levels], pending };
+        }
+
         /* FOCUS HOSPITALS AND CELLS — every hospital gets its levels (beds) and missing
          * departments, every police station its cell extensions, cheapest first. Building
          * pages are read 15 per round and remembered for 3 hours (re-read after a purchase). */
@@ -15660,12 +15712,16 @@ MKS.module({
                 emptySweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
-                const hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
+                let hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
+                if (!(hc && (hc.steps.length || hc.pending)) && !next && ctx.cfg.lvlFocus) {
+                    hc = await planLvlFocus(data);
+                    if (hc.steps.length || hc.pending) hc.label = 'Focus tekorten bij bestaande posten';
+                }
                 if (hc && (hc.steps.length || hc.pending)) {
-                    ranking = hc.steps.map((x) => ({ ...x, value: 0, ratio: 0 }));
+                    ranking = hc.steps.map((x) => ({ ...x, value: x.value || 0, ratio: x.ratio || 0 }));
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
-                    skipped = [`Focus ziekenhuizen en cellen: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`];
+                    skipped = [`${hc.label || 'Focus ziekenhuizen en cellen'}: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`, ...skipped];
                 } else if (!next) {
                     if (Date.now() - unlocksAt > 3600000) { await computeUnlocks(data); unlocksAt = Date.now(); }
                     // Plan the most valuable needs, then take the step with the most blocked
@@ -15734,6 +15790,7 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     if (next.hcB && state.hcScan) delete state.hcScan[next.hcB];
+                    if (next.lvB && state.lvlScan) delete state.lvlScan[next.lvB];
                     // A new building: plan its vehicle again soon, not after half an hour.
                     // Growth has no wait: the next post may follow at once (recentSpots keeps it off this one).
                     if (!String(next.need).startsWith('Groei:')) state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
@@ -15768,6 +15825,7 @@ MKS.module({
                     addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (next.hcB && state.hcScan) delete state.hcScan[next.hcB];
+                    if (next.lvB && state.lvlScan) delete state.lvlScan[next.lvB];
                     if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'failed', said: lastSaid || null });
                     // A failure the script understands (an extension a small station cannot
                     // have yet) is handled, not a reason to stop everything.
@@ -15790,7 +15848,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261018225413' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261019185305' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -15980,7 +16038,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261018225413',
+                version: '1.7.0.20261019185305',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

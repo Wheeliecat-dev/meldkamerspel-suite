@@ -30,10 +30,11 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
-        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen bij bestaande posten', type: 'bool', default: false,
-            help: 'Elke credit gaat naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
-                + 'een level voor parkeerruimte, een uitbreiding of een opleiding. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
-                + 'Beste rendement eerst. Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
+        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen en alles uitbouwen', type: 'bool', default: false,
+            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna gaat alles naar levels: elke brandweerkazerne, '
+                + 'ambulancepost, politiebureau, VWS-post, MMT- en heliplaats naar het hoogste level, goedkoopste eerst. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
+                + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -1250,7 +1251,34 @@ MKS.module({
                 steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
             }
             steps.sort((a, b) => b.ratio - a.ratio);
-            return { steps, pending: 0 };
+            // Then: every existing post to its highest level, cheapest level first (fire,
+            // ambulance, police, VWS-post, MMT, police heli, police HQ). Pages are read 15 per
+            // round and remembered 6 hours, re-read after a purchase there.
+            const levels = [];
+            let pending = 0;
+            if (ctx.cfg.doLevels) {
+                state.lvlScan = state.lvlScan || {};
+                const LVL_TYPES = [0, 3, 5, 6, 9, 11, 13];
+                const list = data.buildings.filter((b) => LVL_TYPES.includes(b.building_type) && b.enabled !== false);
+                let scanned = 0;
+                for (const b of list) {
+                    const e = state.lvlScan[b.id];
+                    if (e && Date.now() - e.at < 6 * 3600000) continue;
+                    if (scanned >= 15 || stopped) break;
+                    scanned++;
+                    state.lvlScan[b.id] = { at: Date.now(), lvl: await nextLevel(b.id) };
+                }
+                for (const b of list) {
+                    const e = state.lvlScan[b.id];
+                    if (!e) { pending++; continue; }
+                    if (!e.lvl || steps.some((x) => x.lvB === b.id)) continue;
+                    const lvl = e.lvl;
+                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: alles uitbouwen)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
+                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
+                }
+                levels.sort((a, b) => a.cost - b.cost);
+            }
+            return { steps: [...steps, ...levels], pending };
         }
 
         /* FOCUS HOSPITALS AND CELLS — every hospital gets its levels (beds) and missing
