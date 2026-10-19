@@ -30,10 +30,10 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
-        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: bestaande posten uitbouwen en vullen', type: 'bool', default: false,
-            help: 'Elke credit gaat naar je bestaande brandweerkazernes, ambulanceposten en politiebureaus: eerst lege plekken vullen met een voertuig '
-                + '(TST 4/5, ambulance, noodhulp; alleen als er personeel voor is), daarna het volgende level. Goedkoopste eerst. Geen nieuwe gebouwen. '
-                + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
+        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen bij bestaande posten', type: 'bool', default: false,
+            help: 'Elke credit gaat naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
+                + 'Beste rendement eerst. Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -1233,48 +1233,24 @@ MKS.module({
             const planned = projects().filter((p) => p.building === b.id && p.stage !== 'assign').reduce((sum, p) => sum + crewOf(p.vt), 0);
             return (b.personal_count || 0) - crews - planned;
         }
-        /* FOCUS EXISTING POSTS — fire stations, ambulance posts and police stations (full-size):
-         * an empty spot gets the post's basic vehicle when there is staff for it; a full post
-         * gets its next level when there is staff for one more vehicle. Cheapest first. Pages are
-         * read 15 per round and remembered 6 hours (re-read after a purchase). */
-        const LVL_DEF = { 0: 8, 3: 16, 5: 22 }; // TST 4/5, Ambulance, DA Noodhulp
+        /* FOCUS EXISTING POSTS — only vehicles that fix shortages (MMT, OvD-G, police heli, …),
+         * placed at existing buildings: a free spot, a level for parking, an extension or a
+         * training, whatever planVehicle finds. Never a new building, never filler vehicles.
+         * The best credits-per-credit step first, like the normal ranking. */
         async function planLvlFocus(data) {
-            state.lvlScan = state.lvlScan || {};
-            const list = data.buildings.filter((b) => LVL_DEF[b.building_type] != null && !isSmall(b) && b.enabled !== false);
-            let scanned = 0;
-            for (const b of list) {
-                const e = state.lvlScan[b.id];
-                if (e && Date.now() - e.at < 6 * 3600000) continue;
-                if (scanned >= 15 || stopped) break;
-                scanned++;
-                const info = await buildingInfo(b.id);
-                const lvl = ctx.cfg.doLevels ? await nextLevel(b.id) : null;
-                state.lvlScan[b.id] = { at: Date.now(), lvl, used: info.used, max: info.max };
-            }
+            const cands = candidates(readNeeds()).filter((c) => c.kind === 'vehicle' && c.value > 0);
             const steps = [];
-            for (const b of list) {
-                const e = state.lvlScan[b.id];
-                if (!e || projects().some((p) => p.building === b.id)) continue;
-                const vt = LVL_DEF[b.building_type];
-                if (staffLeft(b, data) < crewOf(vt)) continue; // no people for one more vehicle: neither a vehicle nor a level helps now
-                if (e.max != null && e.used != null && e.used < e.max) {
-                    if (!ctx.cfg.doVehicles) continue;
-                    steps.push({ label: `${VT[vt][0]} voor ${b.caption} (focus: plekken vullen, ${e.used}/${e.max})`, cost: VT[vt][1], need: 'Focus: bestaande posten', lvB: b.id,
-                        run: async () => {
-                            const market = await getDoc(`/buildings/${b.id}/vehicles/new`);
-                            const btn = [...market.querySelectorAll('a.buy-vehicle-btn')].find((a) => new RegExp(`/vehicle/\\d+/${vt}/credits`).test(a.getAttribute('href')));
-                            if (!btn || btn.classList.contains('disabled')) throw new Error(`${VT[vt][0]} niet te koop in ${b.caption}`);
-                            await hit(btn.getAttribute('href'));
-                        },
-                        check: async () => ((await buildingInfo(b.id)).used || 0) > (e.used || 0) });
-                } else if (e.lvl) {
-                    const lvl = e.lvl;
-                    steps.push({ label: `level ${lvl.level} voor ${b.caption} (focus: bestaande posten uitbouwen)`, cost: lvl.cost, need: 'Focus: bestaande posten', lvB: b.id,
-                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
-                }
+            let looked = 0;
+            for (const c of cands) {
+                if (stopped || steps.length >= 10 || looked >= 30) break;
+                looked++;
+                const plan = await planVehicle(c, data);
+                if (plan.skip) { skipped.push(plan.skip); continue; }
+                if (plan.newBuilding) { skipped.push(`${c.name}: zou een nieuw gebouw worden (focus: alleen bestaande posten)`); continue; }
+                steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
             }
-            steps.sort((a, b) => a.cost - b.cost);
-            return { steps, pending: list.filter((b) => !state.lvlScan[b.id]).length };
+            steps.sort((a, b) => b.ratio - a.ratio);
+            return { steps, pending: 0 };
         }
 
         /* FOCUS HOSPITALS AND CELLS — every hospital gets its levels (beds) and missing
@@ -2127,13 +2103,13 @@ MKS.module({
                 let hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
                 if (!(hc && (hc.steps.length || hc.pending)) && !next && ctx.cfg.lvlFocus) {
                     hc = await planLvlFocus(data);
-                    if (hc.steps.length || hc.pending) hc.label = 'Focus bestaande posten';
+                    if (hc.steps.length || hc.pending) hc.label = 'Focus tekorten bij bestaande posten';
                 }
                 if (hc && (hc.steps.length || hc.pending)) {
-                    ranking = hc.steps.map((x) => ({ ...x, value: 0, ratio: 0 }));
+                    ranking = hc.steps.map((x) => ({ ...x, value: x.value || 0, ratio: x.ratio || 0 }));
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
-                    skipped = [`${hc.label || 'Focus ziekenhuizen en cellen'}: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`];
+                    skipped = [`${hc.label || 'Focus ziekenhuizen en cellen'}: ${hc.steps.length} stap(pen) over${hc.pending ? `, ${hc.pending} gebouw(en) nog te bekijken` : ''}`, ...skipped];
                 } else if (!next) {
                     if (Date.now() - unlocksAt > 3600000) { await computeUnlocks(data); unlocksAt = Date.now(); }
                     // Plan the most valuable needs, then take the step with the most blocked
