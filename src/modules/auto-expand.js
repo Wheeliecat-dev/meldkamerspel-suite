@@ -1376,6 +1376,14 @@ MKS.module({
                 state.hcScan[b.id] = { at: Date.now(), k, lvl, se, exts: exts.map((x) => ({ id: x.id, href: x.href, cost: x.cost, text: x.text.slice(0, 160) })) };
             }
             const steps = [];
+            // "Groot ziekenhuis": one per 5 hospitals; "Grote gevangenis": one per 10 police
+            // stations. Past that the game refuses without a message, so those are left out.
+            const countExt = (re) => data.buildings.reduce((n, x) => n + (x.extensions || []).filter((y) => re.test(y.caption || '')).length, 0);
+            const BIG = [
+                { re: /groot ziekenhuis/i, left: Math.floor(data.buildings.filter((x) => x.building_type === 2).length / 5) - countExt(/groot ziekenhuis/i) },
+                { re: /grote gevangenis/i, left: Math.floor(data.buildings.filter((x) => x.building_type === 5).length / 10) - countExt(/grote gevangenis/i) },
+            ];
+            const bigFull = (x) => BIG.some((g) => g.re.test(x.text) && g.left <= 0);
             for (const [b, k] of list) {
                 const e = state.hcScan[b.id];
                 if (!e) continue;
@@ -1386,7 +1394,7 @@ MKS.module({
                 }
                 if (isSmall(b) && upgrading(b)) continue; // being upgraded: cells after that
                 if (ctx.cfg.doExtensions) for (const x of e.exts) {
-                    if (extBlocked(b, x)) continue;
+                    if (extBlocked(b, x) || bigFull(x)) continue;
                     steps.push({ ...extStep(b, x, `uitbreiding "${extName(x.text)}" in ${b.caption} (${need.toLowerCase()})`), need, hcB: b.id });
                 }
                 if (e.lvl) {
