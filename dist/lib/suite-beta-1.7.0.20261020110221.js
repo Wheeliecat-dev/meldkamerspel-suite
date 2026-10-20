@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261019185957 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261020110221 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261019185957';
+    const VERSION = '1.7.0.20261020110221';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -13751,6 +13751,10 @@ MKS.module({
                 + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
 
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
+        { group: 'Personeel', parent: 'doHire', key: 'hireMode', label: 'Account', type: 'select', default: 'premium',
+            options: [['premium', 'Premium (werving op automatisch)'], ['nopremium', 'Geen premium (elke dag 3 dagen werven)']],
+            help: 'Zonder premium bestaat "automatisch" niet. Dan loopt het script één keer per dag alle gebouwen langs en start '
+                + 'bij elk gebouw onder het doel dat niet al werft een werving van 3 dagen (zoals Personeel werven, 3 dagen). Nooit met coins.' },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
         { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenRouter, OpenAI of Gemini)', type: 'bool', default: false,
@@ -13778,6 +13782,11 @@ MKS.module({
             help: 'Zoveel van de waardevolste tekorten worden uitgewerkt; de stap met de meeste credits per uitgegeven credit wint.' },
         { advanced: true, key: 'groupMax', label: 'Gebouwen per opleiding', type: 'number', default: 5, min: 1, max: 10, step: 1,
             help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste.' },
+        { advanced: true, key: 'teamSchools', label: 'Teamscholen gebruiken', type: 'bool', default: true,
+            help: 'Is er geen vrij klaslokaal in je eigen scholen, dan doet je personeel mee aan een gratis opengestelde teamopleiding, '
+                + 'of start het script er zelf een in een school van het team (Team > Gebouwen), gratis voor teamleden.' },
+        { advanced: true, parent: 'teamSchools', key: 'teamDuration', label: 'Inschrijftijd teamopleiding', type: 'select', default: '3600',
+            options: [['3600', '1 uur'], ['43200', '12 uur'], ['86400', '1 dag'], ['172800', '2 dagen']] },
         { advanced: true, key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
             help: 'Eerst personeel van de gebouwen die het voertuig krijgen. Een klas start pas met alle plaatsen bezet: de rest gaat naar vrij personeel '
                 + 'van gebouwen die dat voertuig kunnen hebben (dichtstbij eerst), daarna van andere gebouwen.' },
@@ -14321,10 +14330,47 @@ MKS.module({
                         if (!eduCache[n]) eduCache[n] = { key: o.value.split(':')[0], value: o.value, school: s.id, form };
                     }
                 }
+                if (ctx.cfg.teamSchools) await teamEducation();
             }
             const n = cleanEdu(name);
             return eduCache[n] || { key: (state.eduKeys || {})[n] || null };
         }
+        // Team schools, for trainings no own classroom gives: first a class a member opened
+        // that is free and has seats ("Opengestelde opleidingen"), else a new class in a
+        // team school (Team > Gebouwen), free and open for sign-up as long as the setting says.
+        async function teamEducation() {
+            try {
+                const list = await getDoc('/schoolings');
+                for (const a of list.querySelectorAll('a[href^="/schoolings/"]')) {
+                    const n = cleanEdu(a.textContent.replace(/^[^-]+-\s*/, ''));
+                    if (eduCache[n] || !n) continue;
+                    const doc = await getDoc(a.getAttribute('href'));
+                    const form = [...doc.forms].find((f) => /\/schoolings\/\d+\/education$/.test(f.getAttribute('action') || ''));
+                    const info = [...doc.querySelectorAll('.alert')].map((x) => x.textContent).join(' ');
+                    const free = Number((info.match(/nog (\d+) plaatsen vrij/i) || [])[1]) || 0;
+                    const cost = Number((info.match(/kosten bedragen ([\d.]+) Credits/i) || [])[1]);
+                    if (!form || !free || cost !== 0) continue;
+                    const key = (state.eduKeys || {})[n];
+                    if (key) eduCache[n] = { key, school: a.getAttribute('href'), join: form.getAttribute('action'), form, free, team: true };
+                }
+            } catch (e) { ctx.warn('team classes', e); }
+            try {
+                for (const s of (await api('/api/alliance_buildings')).filter((b) => SCHOOL_TYPES.includes(b.building_type))) {
+                    const doc = await getDoc(`/buildings/${s.id}`);
+                    const form = [...doc.forms].find((f) => /\/education$/.test(f.getAttribute('action') || ''));
+                    if (!form) continue;
+                    for (const o of form.querySelectorAll('select[name="education_select"] option')) {
+                        if (!o.value) continue;
+                        const n = cleanEdu(o.textContent);
+                        state.eduKeys = state.eduKeys || {};
+                        state.eduKeys[n] = o.value.split(':')[0];
+                        if (!eduCache[n]) eduCache[n] = { key: o.value.split(':')[0], value: o.value, school: s.id, form, team: true, caption: s.caption };
+                    }
+                }
+            } catch (e) { ctx.warn('team schools', e); }
+        }
+        // Seats one class can take for us: an open team class may have fewer than 10 left.
+        const seatsOf = (edu) => Math.min(10, ctx.cfg.trainSeats, (edu && edu.free) || 10);
         // People of a building as the school form lists them: has the training, free
         // (not bound to a vehicle, not in training, not reserved by another project).
         async function peopleAt(buildingId, key) {
@@ -14342,7 +14388,7 @@ MKS.module({
         // people in buildings that can hold the vehicle (a crew each, trained ahead for a
         // later purchase there), nearest first, then to free people from any building.
         async function fillSeats(data, edu, have, vt, ref) {
-            const missing = 10 - have.length;
+            const missing = ((edu && edu.free) || 10) - have.length;
             if (missing <= 0) return [];
             const prefTypes = (VT[vt] || [])[3] || [];
             const per = crewOf(vt);
@@ -14379,7 +14425,33 @@ MKS.module({
                 return m && cleanEdu(m[1]).includes(t);
             }).length;
         }
+        async function joinClass(url, form, pids) {
+            const fd = new FormData(form);
+            fd.delete('personal_ids[]');
+            pids.forEach((pid) => fd.append('personal_ids[]', pid));
+            const submit = form.querySelector('[name="commit"]');
+            if (submit) fd.set('commit', submit.value);
+            await hit(url, new URLSearchParams(fd));
+        }
         async function startTraining(edu, pids) {
+            if (edu.join) return joinClass(edu.join, edu.form, pids.slice(0, edu.free || 10));
+            if (edu.team) {
+                // New class in a team school: open it (free), then our people join it on its page.
+                const fd = new FormData(edu.form);
+                fd.set('education_select', edu.value);
+                fd.set('alliance[duration]', String(ctx.cfg.teamDuration || '3600'));
+                fd.set('alliance[cost]', '0');
+                const submit = edu.form.querySelector('[name="commit"]');
+                if (submit) fd.set('commit', submit.value);
+                const r = await hit(edu.form.getAttribute('action'), new URLSearchParams(fd));
+                const page = (r.url.match(/\/schoolings\/\d+/) || [])[0];
+                if (!page) throw new Error('teamopleiding niet gestart');
+                const doc = await getDoc(page);
+                const form = [...doc.forms].find((f) => /\/schoolings\/\d+\/education$/.test(f.getAttribute('action') || ''));
+                if (!form) throw new Error('teamopleiding: geen inschrijfformulier');
+                addLog(`teamopleiding gestart in ${edu.caption || 'teamschool'} (gratis, inschrijven ${Number(ctx.cfg.teamDuration || 3600) / 3600} uur)`, 'idle');
+                return joinClass(form.getAttribute('action'), form, pids.slice(0, 10));
+            }
             const fd = new FormData(edu.form);
             fd.set('education_select', edu.value);
             fd.set('alliance[duration]', '0'); // "Nu starten", not shared with the team
@@ -14501,8 +14573,8 @@ MKS.module({
                             const crew = trained.map((x) => x.pid);
                             // At most 10 per class: the rest follows as soon as a classroom is free.
                             const all = learners.map((x) => x.pid);
-                            const learnIds = all.slice(0, 10);
-                            const later = all.slice(10);
+                            const learnIds = all.slice(0, seatsOf(edu));
+                            const later = all.slice(seatsOf(edu));
                             const step = { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${p.caption} (voor ${v[0]}, terwijl de uitbreiding gebouwd wordt)`, cost: 0, need: p.need,
                                 run: () => startFull(step, data, edu, learnIds, p.vt, posOf(b)),
                                 check: async () => (await peopleAt(p.building, edu.key)).filter((x) => learnIds.includes(x.pid) && x.idle).length === 0,
@@ -14528,7 +14600,7 @@ MKS.module({
                     }
                     const edu = await education(p.training);
                     if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; markBlocked(p.vt, 20000); continue; }
-                    const batch = p.queue.slice(0, Math.min(10, ctx.cfg.trainSeats));
+                    const batch = p.queue.slice(0, seatsOf(edu));
                     const step = { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
                         run: () => startFull(step, data, edu, batch, p.vt, posOf(b)),
                         check: async () => (await peopleAt(p.building, p.key)).filter((x) => batch.includes(x.pid) && x.idle).length === 0,
@@ -14595,7 +14667,7 @@ MKS.module({
             // Otherwise train free people of the truck's own building, several trucks of one
             // building in one class; each truck is a project that links them when done.
             if (!edu.school) { markBlocked(c.vt, c.value); return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` }; }
-            const seats = Math.min(10, ctx.cfg.trainSeats);
+            const seats = seatsOf(edu);
             for (const { b } of trucks) {
                 const here = trucks.filter((t) => t.b.id === b.id);
                 const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has);
@@ -14817,7 +14889,7 @@ MKS.module({
                         continue;
                     }
                     if (!edu.school) { markBlocked(c.vt, c.value); reasons.push(`${b.caption}: ${v[4]} nodig, geen vrij klaslokaal`); continue; }
-                    const seats = Math.min(10, ctx.cfg.trainSeats);
+                    const seats = seatsOf(edu);
                     const mk = (bb, crew, learn) => ({ building: bb.id, caption: bb.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key,
                         training: v[4], people: [...crew, ...learn], started: Date.now() });
                     const group = [mk(b, trained.slice(0, want).map((p) => p.pid), learners.map((p) => p.pid))];
@@ -15438,7 +15510,40 @@ MKS.module({
          * "Personeel (Doel)" to the target and the hiring phase on "Automatisch".
          * ==================================================================== */
         const NO_STAFF = new Set([1, 2, 4, 7, 8, 10, 20, 26]);
+        // No premium: no "automatic". Once a day, every building under its target that is
+        // not hiring yet gets the longest free hiring phase (3 days) from its hire page.
+        async function hireNoPremium(data) {
+            const day = new Date().toISOString().slice(0, 10);
+            if (!state.hireDay || state.hireDay.date !== day) state.hireDay = { date: day, done: [] };
+            const done = new Set(state.hireDay.done);
+            const target = ctx.cfg.hireTarget;
+            let n = 0;
+            for (const b of data.buildings) {
+                if (n >= 25 || stopped) break;
+                if (done.has(b.id) || NO_STAFF.has(b.building_type) || !('personal_count' in b)) continue;
+                done.add(b.id);
+                if (Number(b.hiring_phase) > 0 || Number(b.personal_count) >= target) continue;
+                n++;
+                try {
+                    const doc = await getDoc(`/buildings/${b.id}/hire`);
+                    const opts = [...doc.querySelectorAll('a[href*="/hire_do/"]')]
+                        .map((a) => ({ href: a.getAttribute('href'), days: Number((a.getAttribute('href').match(/\/hire_do\/(\d+)$/) || [])[1]) }))
+                        .filter((o) => o.days > 0 && !/coins/i.test(o.href))
+                        .sort((x, y) => y.days - x.days);
+                    if (!opts.length) { addLog(`werving: ${b.caption} heeft geen gratis wervingsoptie`, 'warn'); continue; }
+                    await hit(opts[0].href);
+                    addLog(`werving: ${b.caption} ${opts[0].days} dagen gestart (${b.personal_count}/${target} mensen)`, 'idle');
+                } catch (e) {
+                    addLog(`werving mislukt: ${b.caption} (${e.message})`, 'warn');
+                }
+                await sleep(800);
+            }
+            state.hireDay.done = [...done];
+            save();
+        }
+
         async function fixHiring(data) {
+            if (ctx.cfg.hireMode === 'nopremium') return hireNoPremium(data);
             let n = 0;
             for (const b of data.buildings) {
                 if (n >= 10 || stopped) break;
@@ -15958,7 +16063,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261019185957' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261020110221' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16148,7 +16253,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261019185957',
+                version: '1.7.0.20261020110221',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
