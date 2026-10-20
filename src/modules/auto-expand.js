@@ -57,6 +57,10 @@ MKS.module({
                 + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
 
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
+        { group: 'Personeel', parent: 'doHire', key: 'hireMode', label: 'Account', type: 'select', default: 'premium',
+            options: [['premium', 'Premium (werving op automatisch)'], ['nopremium', 'Geen premium (elke dag 3 dagen werven)']],
+            help: 'Zonder premium bestaat "automatisch" niet. Dan loopt het script één keer per dag alle gebouwen langs en start '
+                + 'bij elk gebouw onder het doel dat niet al werft een werving van 3 dagen (zoals Personeel werven, 3 dagen). Nooit met coins.' },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
         { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenRouter, OpenAI of Gemini)', type: 'bool', default: false,
@@ -1744,7 +1748,40 @@ MKS.module({
          * "Personeel (Doel)" to the target and the hiring phase on "Automatisch".
          * ==================================================================== */
         const NO_STAFF = new Set([1, 2, 4, 7, 8, 10, 20, 26]);
+        // No premium: no "automatic". Once a day, every building under its target that is
+        // not hiring yet gets the longest free hiring phase (3 days) from its hire page.
+        async function hireNoPremium(data) {
+            const day = new Date().toISOString().slice(0, 10);
+            if (!state.hireDay || state.hireDay.date !== day) state.hireDay = { date: day, done: [] };
+            const done = new Set(state.hireDay.done);
+            const target = ctx.cfg.hireTarget;
+            let n = 0;
+            for (const b of data.buildings) {
+                if (n >= 25 || stopped) break;
+                if (done.has(b.id) || NO_STAFF.has(b.building_type) || !('personal_count' in b)) continue;
+                done.add(b.id);
+                if (Number(b.hiring_phase) > 0 || Number(b.personal_count) >= target) continue;
+                n++;
+                try {
+                    const doc = await getDoc(`/buildings/${b.id}/hire`);
+                    const opts = [...doc.querySelectorAll('a[href*="/hire_do/"]')]
+                        .map((a) => ({ href: a.getAttribute('href'), days: Number((a.getAttribute('href').match(/\/hire_do\/(\d+)$/) || [])[1]) }))
+                        .filter((o) => o.days > 0 && !/coins/i.test(o.href))
+                        .sort((x, y) => y.days - x.days);
+                    if (!opts.length) { addLog(`werving: ${b.caption} heeft geen gratis wervingsoptie`, 'warn'); continue; }
+                    await hit(opts[0].href);
+                    addLog(`werving: ${b.caption} ${opts[0].days} dagen gestart (${b.personal_count}/${target} mensen)`, 'idle');
+                } catch (e) {
+                    addLog(`werving mislukt: ${b.caption} (${e.message})`, 'warn');
+                }
+                await sleep(800);
+            }
+            state.hireDay.done = [...done];
+            save();
+        }
+
         async function fixHiring(data) {
+            if (ctx.cfg.hireMode === 'nopremium') return hireNoPremium(data);
             let n = 0;
             for (const b of data.buildings) {
                 if (n >= 10 || stopped) break;

@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261019185305 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261020103747 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261019185305';
+    const VERSION = '1.7.0.20261020103747';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10871,6 +10871,18 @@ function sweepAll(ctx) {
                 const confirmed = pool.filter((r) => after.querySelector(`a[personal_id="${r.pid}"]`)?.classList.contains('btn-assigned')).length;
                 people += confirmed;
                 if (confirmed) done++;
+                // Out of service by Auto-alarmeren for missing crew: back in service now.
+                if (confirmed) {
+                    try {
+                        const m = JSON.parse(GM_getValue('mks.autoDispatch.uncrewed.v1', '{}')) || {};
+                        if (m[v.id]) {
+                            await fetch(`/vehicles/${v.id}/set_fms/2`, { credentials: 'same-origin' });
+                            delete m[v.id];
+                            GM_setValue('mks.autoDispatch.uncrewed.v1', JSON.stringify(m));
+                            note(`${v.caption}: weer in dienst (stond uit dienst wegens ontbrekend personeel)`, 'ok');
+                        }
+                    } catch (e) { /* ignore */ }
+                }
                 if (confirmed < need) {
                     short++;
                     note(`${v.caption}: ${confirmed} van ${need} met "${opt.textContent.trim()}" gekoppeld${pool.length < need ? ' (niet genoeg vrij opgeleid personeel in dit gebouw)' : ''}`, 'warn');
@@ -12473,6 +12485,63 @@ MKS.module({
                 tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
             }
 
+            /* UNCREWED VEHICLES — out of service (status 6) while the trained crew is missing.
+             * Back in service as soon as someone is assigned to it (checked every 10 minutes,
+             * or right away by Personeel toewijzen), and after 12 hours for a new try. */
+            const BLOCK_KEY = 'mks.autoDispatch.uncrewed.v1';
+            // Vehicle type -> [minimum crew, training] (same table as Personeel toewijzen).
+            const CREW_TRAINING = { 11: [1, "Verkenningseenheid Brandweer"], 19: [1, "Hoofd Officier van Dienst - Brandweer"], 23: [1, "MMT-Bemanningslid"], 24: [1, "Adviseur Gevaarlijke Stoffen"], 26: [1, "Brandweerchauffeur-zwaar"], 28: [1, "Politiehelikopter"], 31: [1, "Brandweerchauffeur-zwaar"], 33: [4, "Duiker/Duikploegleider"], 35: [1, "Officier van Dienst - Politie"], 37: [1, "MMT-Bemanningslid"], 38: [1, "Officier van Dienst Geneeskunde"], 39: [2, "Mobiele Eenheid"], 40: [4, "Mobiele Eenheid"], 41: [2, "Vliegtuigbrandbestrijding"], 42: [2, "Vliegtuigbrandbestrijding"], 43: [2, "Vliegtuigbrandbestrijding"], 44: [1, "Airport Fire Officer / On Scene Commander"], 46: [1, "Motoragent"], 47: [1, "Hondengeleider"], 48: [1, "Hondengeleider"], 49: [4, "Oppervlakteredder"], 50: [4, "Oppervlakteredder"], 53: [1, "Operator AT"], 54: [2, "Operator AT"], 55: [1, "Operator AT"], 56: [1, "Voorlichter"], 57: [1, "Officier van Dienst Geneeskunde"], 60: [1, "Biketeam"], 64: [6, "ME - Aanhoudingseenheid"], 65: [2, "Waterredding"], 66: [2, "Waterredding"], 68: [2, "Brandweerchauffeur-zwaar"], 73: [1, "Bereden Brigade"], 74: [0, "Bereden Brigade"], 76: [1, "Waterredding"], 77: [2, "Groot vaarbewijs"], 78: [2, "Groot vaarbewijs"], 79: [2, "Groot vaarbewijs"], 80: [2, "SAR Helicopter"], 81: [1, "Weginspecteur"], 82: [1, "Weginspecteur"], 83: [1, "Weginspecteur"], 84: [4, "ME - Waterwerper"], 85: [2, "Fire Bucket Operator"], 86: [7, "Handcrew"], 87: [1, "Landelijk Adviseur Natuurbranden"], 88: [1, "Brandweerchauffeur-zwaar"], 90: [7, "Teamleider STH"], 92: [5, "Teamlid USAR"], 93: [4, "Teamlid USAR"], 94: [2, "Brandweerchauffeur-zwaar"], 95: [1, "Teamlid USAR"], 96: [1, "Teamlid USAR"], 97: [2, "Hondengeleider USAR"], 98: [1, "Chauffeur Dienst Infra"], 99: [1, "Verkeersongevallen Analist"], 100: [6, "Geneeskundige bijstandsverlener"], 101: [4, "Noodhulpteam"], 103: [3, "Intensive Care Team"], 104: [1, "Berger Training"], 105: [1, "Berger Training"], 106: [1, "Berger Training"], 107: [1, "Berger Training"], 108: [1, "Berger Training"], 109: [1, "Berger Training"], 110: [1, "Marechaussee"], 111: [1, "Marechaussee"], 112: [1, "Marechaussee"], 113: [1, "Bomontmanteling"], 114: [2, "Bomontmanteling"], 115: [2, "Bomontmanteling"], 116: [2, "Hondengeleider EOD"], 117: [2, "Duiker Defensie"], 119: [1, "Bomverkenner"], 120: [2, "Verzorger"], 122: [2, "Hygiënemedewerker"], 124: [1, "Pelotonscommandant Logistiek"], 128: [3, "Drone Flightcrew"], 129: [3, "TDV Drone Flightcrew"], 130: [2, "Brandweerchauffeur-zwaar"], 131: [2, "Brandweerchauffeur-zwaar"], 132: [2, "Brandweerchauffeur-zwaar"], 133: [1, "Brandweerchauffeur-zwaar"], 135: [4, "Gevaarlijke Stoffen Eenheid"], 137: [4, "Gevaarlijke Stoffen Eenheid"], 139: [6, "Ontsmettings Eenheid"], 140: [6, "Ontsmettings Eenheid"], 142: [6, "Ontsmettings Eenheid"], 143: [6, "Ontsmettings Eenheid"], 144: [1, "Incidentenbestrijder spoor"], 145: [1, "Officier van Dienst Incidentenbestrijder spoor"], 146: [1, "Brandweerchauffeur-zwaar"], 147: [1, "Brandweerchauffeur-zwaar"], 148: [1, "Brandweerchauffeur-zwaar"], 150: [1, "Incidentenbestrijder spoor"], 152: [1, "Incidentenbestrijder spoor"] };
+            const loadBlocked = () => { try { return JSON.parse(GM_getValue(BLOCK_KEY, '{}')) || {}; } catch (e) { return {}; } };
+            const saveBlocked = (m) => { try { GM_setValue(BLOCK_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ } };
+            async function crewCount(vid) {
+                const r = await fetch(`/vehicles/${vid}/zuweisung`, { credentials: 'same-origin' });
+                if (!r.ok) return null;
+                const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+                return d.querySelectorAll('a.btn-assigned[personal_id]').length;
+            }
+            async function blockUncrewed(ids, said) {
+                const m = loadBlocked();
+                for (const vid of ids) {
+                    if (m[vid]) continue;
+                    try {
+                        const crew = await crewCount(vid);
+                        const r = await fetch(`/vehicles/${vid}/set_fms/6`, { credentials: 'same-origin' });
+                        if (!r.ok) continue;
+                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+                        const seg = String(said).split(/\||×/).find((x) => v && v.caption && x.includes(v.caption)) || String(said);
+                        const min = Number((seg.match(/minimaal (\d+) person/i) || [])[1]) || null;
+                        const tr = v ? CREW_TRAINING[v.vehicle_type] : null;
+                        const bld = v ? await fetch(`/api/buildings/${v.building_id}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null) : null;
+                        m[vid] = { at: Date.now(), crew, caption: v && v.caption, vt: v && v.vehicle_type, building: bld && bld.caption, min: min || (tr && tr[0]) || null,
+                            training: tr ? tr[1] : null, said: String(said).slice(0, 160) };
+                        addLog(v && v.caption ? v.caption : `voertuig ${vid}`, `bleef staan (personeel/opleiding ontbreekt): uit dienst gezet (status 6) tot er mensen op staan`, 'warn');
+                    } catch (e) { ctx.warn('block uncrewed', e); }
+                }
+                saveBlocked(m);
+            }
+            async function checkUncrewed() {
+                const m = loadBlocked();
+                const ids = Object.keys(m);
+                if (!ids.length) return;
+                for (const vid of ids) {
+                    try {
+                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+                        if (!v) { delete m[vid]; continue; }               // sold or gone
+                        if (Number(v.fms_real) !== 6) { delete m[vid]; continue; } // put back by hand
+                        const crew = await crewCount(vid);
+                        const more = crew != null && m[vid].crew != null && crew > m[vid].crew;
+                        if (more || Date.now() - m[vid].at > 12 * 3600000) {
+                            await fetch(`/vehicles/${vid}/set_fms/2`, { credentials: 'same-origin' });
+                            addLog(v.caption || `voertuig ${vid}`, more ? `weer in dienst: ${crew} personeel toegewezen` : 'weer in dienst na 12 uur, nieuwe poging', 'ok');
+                            delete m[vid];
+                        }
+                    } catch (e) { ctx.warn('check uncrewed', e); }
+                }
+                saveBlocked(m);
+            }
+            setInterval(() => { if (!stopped) checkUncrewed(); }, 10 * 60000);
+            setTimeout(() => checkUncrewed(), 60000);
+
             // One mission in a hidden iframe. Resolves with the worker's report.
             // Mission jobs running right now in either loop, so maxPerHour holds for both together.
             let inFlight = 0;
@@ -12533,6 +12602,28 @@ MKS.module({
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
                                     : job.team || job.single ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
+                            } catch (e) { /* ignore */ }
+                            // "Stayed behind: not enough trained personnel": the game names it on
+                            // the page after the alarm. Those vehicles go out of service (status 6)
+                            // until people are assigned, instead of being picked every round.
+                            try {
+                                const doc = frame.contentDocument;
+                                const said = [...doc.querySelectorAll('.alert')].map((a) => a.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
+                                // "KNRM-2 RB-K heeft geen geschikt personeel beschikbaar (minimaal 2 personen)
+                                // of het personeel heeft niet de juiste opleiding." One line per vehicle.
+                                const names = [...said.matchAll(/(?:^|\|\s*|×)\s*([^|×]+?) heeft geen geschikt personeel/gi)].map((m) => m[1].trim());
+                                if (!transport && names.length) {
+                                    const there = new Set([...doc.querySelectorAll('#mission_vehicle_driving a[href^="/vehicles/"], #mission_vehicle_at_mission a[href^="/vehicles/"]')]
+                                        .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)/) || [])[1]));
+                                    // The chosen vehicles that did not leave and whose row carries one of those names.
+                                    const stayed = (result.ids || []).map(String).filter((v) => {
+                                        if (there.has(v)) return false;
+                                        const row = doc.querySelector(`input.vehicle_checkbox[value="${v}"]`)?.closest('tr');
+                                        const t = row ? row.textContent.replace(/\s+/g, ' ') : '';
+                                        return !row || names.some((n) => t.includes(n));
+                                    });
+                                    if (stayed.length) blockUncrewed(stayed, said);
+                                }
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
                         }, { once: true });
@@ -13385,6 +13476,25 @@ MKS.module({
                             <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
+                    ${(() => {
+                        const m = loadBlocked();
+                        const list = Object.entries(m).sort((a, b) => b[1].at - a[1].at);
+                        if (!list.length) return '';
+                        // Per training: people needed = the crew each vehicle still misses.
+                        const per = {};
+                        for (const [, x] of list) {
+                            const k = x.training || 'onbekende opleiding';
+                            per[k] = (per[k] || 0) + Math.max(1, (x.min || 1) - (x.crew || 0));
+                        }
+                        const sum = Object.entries(per).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<b>${n}×</b> ${esc(k)}`).join(' · ');
+                        return ctx.fold('uncrewed', 'Uit dienst: personeel ontbreekt', `<p class="mks-note">Deze voertuigen bleven staan omdat er geen (opgeleid) personeel op zat, en staan op status 6 tot er mensen
+                            op staan. Nodig in totaal: ${sum}.</p>
+                            <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Post</th><th>Nodig</th><th>Sinds</th></tr></thead><tbody>
+                            ${list.map(([, x]) => `<tr><td>${esc(x.caption || '')}</td><td>${esc(x.building || '')}</td>
+                                <td>${x.min ? `${x.min}× ` : ''}${esc(x.training || '?')}${x.crew != null ? ` <span class="mks-dim">(nu ${x.crew})</span>` : ''}</td>
+                                <td class="mono mks-dim">${new Date(x.at).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td></tr>`).join('')}
+                            </tbody></table></div>`, { open: true, count: list.length });
+                    })()}
                     ${ctx.fold('needs', 'Tekort per voertuigtype', `
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
@@ -13641,6 +13751,10 @@ MKS.module({
                 + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
 
         { group: 'Personeel', key: 'doHire', label: 'Werving op automatisch zetten', type: 'bool', default: true },
+        { group: 'Personeel', parent: 'doHire', key: 'hireMode', label: 'Account', type: 'select', default: 'premium',
+            options: [['premium', 'Premium (werving op automatisch)'], ['nopremium', 'Geen premium (elke dag 3 dagen werven)']],
+            help: 'Zonder premium bestaat "automatisch" niet. Dan loopt het script één keer per dag alle gebouwen langs en start '
+                + 'bij elk gebouw onder het doel dat niet al werft een werving van 3 dagen (zoals Personeel werven, 3 dagen). Nooit met coins.' },
         { group: 'Personeel', parent: 'doHire', key: 'hireTarget', label: 'Doel per gebouw', type: 'number', default: 300, min: 0, max: 1000, step: 10, unit: 'mensen' },
 
         { group: 'AI', key: 'aiOn', label: 'AI beslist (OpenRouter, OpenAI of Gemini)', type: 'bool', default: false,
@@ -15328,7 +15442,40 @@ MKS.module({
          * "Personeel (Doel)" to the target and the hiring phase on "Automatisch".
          * ==================================================================== */
         const NO_STAFF = new Set([1, 2, 4, 7, 8, 10, 20, 26]);
+        // No premium: no "automatic". Once a day, every building under its target that is
+        // not hiring yet gets the longest free hiring phase (3 days) from its hire page.
+        async function hireNoPremium(data) {
+            const day = new Date().toISOString().slice(0, 10);
+            if (!state.hireDay || state.hireDay.date !== day) state.hireDay = { date: day, done: [] };
+            const done = new Set(state.hireDay.done);
+            const target = ctx.cfg.hireTarget;
+            let n = 0;
+            for (const b of data.buildings) {
+                if (n >= 25 || stopped) break;
+                if (done.has(b.id) || NO_STAFF.has(b.building_type) || !('personal_count' in b)) continue;
+                done.add(b.id);
+                if (Number(b.hiring_phase) > 0 || Number(b.personal_count) >= target) continue;
+                n++;
+                try {
+                    const doc = await getDoc(`/buildings/${b.id}/hire`);
+                    const opts = [...doc.querySelectorAll('a[href*="/hire_do/"]')]
+                        .map((a) => ({ href: a.getAttribute('href'), days: Number((a.getAttribute('href').match(/\/hire_do\/(\d+)$/) || [])[1]) }))
+                        .filter((o) => o.days > 0 && !/coins/i.test(o.href))
+                        .sort((x, y) => y.days - x.days);
+                    if (!opts.length) { addLog(`werving: ${b.caption} heeft geen gratis wervingsoptie`, 'warn'); continue; }
+                    await hit(opts[0].href);
+                    addLog(`werving: ${b.caption} ${opts[0].days} dagen gestart (${b.personal_count}/${target} mensen)`, 'idle');
+                } catch (e) {
+                    addLog(`werving mislukt: ${b.caption} (${e.message})`, 'warn');
+                }
+                await sleep(800);
+            }
+            state.hireDay.done = [...done];
+            save();
+        }
+
         async function fixHiring(data) {
+            if (ctx.cfg.hireMode === 'nopremium') return hireNoPremium(data);
             let n = 0;
             for (const b of data.buildings) {
                 if (n >= 10 || stopped) break;
@@ -15848,7 +15995,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261019185305' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261020103747' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16038,10 +16185,11 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261019185305',
+                version: '1.7.0.20261020103747',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
+                    uncrewed: read('mks.autoDispatch.uncrewed.v1', {}),
                     needs: read('mks.autoDispatch.needs.v1', {}),
                     live: dispatch ? strip({ running: dispatch.running, stats: dispatch.stats, spawned1h: dispatch.spawned1h, holds: dispatch.holds, team: dispatch.team,
                         log: (dispatch.log || []).slice(0, 200) }) : null,
