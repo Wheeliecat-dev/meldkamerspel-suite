@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261020103747 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261020125800 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261020103747';
+    const VERSION = '1.7.0.20261020125800';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10871,18 +10871,6 @@ function sweepAll(ctx) {
                 const confirmed = pool.filter((r) => after.querySelector(`a[personal_id="${r.pid}"]`)?.classList.contains('btn-assigned')).length;
                 people += confirmed;
                 if (confirmed) done++;
-                // Out of service by Auto-alarmeren for missing crew: back in service now.
-                if (confirmed) {
-                    try {
-                        const m = JSON.parse(GM_getValue('mks.autoDispatch.uncrewed.v1', '{}')) || {};
-                        if (m[v.id]) {
-                            await fetch(`/vehicles/${v.id}/set_fms/2`, { credentials: 'same-origin' });
-                            delete m[v.id];
-                            GM_setValue('mks.autoDispatch.uncrewed.v1', JSON.stringify(m));
-                            note(`${v.caption}: weer in dienst (stond uit dienst wegens ontbrekend personeel)`, 'ok');
-                        }
-                    } catch (e) { /* ignore */ }
-                }
                 if (confirmed < need) {
                     short++;
                     note(`${v.caption}: ${confirmed} van ${need} met "${opt.textContent.trim()}" gekoppeld${pool.length < need ? ' (niet genoeg vrij opgeleid personeel in dit gebouw)' : ''}`, 'warn');
@@ -12485,62 +12473,24 @@ MKS.module({
                 tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
             }
 
-            /* UNCREWED VEHICLES — out of service (status 6) while the trained crew is missing.
-             * Back in service as soon as someone is assigned to it (checked every 10 minutes,
-             * or right away by Personeel toewijzen), and after 12 hours for a new try. */
+            /* UNCREWED VEHICLES — the status 6 blocking is switched off (it also caught vehicles
+             * that had crew). Whatever it put out of service is put back (status 2), once. */
             const BLOCK_KEY = 'mks.autoDispatch.uncrewed.v1';
-            // Vehicle type -> [minimum crew, training] (same table as Personeel toewijzen).
-            const CREW_TRAINING = { 11: [1, "Verkenningseenheid Brandweer"], 19: [1, "Hoofd Officier van Dienst - Brandweer"], 23: [1, "MMT-Bemanningslid"], 24: [1, "Adviseur Gevaarlijke Stoffen"], 26: [1, "Brandweerchauffeur-zwaar"], 28: [1, "Politiehelikopter"], 31: [1, "Brandweerchauffeur-zwaar"], 33: [4, "Duiker/Duikploegleider"], 35: [1, "Officier van Dienst - Politie"], 37: [1, "MMT-Bemanningslid"], 38: [1, "Officier van Dienst Geneeskunde"], 39: [2, "Mobiele Eenheid"], 40: [4, "Mobiele Eenheid"], 41: [2, "Vliegtuigbrandbestrijding"], 42: [2, "Vliegtuigbrandbestrijding"], 43: [2, "Vliegtuigbrandbestrijding"], 44: [1, "Airport Fire Officer / On Scene Commander"], 46: [1, "Motoragent"], 47: [1, "Hondengeleider"], 48: [1, "Hondengeleider"], 49: [4, "Oppervlakteredder"], 50: [4, "Oppervlakteredder"], 53: [1, "Operator AT"], 54: [2, "Operator AT"], 55: [1, "Operator AT"], 56: [1, "Voorlichter"], 57: [1, "Officier van Dienst Geneeskunde"], 60: [1, "Biketeam"], 64: [6, "ME - Aanhoudingseenheid"], 65: [2, "Waterredding"], 66: [2, "Waterredding"], 68: [2, "Brandweerchauffeur-zwaar"], 73: [1, "Bereden Brigade"], 74: [0, "Bereden Brigade"], 76: [1, "Waterredding"], 77: [2, "Groot vaarbewijs"], 78: [2, "Groot vaarbewijs"], 79: [2, "Groot vaarbewijs"], 80: [2, "SAR Helicopter"], 81: [1, "Weginspecteur"], 82: [1, "Weginspecteur"], 83: [1, "Weginspecteur"], 84: [4, "ME - Waterwerper"], 85: [2, "Fire Bucket Operator"], 86: [7, "Handcrew"], 87: [1, "Landelijk Adviseur Natuurbranden"], 88: [1, "Brandweerchauffeur-zwaar"], 90: [7, "Teamleider STH"], 92: [5, "Teamlid USAR"], 93: [4, "Teamlid USAR"], 94: [2, "Brandweerchauffeur-zwaar"], 95: [1, "Teamlid USAR"], 96: [1, "Teamlid USAR"], 97: [2, "Hondengeleider USAR"], 98: [1, "Chauffeur Dienst Infra"], 99: [1, "Verkeersongevallen Analist"], 100: [6, "Geneeskundige bijstandsverlener"], 101: [4, "Noodhulpteam"], 103: [3, "Intensive Care Team"], 104: [1, "Berger Training"], 105: [1, "Berger Training"], 106: [1, "Berger Training"], 107: [1, "Berger Training"], 108: [1, "Berger Training"], 109: [1, "Berger Training"], 110: [1, "Marechaussee"], 111: [1, "Marechaussee"], 112: [1, "Marechaussee"], 113: [1, "Bomontmanteling"], 114: [2, "Bomontmanteling"], 115: [2, "Bomontmanteling"], 116: [2, "Hondengeleider EOD"], 117: [2, "Duiker Defensie"], 119: [1, "Bomverkenner"], 120: [2, "Verzorger"], 122: [2, "Hygiënemedewerker"], 124: [1, "Pelotonscommandant Logistiek"], 128: [3, "Drone Flightcrew"], 129: [3, "TDV Drone Flightcrew"], 130: [2, "Brandweerchauffeur-zwaar"], 131: [2, "Brandweerchauffeur-zwaar"], 132: [2, "Brandweerchauffeur-zwaar"], 133: [1, "Brandweerchauffeur-zwaar"], 135: [4, "Gevaarlijke Stoffen Eenheid"], 137: [4, "Gevaarlijke Stoffen Eenheid"], 139: [6, "Ontsmettings Eenheid"], 140: [6, "Ontsmettings Eenheid"], 142: [6, "Ontsmettings Eenheid"], 143: [6, "Ontsmettings Eenheid"], 144: [1, "Incidentenbestrijder spoor"], 145: [1, "Officier van Dienst Incidentenbestrijder spoor"], 146: [1, "Brandweerchauffeur-zwaar"], 147: [1, "Brandweerchauffeur-zwaar"], 148: [1, "Brandweerchauffeur-zwaar"], 150: [1, "Incidentenbestrijder spoor"], 152: [1, "Incidentenbestrijder spoor"] };
-            const loadBlocked = () => { try { return JSON.parse(GM_getValue(BLOCK_KEY, '{}')) || {}; } catch (e) { return {}; } };
-            const saveBlocked = (m) => { try { GM_setValue(BLOCK_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ } };
-            async function crewCount(vid) {
-                const r = await fetch(`/vehicles/${vid}/zuweisung`, { credentials: 'same-origin' });
-                if (!r.ok) return null;
-                const d = new DOMParser().parseFromString(await r.text(), 'text/html');
-                return d.querySelectorAll('a.btn-assigned[personal_id]').length;
-            }
-            async function blockUncrewed(ids, said) {
-                const m = loadBlocked();
-                for (const vid of ids) {
-                    if (m[vid]) continue;
-                    try {
-                        const crew = await crewCount(vid);
-                        const r = await fetch(`/vehicles/${vid}/set_fms/6`, { credentials: 'same-origin' });
-                        if (!r.ok) continue;
-                        const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
-                        const seg = String(said).split(/\||×/).find((x) => v && v.caption && x.includes(v.caption)) || String(said);
-                        const min = Number((seg.match(/minimaal (\d+) person/i) || [])[1]) || null;
-                        const tr = v ? CREW_TRAINING[v.vehicle_type] : null;
-                        const bld = v ? await fetch(`/api/buildings/${v.building_id}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null) : null;
-                        m[vid] = { at: Date.now(), crew, caption: v && v.caption, vt: v && v.vehicle_type, building: bld && bld.caption, min: min || (tr && tr[0]) || null,
-                            training: tr ? tr[1] : null, said: String(said).slice(0, 160) };
-                        addLog(v && v.caption ? v.caption : `voertuig ${vid}`, `bleef staan (personeel/opleiding ontbreekt): uit dienst gezet (status 6) tot er mensen op staan`, 'warn');
-                    } catch (e) { ctx.warn('block uncrewed', e); }
-                }
-                saveBlocked(m);
-            }
-            async function checkUncrewed() {
-                const m = loadBlocked();
-                const ids = Object.keys(m);
-                if (!ids.length) return;
-                for (const vid of ids) {
+            async function releaseUncrewed() {
+                let m;
+                try { m = JSON.parse(GM_getValue(BLOCK_KEY, '{}')) || {}; } catch (e) { m = {}; }
+                for (const vid of Object.keys(m)) {
                     try {
                         const v = await fetch(`/api/vehicles/${vid}`, { credentials: 'same-origin' }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
-                        if (!v) { delete m[vid]; continue; }               // sold or gone
-                        if (Number(v.fms_real) !== 6) { delete m[vid]; continue; } // put back by hand
-                        const crew = await crewCount(vid);
-                        const more = crew != null && m[vid].crew != null && crew > m[vid].crew;
-                        if (more || Date.now() - m[vid].at > 12 * 3600000) {
+                        if (v && Number(v.fms_real) === 6) {
                             await fetch(`/vehicles/${vid}/set_fms/2`, { credentials: 'same-origin' });
-                            addLog(v.caption || `voertuig ${vid}`, more ? `weer in dienst: ${crew} personeel toegewezen` : 'weer in dienst na 12 uur, nieuwe poging', 'ok');
-                            delete m[vid];
+                            addLog(v.caption || `voertuig ${vid}`, 'weer in dienst (status 6 van Auto-alarmeren opgeheven)', 'ok');
                         }
-                    } catch (e) { ctx.warn('check uncrewed', e); }
+                    } catch (e) { ctx.warn('release uncrewed', e); }
                 }
-                saveBlocked(m);
+                try { GM_setValue(BLOCK_KEY, '{}'); } catch (e) { /* ignore */ }
             }
-            setInterval(() => { if (!stopped) checkUncrewed(); }, 10 * 60000);
-            setTimeout(() => checkUncrewed(), 60000);
+            setTimeout(() => releaseUncrewed(), 20000);
 
             // One mission in a hidden iframe. Resolves with the worker's report.
             // Mission jobs running right now in either loop, so maxPerHour holds for both together.
@@ -12602,28 +12552,6 @@ MKS.module({
                                     ? /^\/vehicles\/\d+\/(patient|gefangener)\/-?\d+/.test(frame.contentWindow.location.pathname)
                                     : job.team || job.single ? ownRowOn(frame.contentDocument, job.me)
                                         : !!frame.contentDocument.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr'));
-                            } catch (e) { /* ignore */ }
-                            // "Stayed behind: not enough trained personnel": the game names it on
-                            // the page after the alarm. Those vehicles go out of service (status 6)
-                            // until people are assigned, instead of being picked every round.
-                            try {
-                                const doc = frame.contentDocument;
-                                const said = [...doc.querySelectorAll('.alert')].map((a) => a.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
-                                // "KNRM-2 RB-K heeft geen geschikt personeel beschikbaar (minimaal 2 personen)
-                                // of het personeel heeft niet de juiste opleiding." One line per vehicle.
-                                const names = [...said.matchAll(/(?:^|\|\s*|×)\s*([^|×]+?) heeft geen geschikt personeel/gi)].map((m) => m[1].trim());
-                                if (!transport && names.length) {
-                                    const there = new Set([...doc.querySelectorAll('#mission_vehicle_driving a[href^="/vehicles/"], #mission_vehicle_at_mission a[href^="/vehicles/"]')]
-                                        .map((a) => (a.getAttribute('href').match(/^\/vehicles\/(\d+)/) || [])[1]));
-                                    // The chosen vehicles that did not leave and whose row carries one of those names.
-                                    const stayed = (result.ids || []).map(String).filter((v) => {
-                                        if (there.has(v)) return false;
-                                        const row = doc.querySelector(`input.vehicle_checkbox[value="${v}"]`)?.closest('tr');
-                                        const t = row ? row.textContent.replace(/\s+/g, ' ') : '';
-                                        return !row || names.some((n) => t.includes(n));
-                                    });
-                                    if (stayed.length) blockUncrewed(stayed, said);
-                                }
                             } catch (e) { /* ignore */ }
                             if (ok) cleanup({ ...result, result: 'sent' });
                         }, { once: true });
@@ -13476,25 +13404,6 @@ MKS.module({
                             <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
-                    ${(() => {
-                        const m = loadBlocked();
-                        const list = Object.entries(m).sort((a, b) => b[1].at - a[1].at);
-                        if (!list.length) return '';
-                        // Per training: people needed = the crew each vehicle still misses.
-                        const per = {};
-                        for (const [, x] of list) {
-                            const k = x.training || 'onbekende opleiding';
-                            per[k] = (per[k] || 0) + Math.max(1, (x.min || 1) - (x.crew || 0));
-                        }
-                        const sum = Object.entries(per).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<b>${n}×</b> ${esc(k)}`).join(' · ');
-                        return ctx.fold('uncrewed', 'Uit dienst: personeel ontbreekt', `<p class="mks-note">Deze voertuigen bleven staan omdat er geen (opgeleid) personeel op zat, en staan op status 6 tot er mensen
-                            op staan. Nodig in totaal: ${sum}.</p>
-                            <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Voertuig</th><th>Post</th><th>Nodig</th><th>Sinds</th></tr></thead><tbody>
-                            ${list.map(([, x]) => `<tr><td>${esc(x.caption || '')}</td><td>${esc(x.building || '')}</td>
-                                <td>${x.min ? `${x.min}× ` : ''}${esc(x.training || '?')}${x.crew != null ? ` <span class="mks-dim">(nu ${x.crew})</span>` : ''}</td>
-                                <td class="mono mks-dim">${new Date(x.at).toLocaleString('nl-NL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td></tr>`).join('')}
-                            </tbody></table></div>`, { open: true, count: list.length });
-                    })()}
                     ${ctx.fold('needs', 'Tekort per voertuigtype', `
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
@@ -13782,6 +13691,11 @@ MKS.module({
             help: 'Zoveel van de waardevolste tekorten worden uitgewerkt; de stap met de meeste credits per uitgegeven credit wint.' },
         { advanced: true, key: 'groupMax', label: 'Gebouwen per opleiding', type: 'number', default: 5, min: 1, max: 10, step: 1,
             help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste.' },
+        { advanced: true, key: 'teamSchools', label: 'Teamscholen gebruiken', type: 'bool', default: true,
+            help: 'Is er geen vrij klaslokaal in je eigen scholen, dan doet je personeel mee aan een gratis opengestelde teamopleiding, '
+                + 'of start het script er zelf een in een school van het team (Team > Gebouwen), gratis voor teamleden.' },
+        { advanced: true, parent: 'teamSchools', key: 'teamDuration', label: 'Inschrijftijd teamopleiding', type: 'select', default: '3600',
+            options: [['3600', '1 uur'], ['43200', '12 uur'], ['86400', '1 dag'], ['172800', '2 dagen']] },
         { advanced: true, key: 'trainSeats', label: 'Plaatsen per opleiding', type: 'number', default: 10, min: 1, max: 10, step: 1,
             help: 'Eerst personeel van de gebouwen die het voertuig krijgen. Een klas start pas met alle plaatsen bezet: de rest gaat naar vrij personeel '
                 + 'van gebouwen die dat voertuig kunnen hebben (dichtstbij eerst), daarna van andere gebouwen.' },
@@ -14325,10 +14239,47 @@ MKS.module({
                         if (!eduCache[n]) eduCache[n] = { key: o.value.split(':')[0], value: o.value, school: s.id, form };
                     }
                 }
+                if (ctx.cfg.teamSchools) await teamEducation();
             }
             const n = cleanEdu(name);
             return eduCache[n] || { key: (state.eduKeys || {})[n] || null };
         }
+        // Team schools, for trainings no own classroom gives: first a class a member opened
+        // that is free and has seats ("Opengestelde opleidingen"), else a new class in a
+        // team school (Team > Gebouwen), free and open for sign-up as long as the setting says.
+        async function teamEducation() {
+            try {
+                const list = await getDoc('/schoolings');
+                for (const a of list.querySelectorAll('a[href^="/schoolings/"]')) {
+                    const n = cleanEdu(a.textContent.replace(/^[^-]+-\s*/, ''));
+                    if (eduCache[n] || !n) continue;
+                    const doc = await getDoc(a.getAttribute('href'));
+                    const form = [...doc.forms].find((f) => /\/schoolings\/\d+\/education$/.test(f.getAttribute('action') || ''));
+                    const info = [...doc.querySelectorAll('.alert')].map((x) => x.textContent).join(' ');
+                    const free = Number((info.match(/nog (\d+) plaatsen vrij/i) || [])[1]) || 0;
+                    const cost = Number((info.match(/kosten bedragen ([\d.]+) Credits/i) || [])[1]);
+                    if (!form || !free || cost !== 0) continue;
+                    const key = (state.eduKeys || {})[n];
+                    if (key) eduCache[n] = { key, school: a.getAttribute('href'), join: form.getAttribute('action'), form, free, team: true };
+                }
+            } catch (e) { ctx.warn('team classes', e); }
+            try {
+                for (const s of (await api('/api/alliance_buildings')).filter((b) => SCHOOL_TYPES.includes(b.building_type))) {
+                    const doc = await getDoc(`/buildings/${s.id}`);
+                    const form = [...doc.forms].find((f) => /\/education$/.test(f.getAttribute('action') || ''));
+                    if (!form) continue;
+                    for (const o of form.querySelectorAll('select[name="education_select"] option')) {
+                        if (!o.value) continue;
+                        const n = cleanEdu(o.textContent);
+                        state.eduKeys = state.eduKeys || {};
+                        state.eduKeys[n] = o.value.split(':')[0];
+                        if (!eduCache[n]) eduCache[n] = { key: o.value.split(':')[0], value: o.value, school: s.id, form, team: true, caption: s.caption };
+                    }
+                }
+            } catch (e) { ctx.warn('team schools', e); }
+        }
+        // Seats one class can take for us: an open team class may have fewer than 10 left.
+        const seatsOf = (edu) => Math.min(10, ctx.cfg.trainSeats, (edu && edu.free) || 10);
         // People of a building as the school form lists them: has the training, free
         // (not bound to a vehicle, not in training, not reserved by another project).
         async function peopleAt(buildingId, key) {
@@ -14346,7 +14297,7 @@ MKS.module({
         // people in buildings that can hold the vehicle (a crew each, trained ahead for a
         // later purchase there), nearest first, then to free people from any building.
         async function fillSeats(data, edu, have, vt, ref) {
-            const missing = 10 - have.length;
+            const missing = ((edu && edu.free) || 10) - have.length;
             if (missing <= 0) return [];
             const prefTypes = (VT[vt] || [])[3] || [];
             const per = crewOf(vt);
@@ -14383,7 +14334,33 @@ MKS.module({
                 return m && cleanEdu(m[1]).includes(t);
             }).length;
         }
+        async function joinClass(url, form, pids) {
+            const fd = new FormData(form);
+            fd.delete('personal_ids[]');
+            pids.forEach((pid) => fd.append('personal_ids[]', pid));
+            const submit = form.querySelector('[name="commit"]');
+            if (submit) fd.set('commit', submit.value);
+            await hit(url, new URLSearchParams(fd));
+        }
         async function startTraining(edu, pids) {
+            if (edu.join) return joinClass(edu.join, edu.form, pids.slice(0, edu.free || 10));
+            if (edu.team) {
+                // New class in a team school: open it (free), then our people join it on its page.
+                const fd = new FormData(edu.form);
+                fd.set('education_select', edu.value);
+                fd.set('alliance[duration]', String(ctx.cfg.teamDuration || '3600'));
+                fd.set('alliance[cost]', '0');
+                const submit = edu.form.querySelector('[name="commit"]');
+                if (submit) fd.set('commit', submit.value);
+                const r = await hit(edu.form.getAttribute('action'), new URLSearchParams(fd));
+                const page = (r.url.match(/\/schoolings\/\d+/) || [])[0];
+                if (!page) throw new Error('teamopleiding niet gestart');
+                const doc = await getDoc(page);
+                const form = [...doc.forms].find((f) => /\/schoolings\/\d+\/education$/.test(f.getAttribute('action') || ''));
+                if (!form) throw new Error('teamopleiding: geen inschrijfformulier');
+                addLog(`teamopleiding gestart in ${edu.caption || 'teamschool'} (gratis, inschrijven ${Number(ctx.cfg.teamDuration || 3600) / 3600} uur)`, 'idle');
+                return joinClass(form.getAttribute('action'), form, pids.slice(0, 10));
+            }
             const fd = new FormData(edu.form);
             fd.set('education_select', edu.value);
             fd.set('alliance[duration]', '0'); // "Nu starten", not shared with the team
@@ -14505,8 +14482,8 @@ MKS.module({
                             const crew = trained.map((x) => x.pid);
                             // At most 10 per class: the rest follows as soon as a classroom is free.
                             const all = learners.map((x) => x.pid);
-                            const learnIds = all.slice(0, 10);
-                            const later = all.slice(10);
+                            const learnIds = all.slice(0, seatsOf(edu));
+                            const later = all.slice(seatsOf(edu));
                             const step = { label: `opleiding ${v[4]} voor ${learnIds.length} pers. van ${p.caption} (voor ${v[0]}, terwijl de uitbreiding gebouwd wordt)`, cost: 0, need: p.need,
                                 run: () => startFull(step, data, edu, learnIds, p.vt, posOf(b)),
                                 check: async () => (await peopleAt(p.building, edu.key)).filter((x) => learnIds.includes(x.pid) && x.idle).length === 0,
@@ -14532,7 +14509,7 @@ MKS.module({
                     }
                     const edu = await education(p.training);
                     if (!edu.school) { p.wait = 'wacht op een vrij klaslokaal'; markBlocked(p.vt, 20000); continue; }
-                    const batch = p.queue.slice(0, Math.min(10, ctx.cfg.trainSeats));
+                    const batch = p.queue.slice(0, seatsOf(edu));
                     const step = { label: `opleiding ${p.training} voor ${batch.length} pers. van ${p.caption} (vervolg, project)`, cost: 0, need: p.need,
                         run: () => startFull(step, data, edu, batch, p.vt, posOf(b)),
                         check: async () => (await peopleAt(p.building, p.key)).filter((x) => batch.includes(x.pid) && x.idle).length === 0,
@@ -14599,7 +14576,7 @@ MKS.module({
             // Otherwise train free people of the truck's own building, several trucks of one
             // building in one class; each truck is a project that links them when done.
             if (!edu.school) { markBlocked(c.vt, c.value); return { skip: `${c.name}: ${v[4]} nodig om paardentrucks te vullen, geen vrij klaslokaal` }; }
-            const seats = Math.min(10, ctx.cfg.trainSeats);
+            const seats = seatsOf(edu);
             for (const { b } of trucks) {
                 const here = trucks.filter((t) => t.b.id === b.id);
                 const free = (await peopleAt(b.id, edu.key)).filter((p) => p.free && !p.has);
@@ -14821,7 +14798,7 @@ MKS.module({
                         continue;
                     }
                     if (!edu.school) { markBlocked(c.vt, c.value); reasons.push(`${b.caption}: ${v[4]} nodig, geen vrij klaslokaal`); continue; }
-                    const seats = Math.min(10, ctx.cfg.trainSeats);
+                    const seats = seatsOf(edu);
                     const mk = (bb, crew, learn) => ({ building: bb.id, caption: bb.caption, vt: c.vt, need: c.name, stage: 'train', key: edu.key,
                         training: v[4], people: [...crew, ...learn], started: Date.now() });
                     const group = [mk(b, trained.slice(0, want).map((p) => p.pid), learners.map((p) => p.pid))];
@@ -15002,6 +14979,14 @@ MKS.module({
                 state.hcScan[b.id] = { at: Date.now(), k, lvl, se, exts: exts.map((x) => ({ id: x.id, href: x.href, cost: x.cost, text: x.text.slice(0, 160) })) };
             }
             const steps = [];
+            // "Groot ziekenhuis": one per 5 hospitals; "Grote gevangenis": one per 10 police
+            // stations. Past that the game refuses without a message, so those are left out.
+            const countExt = (re) => data.buildings.reduce((n, x) => n + (x.extensions || []).filter((y) => re.test(y.caption || '')).length, 0);
+            const BIG = [
+                { re: /groot ziekenhuis/i, left: Math.floor(data.buildings.filter((x) => x.building_type === 2).length / 5) - countExt(/groot ziekenhuis/i) },
+                { re: /grote gevangenis/i, left: Math.floor(data.buildings.filter((x) => x.building_type === 5).length / 10) - countExt(/grote gevangenis/i) },
+            ];
+            const bigFull = (x) => BIG.some((g) => g.re.test(x.text) && g.left <= 0);
             for (const [b, k] of list) {
                 const e = state.hcScan[b.id];
                 if (!e) continue;
@@ -15012,7 +14997,7 @@ MKS.module({
                 }
                 if (isSmall(b) && upgrading(b)) continue; // being upgraded: cells after that
                 if (ctx.cfg.doExtensions) for (const x of e.exts) {
-                    if (extBlocked(b, x)) continue;
+                    if (extBlocked(b, x) || bigFull(x)) continue;
                     steps.push({ ...extStep(b, x, `uitbreiding "${extName(x.text)}" in ${b.caption} (${need.toLowerCase()})`), need, hcB: b.id });
                 }
                 if (e.lvl) {
@@ -15995,7 +15980,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261020103747' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261020125800' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16185,7 +16170,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261020103747',
+                version: '1.7.0.20261020125800',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
