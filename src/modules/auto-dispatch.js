@@ -76,8 +76,8 @@ MKS.module({
                 + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
                 + '"Alleen als alles beschikbaar is" gelden ook hier. Geldt ook voor teamevenementen en geplande teaminzetten.' },
         { key: 'eventFocus', parent: 'teamMissions', label: 'Focus: teamevenementen', type: 'bool', default: false,
-            help: 'Teamevenementen gaan voor alles. Elk evenement krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
-                + 'elke minuut opnieuw bekeken tot het compleet is, ook brandweer. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
+            help: 'Alles op één teamevenement: het best betalende dat nog iets mist. Het krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
+                + 'ook brandweer, elke minuut opnieuw bekeken. Is het compleet, dan gaat de focus naar het volgende best betalende; de andere evenementen wachten tot dan. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
                 + 'krijgen alleen voertuigen die geen open evenement nu kan gebruiken. Gewone teaminzetten blijven zoals ingesteld.' },
         { key: 'eventKm', parent: 'eventFocus', label: 'Teamevenementen: maximale afstand', type: 'number', default: 40, min: 5, max: 300, step: 5, unit: 'km',
             help: 'Helikopters mogen verder (hun eigen grens).' },
@@ -2066,6 +2066,9 @@ MKS.module({
             // Nothing of the chosen types free for team missions or for events: that kind waits
             // 5 minutes (459 window loads in one evening said "geen gekozen voertuigtype vrij").
             const noCarUntil = { team: 0, event: 0 };
+            // Event focus: events done for now (complete, not open yet, ended): id -> until.
+            const eventSkip = new Map();
+            let focusTarget = null;
             async function teamCycle() {
                 if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
@@ -2079,12 +2082,31 @@ MKS.module({
                 if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
                 const now = Date.now();
                 const focus = !!ctx.cfg.eventFocus;
-                for (const id of [...eventNeeds.keys()]) if (!live.has(id)) eventNeeds.delete(id);
+                // Event focus: one event at a time, the best paying one that still needs
+                // something. The others wait until it is complete (or ended, or not open yet).
+                let target = null;
+                if (focus) {
+                    for (const [id, u] of eventSkip) if (u < now || !live.has(id)) eventSkip.delete(id);
+                    const evs = entries.filter(isEvent).filter((e) => !(eventSkip.get(e.getAttribute('mission_id')) > now))
+                        .sort((a, b) => creditsOf(b) - creditsOf(a));
+                    target = evs.length ? evs[0].getAttribute('mission_id') : null;
+                    if (target !== focusTarget) {
+                        focusTarget = target;
+                        if (target) teamNote(`focus op teamevenement ${titleOf(evs[0])} (${ctx.nl(creditsOf(evs[0]))} cr), de andere evenementen wachten`);
+                    }
+                }
+                for (const id of [...eventNeeds.keys()]) if (!live.has(id) || (focus && id !== target)) eventNeeds.delete(id);
                 // Hidden ones too (Teamfilter, mission filters): "Alleen zichtbare inzetten" is for
                 // our own missions; team missions are often hidden just to keep the list short.
                 let joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
+                    if (focus && isEvent(e)) {
+                        // Only the focus event, also when we joined it before (it may miss more).
+                        if (id !== target) return false;
+                        const t = tried.get(id);
+                        return !t || now - t > ctx.cfg.retryMin * 60000;
+                    }
                     // "Joined" is checked again after 30 minutes: a car can be called back (by
                     // hand, or the recall of 10 Oct), and the window then sees it is gone.
                     const at = teamDone.get(id);
@@ -2132,6 +2154,11 @@ MKS.module({
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined, focus: evFocus || undefined });
                     if (evFocus) {
+                        // Complete (nothing missing), not open yet or ended: on to the next best event.
+                        if (res.result === 'skip' && (res.covered || res.notYet || res.finished)) {
+                            eventSkip.set(id, Date.now() + (res.finished ? 6 * 3600000 : res.notYet ? 30 * 60000 : 5 * 60000));
+                            if (res.covered) addLog(name, 'compleet: focus gaat naar het volgende teamevenement', 'ok');
+                        }
                         if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
                         else if (res.result !== 'wait' && res.result !== 'error') noteEventNeeds(id, titleOf(entry), creditsOf(entry), res);
                         // Looked at again every minute until nothing is missing.
