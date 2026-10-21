@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261020125800 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261021145740 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261020125800';
+    const VERSION = '1.7.0.20261021145740';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10979,6 +10979,12 @@ MKS.module({
             help: 'Niet één voertuig, maar alles wat de teaminzet nog mist, zoals bij je eigen inzetten: de rode melding "Missende voertuigen", '
                 + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
                 + '"Alleen als alles beschikbaar is" gelden ook hier. Geldt ook voor teamevenementen en geplande teaminzetten.' },
+        { key: 'eventFocus', parent: 'teamMissions', label: 'Focus: teamevenementen', type: 'bool', default: false,
+            help: 'Alles op één teamevenement: het best betalende dat nog iets mist. Het krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
+                + 'ook brandweer, elke minuut opnieuw bekeken. Is het compleet, dan gaat de focus naar het volgende best betalende; de andere evenementen wachten tot dan. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
+                + 'krijgen alleen voertuigen die geen open evenement nu kan gebruiken. Gewone teaminzetten blijven zoals ingesteld.' },
+        { key: 'eventKm', parent: 'eventFocus', label: 'Teamevenementen: maximale afstand', type: 'number', default: 40, min: 5, max: 300, step: 5, unit: 'km',
+            help: 'Helikopters mogen verder (hun eigen grens).' },
         { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
         { key: 'scanSec', parent: 'maxPerHour', label: 'Lijst opnieuw bekijken', type: 'number', default: 20, min: 5, max: 300, step: 5, unit: 'sec' },
         { key: 'retryMin', parent: 'maxPerHour', label: 'Overgeslagen inzet opnieuw proberen na', type: 'number', default: 5, min: 1, max: 120, step: 1, unit: 'min' },
@@ -11518,7 +11524,11 @@ MKS.module({
                         addPersonnel(earlyCare, items);
                     }
                 }
-                if (driving && !earlyCare) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
+                // A team event in focus has other players driving there all the time: waiting
+                // for that meant 106 waits in 3 hours on one Natuurbrand. With a red box it
+                // goes now, minus what is on its way (below).
+                const pastDriving = job.dropFar && missingText && !earlyCare;
+                if (driving && !earlyCare && !pastDriving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
                 if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding', covered: true }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
                 if (pNeed.unknown.length) {
@@ -11562,6 +11572,25 @@ MKS.module({
                         report('skip', { reason: `rode melding, kan niet sturen: ${plan.unknown.join(', ')}`, unknownNeeds: plan.unknown });
                         return;
                     }
+                }
+                if (pastDriving && driving) {
+                    // The red box only counts vehicles that arrived: each vehicle on its way
+                    // (anyone's) takes one need it fits off the list. Types we do not have
+                    // ourselves are not known here and are not taken off.
+                    const fits = {};
+                    document.querySelectorAll('input.vehicle_checkbox[vehicle_type_id]').forEach((c) => {
+                        const t = c.getAttribute('vehicle_type_id');
+                        if (!fits[t]) fits[t] = Object.keys(plan.slots).filter((k) => !/_amount$|_value$/.test(k) && c.getAttribute(k) != null && c.getAttribute(k) !== '0');
+                    });
+                    plan = { ...plan, slots: { ...plan.slots }, vt: { ...plan.vt } };
+                    for (const a of document.querySelectorAll('#mission_vehicle_driving a[vehicle_type_id]')) {
+                        const t = a.getAttribute('vehicle_type_id');
+                        if (plan.vt[t] > 0) { plan.vt[t]--; continue; }
+                        const k = (fits[t] || []).find((x) => plan.slots[x] > 0);
+                        if (k) plan.slots[k]--;
+                    }
+                    for (const o of [plan.slots, plan.vt]) for (const k of Object.keys(o)) if (!(o[k] > 0)) delete o[k];
+                    if (!Object.keys(plan.slots).length && !Object.keys(plan.vt).length) { report('wait', { reason: 'wacht: wat nog mist is al onderweg' }); return; }
                 }
 
                 // The red box of an Interfacilitair Transport asks for "1 Ambulance" too: its
@@ -11743,7 +11772,7 @@ MKS.module({
                         report('skip', { emptyList: true, reason: `voertuiglijst leeg (${tables}; pagina: ${page || '?'}; ${location.pathname.replace(/\d+/g, '#')}; tekst: ${body || 'leeg'})` });
                         return;
                     }
-                    report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage });
+                    report('skip', { reason: shortage ? `te weinig: ${fewer(shortage)}` : `geen voertuigen beschikbaar (lijst ${listed}${fits ? `; ${fits}` : ''}${more})`, shortText: shortage, avail, caps, want });
                     return;
                 }
                 // Shortages on the ignore list (setting) do not stop the rest from going. On a
@@ -11779,6 +11808,15 @@ MKS.module({
                     if (!picked.length) { report('skip', { reason: 'niets te sturen' }); return; }
                 }
                 const ovdgNote = !optOvdg ? '' : picked.some(isOvdg) ? `met OvD-G (${patientCount} patiënten)` : `zonder OvD-G (geen vrij binnen ${job.maxKm} km)`;
+                if (job.dropFar && picked.some(tooFar)) {
+                    // Team event in focus: the far ones stay home, the rest goes (what is left
+                    // missing is kept free and tried again next minute).
+                    picked.filter(tooFar).forEach((c) => {
+                        document.querySelectorAll(`input.vehicle_checkbox[value="${c.value}"]:checked`).forEach((cb) => cb.click());
+                    });
+                    picked = selection();
+                    if (!picked.length) { report('skip', { reason: `alles te ver (meer dan ${job.maxKm} km)`, shortText: shortage, avail: want, caps, want }); return; }
+                }
                 const far = Math.max(...picked.map(dist));
                 if (picked.some(tooFar)) {
                     // Which types had to come from too far: those are the ones to buy closer by.
@@ -11806,7 +11844,16 @@ MKS.module({
                 // go where they would cut the longest drives.
                 const longDrives = picked.filter((c) => dist(c) > 15).sort((a, b) => dist(b) - dist(a)).slice(0, 5)
                     .map((c) => [String(c.getAttribute('vehicle_type_id')), Math.round(dist(c) * 10) / 10]);
-                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value), longDrives });
+                // Per needed kind, what this send leaves missing because none was free (team
+                // events keep that free). Missing only for being too far is not kept: the
+                // event would never get those.
+                const missing = {};
+                for (const k of needKeys) {
+                    const got = picked.filter((c) => (k.startsWith('vt:') ? c.getAttribute('vehicle_type_id') === k.slice(3)
+                        : c.getAttribute(k) != null && c.getAttribute(k) !== '0')).length;
+                    if (want[k] - got > 0 && (avail[k] || 0) <= got) missing[k] = want[k] - got;
+                }
+                report('sending', { mode, n: picked.length, km: far, short: shortage ? fewer(shortage) : '', shortText: shortage, note: ovdgNote, ids: picked.map((c) => c.value), longDrives, missing, caps });
                 btn.click();
             } catch (e) {
                 ctx.err(e);
@@ -12072,6 +12119,8 @@ MKS.module({
             // start over: Rietkapbrand held an OvD-P from 15:11 to 15:49.
             const holds = new Map(saved.holds || []); // mission id -> { until, name, credits, keys: { key: { cap, need } } }
             const holdExpired = new Map(saved.holdExpired || []); // mission id -> when its hold ran out
+            // Event focus: what each open team event still misses: id -> { at, name, credits, keys: { key: { need, cap } } }.
+            const eventNeeds = new Map(saved.eventNeeds || []);
 
             function saveSession() {
                 const now = Date.now();
@@ -12082,6 +12131,7 @@ MKS.module({
                         holds: [...holds].filter(([, h]) => h.until > now),
                         holdExpired: [...holdExpired].filter(([, t]) => now - t < 3 * 3600000),
                         teamJoined: [...teamDone].filter(([, t]) => now - t < 12 * 3600000),
+                        eventNeeds: [...eventNeeds].filter(([, e]) => now - e.at < 30 * 60000),
                         log: log.slice(0, 100),
                     }));
                 } catch (e) { /* ignore */ }
@@ -12413,9 +12463,19 @@ MKS.module({
              * ------------------------------------------------------------------ */
             const HOLD_NEVER = ['rtw', 'fustw', 'fire', 'gwl2wasser', 'rw', 'wasser_amount', 'foam_amount', 'water_damage_pump_value'];
             // What bigger waiting missions hold: { key: { by, need } }, needs added up.
-            function reservedFor(id, credits) {
+            function reservedFor(id, credits, own) {
                 const now = Date.now();
                 const out = {};
+                if (own && ctx.cfg.eventFocus && ctx.cfg.teamMissions) {
+                    for (const [eid, e] of eventNeeds) {
+                        if (now - e.at > 30 * 60000 || !document.getElementById(`mission_${eid}`)) { eventNeeds.delete(eid); continue; }
+                        for (const [k, v] of Object.entries(e.keys)) {
+                            if (!out[k]) out[k] = { by: `teamevenement ${e.name}`, need: 0, ids: [] };
+                            out[k].need += v.need;
+                            out[k].ids.push(eid);
+                        }
+                    }
+                }
                 for (const [hid, h] of holds) {
                     if (h.until < now) { holdExpired.set(hid, now); holds.delete(hid); continue; }
                     if (!document.getElementById(`mission_${hid}`)) { holds.delete(hid); continue; }
@@ -12452,6 +12512,19 @@ MKS.module({
             // A mission whose hold ran out is not held again for twice the hold time: before
             // this, it was held again on its next try and kept rare vehicles idle for an hour
             // (Brand in ziekenhuis held an OvD-P from 12:34 while 13 missions waited).
+            // Event focus: remember what an event still misses after this round (nothing: done).
+            function noteEventNeeds(id, name, credits, res) {
+                let keys = null;
+                if (res.missing) keys = res.missing;
+                else if (res.want && res.avail) {
+                    keys = {};
+                    for (const [k, n] of Object.entries(res.want)) if (n - (res.avail[k] || 0) > 0) keys[k] = n - (res.avail[k] || 0);
+                }
+                if (res.covered || (keys && !Object.keys(keys).length)) { eventNeeds.delete(id); return; }
+                if (!keys) return;
+                const caps = res.caps || {};
+                eventNeeds.set(id, { at: Date.now(), name, credits, keys: Object.fromEntries(Object.entries(keys).map(([k, n]) => [k, { need: n, cap: caps[k] || k }])) });
+            }
             function updateHold(id, name, credits, res) {
                 if (res.result === 'sent' || res.result === 'unconfirmed') { holds.delete(id); return; }
                 const out = holdExpired.get(id);
@@ -12770,7 +12843,7 @@ MKS.module({
                 const [key, n] = keys[0] || [];
                 const [vtId, m] = vts[0] || [];
                 if ((n || m) !== 1) return null;
-                if (key && reservedFor(id, 0)[key]) return null;
+                if (key && reservedFor(id, 0, true)[key]) return null;
                 const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
                 if (!r.ok) return null;
                 const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
@@ -12843,7 +12916,7 @@ MKS.module({
                             const quickJob = (fast) => runJob({ id, token: Date.now(), fast, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
-                                bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
+                                bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry), true), ownJobOnly: ownJobOnly(),
                                 ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!ambQ });
                             // One unit: straight through the alarm form, no window. Else, or when that
                             // does not fit, the hidden window as before.
@@ -12920,6 +12993,9 @@ MKS.module({
             // Nothing of the chosen types free for team missions or for events: that kind waits
             // 5 minutes (459 window loads in one evening said "geen gekozen voertuigtype vrij").
             const noCarUntil = { team: 0, event: 0 };
+            // Event focus: events done for now (complete, not open yet, ended): id -> until.
+            const eventSkip = new Map();
+            let focusTarget = null;
             async function teamCycle() {
                 if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
@@ -12932,18 +13008,39 @@ MKS.module({
                 for (const id of [...teamDone.keys()]) if (!live.has(id)) teamDone.delete(id);
                 if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
                 const now = Date.now();
+                const focus = !!ctx.cfg.eventFocus;
+                // Event focus: one event at a time, the best paying one that still needs
+                // something. The others wait until it is complete (or ended, or not open yet).
+                let target = null;
+                if (focus) {
+                    for (const [id, u] of eventSkip) if (u < now || !live.has(id)) eventSkip.delete(id);
+                    const evs = entries.filter(isEvent).filter((e) => !(eventSkip.get(e.getAttribute('mission_id')) > now))
+                        .sort((a, b) => creditsOf(b) - creditsOf(a));
+                    target = evs.length ? evs[0].getAttribute('mission_id') : null;
+                    if (target !== focusTarget) {
+                        focusTarget = target;
+                        if (target) teamNote(`focus op teamevenement ${titleOf(evs[0])} (${ctx.nl(creditsOf(evs[0]))} cr), de andere evenementen wachten`);
+                    }
+                }
+                for (const id of [...eventNeeds.keys()]) if (!live.has(id) || (focus && id !== target)) eventNeeds.delete(id);
                 // Hidden ones too (Teamfilter, mission filters): "Alleen zichtbare inzetten" is for
                 // our own missions; team missions are often hidden just to keep the list short.
                 let joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
+                    if (focus && isEvent(e)) {
+                        // Only the focus event, also when we joined it before (it may miss more).
+                        if (id !== target) return false;
+                        const t = tried.get(id);
+                        return !t || now - t > ctx.cfg.retryMin * 60000;
+                    }
                     // "Joined" is checked again after 30 minutes: a car can be called back (by
                     // hand, or the recall of 10 Oct), and the window then sees it is gone.
                     const at = teamDone.get(id);
                     if (at && now - at < 30 * 60000) { joined++; return false; }
                     const t = tried.get(id);
                     return !t || now - t > ctx.cfg.retryMin * 60000;
-                }).sort((a, b) => creditsOf(b) - creditsOf(a));
+                }).sort((a, b) => (focus ? Number(isEvent(b)) - Number(isEvent(a)) : 0) || creditsOf(b) - creditsOf(a));
                 if (!todo.length) {
                     if (joined === entries.length) teamNote(`je doet al mee aan alle ${joined} teaminzetten`);
                     return;
@@ -12958,27 +13055,44 @@ MKS.module({
                     if (!entry.isConnected || !document.getElementById(`mission_${id}`)) continue;
                     const name = `${isEvent(entry) ? 'Teamevent' : 'Team'}: ${titleOf(entry)}`;
                     const kind = isEvent(entry) ? 'event' : 'team';
-                    if (noCarUntil[kind] > Date.now()) continue;
+                    // Event focus: every event gets what it still misses, whatever the lists say.
+                    const evFocus = focus && kind === 'event';
+                    if (noCarUntil[kind] > Date.now() && !evFocus) continue;
                     let kindTypes = loadTeamTypes(kind);
-                    if (kindTypes && kindTypes.includes('none')) continue; // switched off for this kind
+                    if (kindTypes && kindTypes.includes('none') && !evFocus) continue; // switched off for this kind
                     // "Eén voertuig per inzet" goes first, with its own list.
-                    if (ctx.cfg.singleCar) kindTypes = loadTeamTypes('single');
+                    if (ctx.cfg.singleCar && !evFocus) kindTypes = loadTeamTypes('single');
+                    if (evFocus) kindTypes = null;
                     tried.set(id, Date.now());
                     // "Alles sturen": team missions and events get what they need, like our own.
-                    const full = !!ctx.cfg.teamFull && !ctx.cfg.singleCar;
+                    const full = evFocus || (!!ctx.cfg.teamFull && !ctx.cfg.singleCar);
                     let fullJob = {};
                     if (full) {
                         const r = (await loadMissions())[keyOf(entry)];
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         fullJob = { full: true, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: true,
+                            maxKm: evFocus ? ctx.cfg.eventKm : ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: evFocus ? false : ctx.cfg.needAll, dropFar: evFocus,
+                            patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: true,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
                             ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, transport: false, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')] };
                     }
                     const res = await runJob({ id, token: Date.now(), team: true, event: isEvent(entry), avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '', teamTypes: kindTypes, ...fullJob });
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
-                        result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined });
+                        result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined, focus: evFocus || undefined });
+                    if (evFocus) {
+                        // Complete (nothing missing), not open yet or ended: on to the next best event.
+                        if (res.result === 'skip' && (res.covered || res.notYet || res.finished)) {
+                            eventSkip.set(id, Date.now() + (res.finished ? 6 * 3600000 : res.notYet ? 30 * 60000 : 5 * 60000));
+                            if (res.covered) addLog(name, 'compleet: focus gaat naar het volgende teamevenement', 'ok');
+                        }
+                        if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
+                        else if (res.result !== 'wait' && res.result !== 'error') noteEventNeeds(id, titleOf(entry), creditsOf(entry), res);
+                        // Looked at again every minute until nothing is missing.
+                        if (res.result === 'sent' || res.result === 'unconfirmed' || (res.result === 'skip' && !res.covered && !res.notYet)) {
+                            tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
+                        }
+                    }
                     if (full && (res.result === 'sent' || res.result === 'unconfirmed')) {
                         // Not marked joined: after retryMin it is looked at again, and anything
                         // still missing then (red box) goes too.
@@ -13030,7 +13144,7 @@ MKS.module({
                         if (full) updateHold(id, name, creditsOf(entry), res);
                         // Otherwise (nothing to hold, or something we cannot send at all): look
                         // again in 20 minutes, not every round (861 tries in one afternoon).
-                        if (!holds.has(id) && /te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
+                        if (!holds.has(id) && !evFocus && /te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
                     } else {
                         // Errors here pause only the team loop; own missions go on.
                         stats.errors++;
@@ -13138,7 +13252,7 @@ MKS.module({
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
-                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits), ownJobOnly: ownJobOnly(),
+                            bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits, true), ownJobOnly: ownJobOnly(),
                             ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!amb0 });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
@@ -13395,6 +13509,12 @@ MKS.module({
                     <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Inzet</th><th>Credits</th><th>Bewaard</th><th>Nog</th></tr></thead><tbody>
                     ${live.map(([, h]) => `<tr><td>${esc(h.name)}</td><td class="mono">${ctx.nl(h.credits)}</td><td>${esc(Object.values(h.keys).map((v) => `${v.need}× ${v.cap}`).join(', '))}</td>
                         <td class="mono mks-dim">${Math.ceil((h.until - now) / 60000)} min</td></tr>`).join('')}</tbody></table></div>`, { open: true, count: live.length }) : '';
+                const evList = ctx.cfg.eventFocus ? [...eventNeeds].filter(([, e]) => now - e.at < 30 * 60000).sort((a, b) => b[1].credits - a[1].credits) : [];
+                const eventHtml = evList.length ? ctx.fold('eventneeds', 'Focus: teamevenementen missen nog', `
+                    <p class="mks-note">Dit wordt vrijgehouden: je eigen inzetten nemen deze voertuigen pas als de evenementen ze niet meer nodig hebben.</p>
+                    <div class="mks-tblwrap"><table class="mks-tbl"><thead><tr><th>Evenement</th><th>Credits</th><th>Mist nog</th><th>Bekeken</th></tr></thead><tbody>
+                    ${evList.map(([, e]) => `<tr><td>${esc(e.name)}</td><td class="mono">${ctx.nl(e.credits)}</td><td>${esc(Object.values(e.keys).map((v) => `${v.need}× ${v.cap}`).join(', '))}</td>
+                        <td class="mono mks-dim">${ago(e.at)}</td></tr>`).join('')}</tbody></table></div>`, { open: true, count: evList.length }) : '';
                 el.innerHTML = `<div class="mks-tiles">
                         <div class="mks-tile"><div class="v">${stats.sent}</div><div class="k">gealarmeerd</div></div>
                         <div class="mks-tile"><div class="v">${stats.transports}</div><div class="k">vervoerd</div></div>
@@ -13404,6 +13524,7 @@ MKS.module({
                             <div class="k">${now - spawnSince() < 3600000 ? `nieuw sinds ${new Date(spawnSince()).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nieuw afgelopen uur'}</div></div>
                     </div>
                     ${holdHtml}
+                    ${eventHtml}
                     ${ctx.fold('needs', 'Tekort per voertuigtype', `
                     <p class="mks-note">Sinds ${new Date(needs.since).toLocaleDateString('nl-NL')}. Elke inzet telt één keer per type.
                         <b>Niet beschikbaar</b>: het spel had er niet genoeg vrij (de andere gingen wel). <b>Te ver</b>: alleen verder dan ${ctx.cfg.maxKm} km (helikopters ${ctx.cfg.airKm} km).
@@ -15980,7 +16101,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261020125800' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261021145740' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16170,7 +16291,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261020125800',
+                version: '1.7.0.20261021145740',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

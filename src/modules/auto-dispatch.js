@@ -620,7 +620,11 @@ MKS.module({
                         addPersonnel(earlyCare, items);
                     }
                 }
-                if (driving && !earlyCare) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
+                // A team event in focus has other players driving there all the time: waiting
+                // for that meant 106 waits in 3 hours on one Natuurbrand. With a red box it
+                // goes now, minus what is on its way (below).
+                const pastDriving = job.dropFar && missingText && !earlyCare;
+                if (driving && !earlyCare && !pastDriving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
                 if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding', covered: true }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
                 if (pNeed.unknown.length) {
@@ -664,6 +668,25 @@ MKS.module({
                         report('skip', { reason: `rode melding, kan niet sturen: ${plan.unknown.join(', ')}`, unknownNeeds: plan.unknown });
                         return;
                     }
+                }
+                if (pastDriving && driving) {
+                    // The red box only counts vehicles that arrived: each vehicle on its way
+                    // (anyone's) takes one need it fits off the list. Types we do not have
+                    // ourselves are not known here and are not taken off.
+                    const fits = {};
+                    document.querySelectorAll('input.vehicle_checkbox[vehicle_type_id]').forEach((c) => {
+                        const t = c.getAttribute('vehicle_type_id');
+                        if (!fits[t]) fits[t] = Object.keys(plan.slots).filter((k) => !/_amount$|_value$/.test(k) && c.getAttribute(k) != null && c.getAttribute(k) !== '0');
+                    });
+                    plan = { ...plan, slots: { ...plan.slots }, vt: { ...plan.vt } };
+                    for (const a of document.querySelectorAll('#mission_vehicle_driving a[vehicle_type_id]')) {
+                        const t = a.getAttribute('vehicle_type_id');
+                        if (plan.vt[t] > 0) { plan.vt[t]--; continue; }
+                        const k = (fits[t] || []).find((x) => plan.slots[x] > 0);
+                        if (k) plan.slots[k]--;
+                    }
+                    for (const o of [plan.slots, plan.vt]) for (const k of Object.keys(o)) if (!(o[k] > 0)) delete o[k];
+                    if (!Object.keys(plan.slots).length && !Object.keys(plan.vt).length) { report('wait', { reason: 'wacht: wat nog mist is al onderweg' }); return; }
                 }
 
                 // The red box of an Interfacilitair Transport asks for "1 Ambulance" too: its
