@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261021105231 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261021150425 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261021105231';
+    const VERSION = '1.7.0.20261021150425';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -10980,8 +10980,8 @@ MKS.module({
                 + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
                 + '"Alleen als alles beschikbaar is" gelden ook hier. Geldt ook voor teamevenementen en geplande teaminzetten.' },
         { key: 'eventFocus', parent: 'teamMissions', label: 'Focus: teamevenementen', type: 'bool', default: false,
-            help: 'Teamevenementen gaan voor alles. Elk evenement krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
-                + 'elke minuut opnieuw bekeken tot het compleet is, ook brandweer. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
+            help: 'Alles op één teamevenement: het best betalende dat nog iets mist. Het krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
+                + 'ook brandweer, elke minuut opnieuw bekeken. Is het compleet, dan gaat de focus naar het volgende best betalende; de andere evenementen wachten tot dan. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
                 + 'krijgen alleen voertuigen die geen open evenement nu kan gebruiken. Gewone teaminzetten blijven zoals ingesteld.' },
         { key: 'eventKm', parent: 'eventFocus', label: 'Teamevenementen: maximale afstand', type: 'number', default: 40, min: 5, max: 300, step: 5, unit: 'km',
             help: 'Helikopters mogen verder (hun eigen grens).' },
@@ -11524,7 +11524,11 @@ MKS.module({
                         addPersonnel(earlyCare, items);
                     }
                 }
-                if (driving && !earlyCare) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
+                // A team event in focus has other players driving there all the time: waiting
+                // for that meant 106 waits in 3 hours on one Natuurbrand. With a red box it
+                // goes now, minus what is on its way (below).
+                const pastDriving = job.dropFar && missingText && !earlyCare;
+                if (driving && !earlyCare && !pastDriving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
                 if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding', covered: true }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
                 if (pNeed.unknown.length) {
@@ -11568,6 +11572,25 @@ MKS.module({
                         report('skip', { reason: `rode melding, kan niet sturen: ${plan.unknown.join(', ')}`, unknownNeeds: plan.unknown });
                         return;
                     }
+                }
+                if (pastDriving && driving) {
+                    // The red box only counts vehicles that arrived: each vehicle on its way
+                    // (anyone's) takes one need it fits off the list. Types we do not have
+                    // ourselves are not known here and are not taken off.
+                    const fits = {};
+                    document.querySelectorAll('input.vehicle_checkbox[vehicle_type_id]').forEach((c) => {
+                        const t = c.getAttribute('vehicle_type_id');
+                        if (!fits[t]) fits[t] = Object.keys(plan.slots).filter((k) => !/_amount$|_value$/.test(k) && c.getAttribute(k) != null && c.getAttribute(k) !== '0');
+                    });
+                    plan = { ...plan, slots: { ...plan.slots }, vt: { ...plan.vt } };
+                    for (const a of document.querySelectorAll('#mission_vehicle_driving a[vehicle_type_id]')) {
+                        const t = a.getAttribute('vehicle_type_id');
+                        if (plan.vt[t] > 0) { plan.vt[t]--; continue; }
+                        const k = (fits[t] || []).find((x) => plan.slots[x] > 0);
+                        if (k) plan.slots[k]--;
+                    }
+                    for (const o of [plan.slots, plan.vt]) for (const k of Object.keys(o)) if (!(o[k] > 0)) delete o[k];
+                    if (!Object.keys(plan.slots).length && !Object.keys(plan.vt).length) { report('wait', { reason: 'wacht: wat nog mist is al onderweg' }); return; }
                 }
 
                 // The red box of an Interfacilitair Transport asks for "1 Ambulance" too: its
@@ -12970,6 +12993,9 @@ MKS.module({
             // Nothing of the chosen types free for team missions or for events: that kind waits
             // 5 minutes (459 window loads in one evening said "geen gekozen voertuigtype vrij").
             const noCarUntil = { team: 0, event: 0 };
+            // Event focus: events done for now (complete, not open yet, ended): id -> until.
+            const eventSkip = new Map();
+            let focusTarget = null;
             async function teamCycle() {
                 if (!running || stopped || teamBusy || reloadWanted || !ctx.cfg.teamMissions || Date.now() < teamPauseUntil) return;
                 teamBusy = true;
@@ -12983,12 +13009,31 @@ MKS.module({
                 if (!entries.length) { teamNote('geen teaminzetten in de lijst'); return; }
                 const now = Date.now();
                 const focus = !!ctx.cfg.eventFocus;
-                for (const id of [...eventNeeds.keys()]) if (!live.has(id)) eventNeeds.delete(id);
+                // Event focus: one event at a time, the best paying one that still needs
+                // something. The others wait until it is complete (or ended, or not open yet).
+                let target = null;
+                if (focus) {
+                    for (const [id, u] of eventSkip) if (u < now || !live.has(id)) eventSkip.delete(id);
+                    const evs = entries.filter(isEvent).filter((e) => !(eventSkip.get(e.getAttribute('mission_id')) > now))
+                        .sort((a, b) => creditsOf(b) - creditsOf(a));
+                    target = evs.length ? evs[0].getAttribute('mission_id') : null;
+                    if (target !== focusTarget) {
+                        focusTarget = target;
+                        if (target) teamNote(`focus op teamevenement ${titleOf(evs[0])} (${ctx.nl(creditsOf(evs[0]))} cr), de andere evenementen wachten`);
+                    }
+                }
+                for (const id of [...eventNeeds.keys()]) if (!live.has(id) || (focus && id !== target)) eventNeeds.delete(id);
                 // Hidden ones too (Teamfilter, mission filters): "Alleen zichtbare inzetten" is for
                 // our own missions; team missions are often hidden just to keep the list short.
                 let joined = 0;
                 const todo = entries.filter((e) => {
                     const id = e.getAttribute('mission_id');
+                    if (focus && isEvent(e)) {
+                        // Only the focus event, also when we joined it before (it may miss more).
+                        if (id !== target) return false;
+                        const t = tried.get(id);
+                        return !t || now - t > ctx.cfg.retryMin * 60000;
+                    }
                     // "Joined" is checked again after 30 minutes: a car can be called back (by
                     // hand, or the recall of 10 Oct), and the window then sees it is gone.
                     const at = teamDone.get(id);
@@ -13036,6 +13081,11 @@ MKS.module({
                     recordEvent({ kind: 'team', event: isEvent(entry) || undefined, id, name: titleOf(entry), credits: creditsOf(entry), hidden: getComputedStyle(entry).display === 'none' || undefined,
                         result: res.result, km: res.km, car: res.car || undefined, reason: res.reason, joined: res.joined || undefined, focus: evFocus || undefined });
                     if (evFocus) {
+                        // Complete (nothing missing), not open yet or ended: on to the next best event.
+                        if (res.result === 'skip' && (res.covered || res.notYet || res.finished)) {
+                            eventSkip.set(id, Date.now() + (res.finished ? 6 * 3600000 : res.notYet ? 30 * 60000 : 5 * 60000));
+                            if (res.covered) addLog(name, 'compleet: focus gaat naar het volgende teamevenement', 'ok');
+                        }
                         if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
                         else if (res.result !== 'wait' && res.result !== 'error') noteEventNeeds(id, titleOf(entry), creditsOf(entry), res);
                         // Looked at again every minute until nothing is missing.
@@ -13704,10 +13754,10 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
-        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen en alles uitbouwen', type: 'bool', default: false,
-            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
-                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna gaat alles naar levels: elke brandweerkazerne, '
-                + 'ambulancepost, politiebureau, VWS-post, MMT- en heliplaats naar het hoogste level, goedkoopste eerst. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
+        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen, ruimte voor specialisten', type: 'bool', default: false,
+            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (OvD-B, Voorlichter, MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna krijgen posten met een volle parkeerplaats hun volgende level '
+                + '(goedkoopste eerst), zodat er ruimte is voor de volgende specialist; posten met vrije plekken niet. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
@@ -14997,9 +15047,11 @@ MKS.module({
                 steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
             }
             steps.sort((a, b) => b.ratio - a.ratio);
-            // Then: every existing post to its highest level, cheapest level first (fire,
-            // ambulance, police, VWS-post, MMT, police heli, police HQ). Pages are read 15 per
-            // round and remembered 6 hours, re-read after a purchase there.
+            // Then: posts whose parking is full get their next level, cheapest first (fire,
+            // ambulance, police, VWS-post, MMT, police heli, police HQ), so there is room for
+            // the next specialist. Posts with free spots get none: Ambulancepost Zeist went
+            // from level 13 to 18 in six minutes for empty spots. Pages are read 15 per round
+            // and remembered 6 hours, re-read after a purchase there.
             const levels = [];
             let pending = 0;
             if (ctx.cfg.doLevels) {
@@ -15009,17 +15061,19 @@ MKS.module({
                 let scanned = 0;
                 for (const b of list) {
                     const e = state.lvlScan[b.id];
-                    if (e && Date.now() - e.at < 6 * 3600000) continue;
+                    if (e && 'full' in e && Date.now() - e.at < 6 * 3600000) continue;
                     if (scanned >= 15 || stopped) break;
                     scanned++;
-                    state.lvlScan[b.id] = { at: Date.now(), lvl: await nextLevel(b.id) };
+                    const info = await buildingInfo(b.id);
+                    const full = info.used != null && info.max != null && info.used >= info.max;
+                    state.lvlScan[b.id] = { at: Date.now(), full, lvl: full ? await nextLevel(b.id) : null };
                 }
                 for (const b of list) {
                     const e = state.lvlScan[b.id];
-                    if (!e) { pending++; continue; }
-                    if (!e.lvl || steps.some((x) => x.lvB === b.id)) continue;
+                    if (!e || !('full' in e)) { pending++; continue; }
+                    if (!e.full || !e.lvl || steps.some((x) => x.lvB === b.id)) continue;
                     const lvl = e.lvl;
-                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: alles uitbouwen)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
+                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: parkeerplaats vol, ruimte voor specialisten)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
                         run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
                 }
                 levels.sort((a, b) => a.cost - b.cost);
@@ -16051,7 +16105,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261021105231' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261021150425' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16241,7 +16295,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261021105231',
+                version: '1.7.0.20261021150425',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
