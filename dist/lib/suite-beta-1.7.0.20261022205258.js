@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261021145740 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261022205258 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261021145740';
+    const VERSION = '1.7.0.20261022205258';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -13754,10 +13754,10 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
-        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen en alles uitbouwen', type: 'bool', default: false,
-            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
-                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna gaat alles naar levels: elke brandweerkazerne, '
-                + 'ambulancepost, politiebureau, VWS-post, MMT- en heliplaats naar het hoogste level, goedkoopste eerst. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
+        { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen, ruimte voor specialisten', type: 'bool', default: false,
+            help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (OvD-B, Voorlichter, MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna krijgen posten met een volle parkeerplaats hun volgende level '
+                + '(goedkoopste eerst), zodat er ruimte is voor de volgende specialist; posten met vrije plekken niet. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
@@ -13773,9 +13773,15 @@ MKS.module({
                 + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw. '
                 + 'Alleen als "Nieuwe gebouwen" aan staat.' },
         { group: 'Groeien', key: 'buildMode', label: 'Bouwmodus: vooral nieuwe posten', type: 'bool', default: false,
-            help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (brandweer, politie en ambulance om de beurt), en maakt elke post af: '
+            help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (de soorten die je hieronder aanvinkt, om de beurt), en maakt elke post af: '
                 + 'brandweer level 2 met een TST 4/5, ambulancepost level 1 met een ambulance, politie met noodhulp; de rest van de plekken '
                 + 'naar het grootste tekort dat er past. Tekorten en opleidingen wachten zolang. Werkt ook als "Nieuwe gebouwen" uit staat.' },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildFire', label: 'Bouwmodus: brandweerkazernes', type: 'bool', default: true,
+            help: 'Klein of groot, wat het meeste oplevert voor de prijs (kleine tellen ook mee voor meldingen die veel kazernes vragen).' },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildAmb', label: 'Bouwmodus: ambulanceposten', type: 'bool', default: true },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildPol', label: 'Bouwmodus: politiebureaus', type: 'bool', default: true },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildHosp', label: 'Bouwmodus: ziekenhuizen', type: 'bool', default: false,
+            help: 'Meteen meer bedden; een ziekenhuis heeft geen voertuigen om te vullen.' },
         { group: 'Groeien', parent: 'buildMode', key: 'buildCity', label: 'Bouwmodus: stad', type: 'text', default: '', placeholder: 'bijv. Utrecht',
             help: 'Leeg = overal. Met een stad: eerst alle vrije echte posten in die stad, het dichtst bij het centrum eerst. '
                 + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
@@ -15047,9 +15053,11 @@ MKS.module({
                 steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
             }
             steps.sort((a, b) => b.ratio - a.ratio);
-            // Then: every existing post to its highest level, cheapest level first (fire,
-            // ambulance, police, VWS-post, MMT, police heli, police HQ). Pages are read 15 per
-            // round and remembered 6 hours, re-read after a purchase there.
+            // Then: posts whose parking is full get their next level, cheapest first (fire,
+            // ambulance, police, VWS-post, MMT, police heli, police HQ), so there is room for
+            // the next specialist. Posts with free spots get none: Ambulancepost Zeist went
+            // from level 13 to 18 in six minutes for empty spots. Pages are read 15 per round
+            // and remembered 6 hours, re-read after a purchase there.
             const levels = [];
             let pending = 0;
             if (ctx.cfg.doLevels) {
@@ -15059,17 +15067,19 @@ MKS.module({
                 let scanned = 0;
                 for (const b of list) {
                     const e = state.lvlScan[b.id];
-                    if (e && Date.now() - e.at < 6 * 3600000) continue;
+                    if (e && 'full' in e && Date.now() - e.at < 6 * 3600000) continue;
                     if (scanned >= 15 || stopped) break;
                     scanned++;
-                    state.lvlScan[b.id] = { at: Date.now(), lvl: await nextLevel(b.id) };
+                    const info = await buildingInfo(b.id);
+                    const full = info.used != null && info.max != null && info.used >= info.max;
+                    state.lvlScan[b.id] = { at: Date.now(), full, lvl: full ? await nextLevel(b.id) : null };
                 }
                 for (const b of list) {
                     const e = state.lvlScan[b.id];
-                    if (!e) { pending++; continue; }
-                    if (!e.lvl || steps.some((x) => x.lvB === b.id)) continue;
+                    if (!e || !('full' in e)) { pending++; continue; }
+                    if (!e.full || !e.lvl || steps.some((x) => x.lvB === b.id)) continue;
                     const lvl = e.lvl;
-                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: alles uitbouwen)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
+                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: parkeerplaats vol, ruimte voor specialisten)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
                         run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
                 }
                 levels.sort((a, b) => a.cost - b.cost);
@@ -15328,6 +15338,9 @@ MKS.module({
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau', worth: 0.65 },
             { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost', worth: 0.13 }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
+        // Build mode only (ticked): a hospital, beds right away, nothing to fill.
+        const GROW_HOSPITAL = { types: [2], same: [2], vt: null, name: 'ziekenhuis', worth: 1 };
+        const GROW_KEY = { brandweerkazerne: 'buildFire', ambulancepost: 'buildAmb', politiebureau: 'buildPol', ziekenhuis: 'buildHosp' };
         // Build mode: per kind the levels its first staff can man and its first vehicle
         // (fire: TST 4/5, ambulance post: ambulance, police: DA Noodhulp). The rest of
         // the spots: the most valuable shortage that fits and needs no training.
@@ -15390,7 +15403,11 @@ MKS.module({
             if (city) for (const p of await postsNear(city.center)) posts.push(p);
             const uniq = [...new Set(posts)]; // neighbouring tiles overlap
             const owned = [...data.buildings.map(posOf), ...recentSpots()];
-            for (const g of GROW) {
+            // Build mode: only the kinds ticked under it, taking turns.
+            const kinds = !ctx.cfg.buildMode ? GROW
+                : [...GROW, GROW_HOSPITAL].filter((g) => ctx.cfg[GROW_KEY[g.name]] !== false && (g !== GROW_HOSPITAL || ctx.cfg.buildHosp));
+            if (ctx.cfg.buildMode && !kinds.length) { skipped.push('Bouwmodus: geen soort gebouw aangevinkt'); return out; }
+            for (const g of kinds) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
                 // Plus ones of this kind built in the last 30 minutes that the API may not list yet.
@@ -15460,6 +15477,7 @@ MKS.module({
                                 nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
                                 if (!nb) await sleep(2000);
                             }
+                            if (g.vt == null) return; // hospital: nothing to buy for it
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
                             else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } };
@@ -15482,8 +15500,11 @@ MKS.module({
             // Also by name: a building is named after its post, so the same name means built.
             const names = new Set(data.buildings.map((b) => norm(b.caption || '')));
             const nameOf = (p) => (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${p[3]}` : p[3]);
-            const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
-                .map((p) => ({ p, d: km([p[0], p[1]], c.at) }))
+            // A need without known places (no positions recorded) builds near the dispatch
+            // centre: "Cannot read properties of null (reading '0')" stopped every round.
+            const at = c.at || data.home;
+            const posts = (await postsNear(at)).filter((p) => p[2] === cat)
+                .map((p) => ({ p, d: km([p[0], p[1]], at) }))
                 .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3)
                     && !names.has(norm(x.p[3] || '')) && !names.has(norm(nameOf(x.p) || '')))
                 .sort((a, b) => a.d - b.d);
@@ -16086,7 +16107,9 @@ MKS.module({
                 }
             } catch (e) {
                 ctx.err(e);
-                addLog(`fout: ${e.message}`, 'error');
+                // Where it happened (first line of our own code), to find it from the log.
+                const where = String(e.stack || '').split('\n').slice(1).find((l) => !/^\s*at (?:async )?(?:Array|Promise|new Promise)/.test(l));
+                addLog(`fout: ${e.message}${where ? ` (${where.trim().slice(0, 120)})` : ''}`, 'error');
             } finally {
                 busy = false;
                 save();
@@ -16101,7 +16124,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261021145740' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261022205258' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16291,7 +16314,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261021145740',
+                version: '1.7.0.20261022205258',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

@@ -1776,8 +1776,11 @@ MKS.module({
             // Also by name: a building is named after its post, so the same name means built.
             const names = new Set(data.buildings.map((b) => norm(b.caption || '')));
             const nameOf = (p) => (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${p[3]}` : p[3]);
-            const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
-                .map((p) => ({ p, d: km([p[0], p[1]], c.at) }))
+            // A need without known places (no positions recorded) builds near the dispatch
+            // centre: "Cannot read properties of null (reading '0')" stopped every round.
+            const at = c.at || data.home;
+            const posts = (await postsNear(at)).filter((p) => p[2] === cat)
+                .map((p) => ({ p, d: km([p[0], p[1]], at) }))
                 .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3)
                     && !names.has(norm(x.p[3] || '')) && !names.has(norm(nameOf(x.p) || '')))
                 .sort((a, b) => a.d - b.d);
@@ -2380,7 +2383,9 @@ MKS.module({
                 }
             } catch (e) {
                 ctx.err(e);
-                addLog(`fout: ${e.message}`, 'error');
+                // Where it happened (first line of our own code), to find it from the log.
+                const where = String(e.stack || '').split('\n').slice(1).find((l) => !/^\s*at (?:async )?(?:Array|Promise|new Promise)/.test(l));
+                addLog(`fout: ${e.message}${where ? ` (${where.trim().slice(0, 120)})` : ''}`, 'error');
             } finally {
                 busy = false;
                 save();
