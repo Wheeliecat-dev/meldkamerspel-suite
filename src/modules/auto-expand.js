@@ -350,7 +350,13 @@ MKS.module({
          * ==================================================================== */
         const token = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
         async function getDoc(url) {
-            const r = await fetch(url, { credentials: 'same-origin' });
+            // A network hiccup ("Failed to fetch") is tried once more after a few seconds;
+            // if it fails again the error says which page.
+            let r;
+            try { r = await fetch(url, { credentials: 'same-origin' }); } catch (e) {
+                await sleep(3000);
+                try { r = await fetch(url, { credentials: 'same-origin' }); } catch (e2) { throw new Error(`${e2.message}: ${String(url).replace(/\d{5,}/g, '#')}`); }
+            }
             if (!r.ok) throw new Error(`${url}: ${r.status}`);
             return new DOMParser().parseFromString(await r.text(), 'text/html');
         }
@@ -2385,7 +2391,8 @@ MKS.module({
                 ctx.err(e);
                 // Where it happened (first line of our own code), to find it from the log.
                 const where = String(e.stack || '').split('\n').slice(1).find((l) => !/^\s*at (?:async )?(?:Array|Promise|new Promise)/.test(l));
-                addLog(`fout: ${e.message}${where ? ` (${where.trim().slice(0, 120)})` : ''}`, 'error');
+                const fn = where && (where.match(/at (?:async )?([\w.$]+) /) || [])[1];
+                addLog(`fout: ${e.message}${fn ? ` (in ${fn})` : ''}`, 'error');
             } finally {
                 busy = false;
                 save();
