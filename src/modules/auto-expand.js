@@ -49,9 +49,15 @@ MKS.module({
                 + '(minstens 3 km van je andere van die soort). Meer gebouwen = meer inzetten. Waarde = je gemiddelde weekinkomen per gebouw. '
                 + 'Alleen als "Nieuwe gebouwen" aan staat.' },
         { group: 'Groeien', key: 'buildMode', label: 'Bouwmodus: vooral nieuwe posten', type: 'bool', default: false,
-            help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (brandweer, politie en ambulance om de beurt), en maakt elke post af: '
+            help: 'Bouwt de ene nieuwe post na de andere, zodra er geld is (de soorten die je hieronder aanvinkt, om de beurt), en maakt elke post af: '
                 + 'brandweer level 2 met een TST 4/5, ambulancepost level 1 met een ambulance, politie met noodhulp; de rest van de plekken '
                 + 'naar het grootste tekort dat er past. Tekorten en opleidingen wachten zolang. Werkt ook als "Nieuwe gebouwen" uit staat.' },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildFire', label: 'Bouwmodus: brandweerkazernes', type: 'bool', default: true,
+            help: 'Klein of groot, wat het meeste oplevert voor de prijs (kleine tellen ook mee voor meldingen die veel kazernes vragen).' },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildAmb', label: 'Bouwmodus: ambulanceposten', type: 'bool', default: true },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildPol', label: 'Bouwmodus: politiebureaus', type: 'bool', default: true },
+        { group: 'Groeien', parent: 'buildMode', key: 'buildHosp', label: 'Bouwmodus: ziekenhuizen', type: 'bool', default: false,
+            help: 'Meteen meer bedden; een ziekenhuis heeft geen voertuigen om te vullen.' },
         { group: 'Groeien', parent: 'buildMode', key: 'buildCity', label: 'Bouwmodus: stad', type: 'text', default: '', placeholder: 'bijv. Utrecht',
             help: 'Leeg = overal. Met een stad: eerst alle vrije echte posten in die stad, het dichtst bij het centrum eerst. '
                 + 'Is de stad vol, dan gaat het verder rond je andere gebouwen.' },
@@ -1608,6 +1614,9 @@ MKS.module({
             { types: [5, 18], same: [5, 11, 18], vt: 22, name: 'politiebureau', worth: 0.65 },
             { types: [3, 13], same: [3, 13], vt: 16, name: 'ambulancepost', worth: 0.13 }, // 13 = Ambulance, VWS-post (100k vs 200k)
         ];
+        // Build mode only (ticked): a hospital, beds right away, nothing to fill.
+        const GROW_HOSPITAL = { types: [2], same: [2], vt: null, name: 'ziekenhuis', worth: 1 };
+        const GROW_KEY = { brandweerkazerne: 'buildFire', ambulancepost: 'buildAmb', politiebureau: 'buildPol', ziekenhuis: 'buildHosp' };
         // Build mode: per kind the levels its first staff can man and its first vehicle
         // (fire: TST 4/5, ambulance post: ambulance, police: DA Noodhulp). The rest of
         // the spots: the most valuable shortage that fits and needs no training.
@@ -1670,7 +1679,11 @@ MKS.module({
             if (city) for (const p of await postsNear(city.center)) posts.push(p);
             const uniq = [...new Set(posts)]; // neighbouring tiles overlap
             const owned = [...data.buildings.map(posOf), ...recentSpots()];
-            for (const g of GROW) {
+            // Build mode: only the kinds ticked under it, taking turns.
+            const kinds = !ctx.cfg.buildMode ? GROW
+                : [...GROW, GROW_HOSPITAL].filter((g) => ctx.cfg[GROW_KEY[g.name]] !== false && (g !== GROW_HOSPITAL || ctx.cfg.buildHosp));
+            if (ctx.cfg.buildMode && !kinds.length) { skipped.push('Bouwmodus: geen soort gebouw aangevinkt'); return out; }
+            for (const g of kinds) {
                 const need = `Groei: ${g.name}`;
                 if ((state.cool[need] || 0) > Date.now()) continue;
                 // Plus ones of this kind built in the last 30 minutes that the API may not list yet.
@@ -1740,6 +1753,7 @@ MKS.module({
                                 nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
                                 if (!nb) await sleep(2000);
                             }
+                            if (g.vt == null) return; // hospital: nothing to buy for it
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
                             else if (nb) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'buy', people: [], started: Date.now() });
                         } };
