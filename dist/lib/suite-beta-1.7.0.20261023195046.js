@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261022204744 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261023195046 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261022204744';
+    const VERSION = '1.7.0.20261023195046';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -14074,7 +14074,13 @@ MKS.module({
          * ==================================================================== */
         const token = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
         async function getDoc(url) {
-            const r = await fetch(url, { credentials: 'same-origin' });
+            // A network hiccup ("Failed to fetch") is tried once more after a few seconds;
+            // if it fails again the error says which page.
+            let r;
+            try { r = await fetch(url, { credentials: 'same-origin' }); } catch (e) {
+                await sleep(3000);
+                try { r = await fetch(url, { credentials: 'same-origin' }); } catch (e2) { throw new Error(`${e2.message}: ${String(url).replace(/\d{5,}/g, '#')}`); }
+            }
             if (!r.ok) throw new Error(`${url}: ${r.status}`);
             return new DOMParser().parseFromString(await r.text(), 'text/html');
         }
@@ -15473,9 +15479,9 @@ MKS.module({
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
                             let nb = null;
-                            for (let i = 0; i < 10 && !nb; i++) {
-                                nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
-                                if (!nb) await sleep(2000);
+                            for (let i = 0; i < 20 && !nb; i++) {
+                                try { nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind)); } catch (e) { /* server busy */ }
+                                if (!nb) await sleep(3000);
                             }
                             if (g.vt == null) return; // hospital: nothing to buy for it
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
@@ -15500,14 +15506,19 @@ MKS.module({
             // Also by name: a building is named after its post, so the same name means built.
             const names = new Set(data.buildings.map((b) => norm(b.caption || '')));
             const nameOf = (p) => (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${p[3]}` : p[3]);
-            const posts = (await postsNear(c.at)).filter((p) => p[2] === cat)
-                .map((p) => ({ p, d: km([p[0], p[1]], c.at) }))
+            // A need without known places (no positions recorded) builds near the dispatch
+            // centre: "Cannot read properties of null (reading '0')" stopped every round.
+            const at = c.at || data.home;
+            const posts = (await postsNear(at)).filter((p) => p[2] === cat)
+                .map((p) => ({ p, d: km([p[0], p[1]], at) }))
                 .filter((x) => x.d <= maxKm && !owned.some((o) => km(o, [x.p[0], x.p[1]]) < 0.3)
                     && !names.has(norm(x.p[3] || '')) && !names.has(norm(nameOf(x.p) || '')))
                 .sort((a, b) => a.d - b.d);
             if (!posts.length) return { skip: `${c.name}: geen vrije echte post binnen ${maxKm} km` };
             const post = posts[0].p;
-            const bname = opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3];
+            // A post without a name in the map data: the kind and a number (a building "" was tried).
+            const bname = (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3])
+                || `${(BT_NAME[type] || 'Post').replace(/^./, (x) => x.toUpperCase())} ${data.buildings.length + 1}`;
             const doc = await getDoc('/buildings/new');
             const form = [...doc.forms].find((f) => /\/buildings$/.test(f.getAttribute('action') || ''));
             const btn = form && form.querySelector(`#build_credits_${type}`);
@@ -15550,11 +15561,18 @@ MKS.module({
                 check: async () => {
                     // One building more, or the credits went down by about its price: the API
                     // can take well over 10 seconds to list a new building.
-                    for (let i = 0; i < 8; i++) {
-                        if ((await api('/api/buildings')).length > data.buildings.length) return true;
-                        const c = await api('/api/credits');
-                        if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
-                        await sleep(3000);
+                    // A busy server ("Please try again", 504) made the check give up on 11
+                    // buildings that were bought: each try may fail, and the new one is also
+                    // found by its spot or name.
+                    for (let i = 0; i < 20; i++) {
+                        try {
+                            const now = await api('/api/buildings');
+                            if (now.length > data.buildings.length) return true;
+                            if (now.some((b) => km(posOf(b), [post[0], post[1]]) < 0.3 || norm(b.caption || '') === norm(bname))) return true;
+                            const c = await api('/api/credits');
+                            if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
+                        } catch (e) { /* server busy: try again */ }
+                        await sleep(4000);
                     }
                     return false;
                 },
@@ -16104,7 +16122,10 @@ MKS.module({
                 }
             } catch (e) {
                 ctx.err(e);
-                addLog(`fout: ${e.message}`, 'error');
+                // Where it happened (first line of our own code), to find it from the log.
+                const where = String(e.stack || '').split('\n').slice(1).find((l) => !/^\s*at (?:async )?(?:Array|Promise|new Promise)/.test(l));
+                const fn = where && (where.match(/at (?:async )?([\w.$]+) /) || [])[1];
+                addLog(`fout: ${e.message}${fn ? ` (in ${fn})` : ''}`, 'error');
             } finally {
                 busy = false;
                 save();
@@ -16119,7 +16140,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261022204744' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261023195046' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16309,7 +16330,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261022204744',
+                version: '1.7.0.20261023195046',
                 page: location.pathname,
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),

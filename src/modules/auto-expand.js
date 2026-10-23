@@ -1755,9 +1755,9 @@ MKS.module({
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
                             let nb = null;
-                            for (let i = 0; i < 10 && !nb; i++) {
-                                nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
-                                if (!nb) await sleep(2000);
+                            for (let i = 0; i < 20 && !nb; i++) {
+                                try { nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind)); } catch (e) { /* server busy */ }
+                                if (!nb) await sleep(3000);
                             }
                             if (g.vt == null) return; // hospital: nothing to buy for it
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
@@ -1792,7 +1792,9 @@ MKS.module({
                 .sort((a, b) => a.d - b.d);
             if (!posts.length) return { skip: `${c.name}: geen vrije echte post binnen ${maxKm} km` };
             const post = posts[0].p;
-            const bname = opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3];
+            // A post without a name in the map data: the kind and a number (a building "" was tried).
+            const bname = (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3])
+                || `${(BT_NAME[type] || 'Post').replace(/^./, (x) => x.toUpperCase())} ${data.buildings.length + 1}`;
             const doc = await getDoc('/buildings/new');
             const form = [...doc.forms].find((f) => /\/buildings$/.test(f.getAttribute('action') || ''));
             const btn = form && form.querySelector(`#build_credits_${type}`);
@@ -1835,11 +1837,18 @@ MKS.module({
                 check: async () => {
                     // One building more, or the credits went down by about its price: the API
                     // can take well over 10 seconds to list a new building.
-                    for (let i = 0; i < 8; i++) {
-                        if ((await api('/api/buildings')).length > data.buildings.length) return true;
-                        const c = await api('/api/credits');
-                        if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
-                        await sleep(3000);
+                    // A busy server ("Please try again", 504) made the check give up on 11
+                    // buildings that were bought: each try may fail, and the new one is also
+                    // found by its spot or name.
+                    for (let i = 0; i < 20; i++) {
+                        try {
+                            const now = await api('/api/buildings');
+                            if (now.length > data.buildings.length) return true;
+                            if (now.some((b) => km(posOf(b), [post[0], post[1]]) < 0.3 || norm(b.caption || '') === norm(bname))) return true;
+                            const c = await api('/api/credits');
+                            if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
+                        } catch (e) { /* server busy: try again */ }
+                        await sleep(4000);
                     }
                     return false;
                 },
