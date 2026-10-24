@@ -442,7 +442,7 @@ MKS.module({
                 const all = destinations();
                 const { best, why } = bestDestination(all, job);
                 if (best) {
-                    go(best.a, { mode: best.kind, dest: best.name, km: best.dist, cost: best.cost });
+                    go(best.a, { mode: best.kind, dest: best.name, km: best.dist, cost: best.cost, noDept: best.kind === 'hospital' && !best.dep ? true : undefined });
                     return;
                 }
 
@@ -1752,13 +1752,13 @@ MKS.module({
                     curPos = null;
                     curCredits = 0;
                     recordResult(res, `v${vid}`, v.caption);
-                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason, page: res.page });
+                    recordEvent({ kind: 'transport', vehicle: vid, name: v.caption, result: res.result, mode: res.mode, dest: res.dest, km: res.km, cost: res.cost, reason: res.reason, page: res.page, noDept: res.noDept });
                     if (res.result === 'sent' || res.result === 'unconfirmed') {
                         stats.transports++;
                         errorStreak = 0;
                         talk.delete(vid);
                         const where = res.mode === 'release' ? res.dest
-                            : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
+                            : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}${res.noDept ? ', zonder afdeling' : ''}`;
                         addLog(v.caption, `${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.mode === 'release' ? 'warn' : 'ok');
                     } else if (res.result === 'skip' && res.gone) {
                         // Logged, not silent: a page we cannot read looked like this before.
@@ -2373,7 +2373,7 @@ MKS.module({
                             cellRuns.set(id, runs);
                             if (!res.release && runs < 6) list.splice(list.indexOf(entry) + 1, 0, entry);
                             const where = res.release ? res.dest
-                                : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}`;
+                                : `naar ${res.dest}${isNaN(res.km) ? '' : `, ${Number(res.km).toFixed(1)} km`}${res.cost ? `, ${res.cost}%` : ''}${res.noDept ? ', zonder afdeling' : ''}`;
                             addLog(name, `arrestanten ${res.car}: ${res.result === 'sent' ? '' : '(niet bevestigd) '}${where}`, res.release ? 'warn' : 'ok');
                         } else if (res.result === 'skip' && res.held) {
                             // Not a shortage: the vehicle is there, but kept for a bigger mission.
