@@ -93,6 +93,9 @@ MKS.module({
         { key: 'destKm', parent: 'transport', label: 'Maximale afstand bestemming', type: 'number', default: 0, min: 0, max: 500, step: 5, unit: 'km', help: '0 = geen grens.' },
         { key: 'ownKm', parent: 'transport', label: 'Voorrang eigen ziekenhuis', type: 'number', default: 5, min: 0, max: 100, step: 1, unit: 'km',
             help: 'Bij gelijke kosten wint je eigen ziekenhuis of cel, zolang die niet meer dan zoveel km verder is.' },
+        { key: 'anyDept', parent: 'transport', label: 'Ook naar ziekenhuizen zonder de juiste afdeling', type: 'bool', default: false,
+            help: 'Een ziekenhuis met de juiste afdeling gaat nog steeds voor (meer credits). Is er geen, dan gaat de patiënt naar een ziekenhuis '
+                + 'met "Afdeling: Nee" in plaats van te wachten of vrijgelaten te worden: minder bonus, maar wel vervoerd.' },
         { key: 'release', parent: 'transport', label: 'Vrijlaten als er geen bestemming is', type: 'bool', default: false,
             help: 'Geen passend ziekenhuis of cel: patiënt niet vervoeren of gevangenen vrijlaten, zodat het voertuig weer vrij is. '
                 + 'Kost je de credits voor dat vervoer. Uit: de spraakaanvraag blijft staan en komt in de tekortlijst.' },
@@ -482,7 +485,8 @@ MKS.module({
             });
             const rank = (c) => (isNaN(c.dist) ? 1e9 : c.dist) - (c.own ? job.ownKm : 0);
             const short = (c) => (c.a.classList.contains('btn-warning') ? 1 : 0);
-            const best = fit.sort((x, y) => short(x) - short(y) || x.cost - y.cost || rank(x) - rank(y))[0];
+            // With "ook zonder afdeling": the right department still goes first (its bonus).
+            const best = fit.sort((x, y) => Number(!x.dep) - Number(!y.dep) || short(x) - short(y) || x.cost - y.cost || rank(x) - rank(y))[0];
             return { best, why };
         }
 
@@ -545,7 +549,7 @@ MKS.module({
         function destReason(c, job) {
             if (c.a.classList.contains('disabled')) return 'niet beschikbaar';
             if (c.free <= 0) return 'vol';
-            if (c.kind === 'hospital' && !c.dep) return 'geen afdeling';
+            if (c.kind === 'hospital' && !c.dep && !job.anyDept) return 'geen afdeling';
             if (c.cost > job.destCost) return 'te duur';
             if (job.destKm > 0 && c.dist > job.destKm) return 'te ver';
             return '';
@@ -1744,7 +1748,7 @@ MKS.module({
                     tried.set(`v${vid}`, Date.now());
                     status(`Spraakaanvraag: ${v.caption}`, 'busy');
                     const res = await runJob({ kind: 'transport', id: vid, token: Date.now(), destCost: Number(ctx.cfg.destCost),
-                        destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                        destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept });
                     curPos = null;
                     curCredits = 0;
                     recordResult(res, `v${vid}`, v.caption);
@@ -2013,7 +2017,7 @@ MKS.module({
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry), true), ownJobOnly: ownJobOnly(),
-                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!ambQ });
+                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!ambQ });
                             // One unit: straight through the alarm form, no window. Else, or when that
                             // does not fit, the hidden window as before.
                             let res = null;
@@ -2299,7 +2303,7 @@ MKS.module({
                             // One vehicle of the ticked types, nothing else.
                             status(`Bezig: ${name}`, 'busy');
                             const res = await runJob({ id, token: Date.now(), single: true, avoid: avoidCars(), me: W.user_id != null ? String(W.user_id) : '',
-                                teamTypes: loadTeamTypes('single'), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release });
+                                teamTypes: loadTeamTypes('single'), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept });
                             recordEvent({ kind: 'mission', single: true, id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, km: res.km, car: res.car || undefined, reason: res.reason });
                             if (res.result === 'sent' || res.result === 'unconfirmed') {
                                 if (res.mode === 'cell') { stats.transports++; tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000); } else { stats.sent++; sent.push(Date.now()); }
@@ -2349,7 +2353,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits, true), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!amb0 });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!amb0 });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
