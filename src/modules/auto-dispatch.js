@@ -851,6 +851,9 @@ MKS.module({
                 };
                 let picked = selection();
                 const reset = () => { try { W.vehicleSelectionReset(); } catch (e) { picked.forEach((c) => c.checked && c.click()); } };
+                // MICU missions: no MICU free, then the nearest one on its way elsewhere
+                // ("Dooralarmeren" tab), never one that was redirected before (no ping-pong).
+                if (!picked.length && job.patientVt && await redirectOccupied(job, report, doneKey)) return;
                 if (!picked.length) {
                     // What the window saw, to tell "all busy" from a list that did not load:
                     // vehicles listed, per needed field how many fit, and a "load more" link still there.
@@ -992,6 +995,35 @@ MKS.module({
         // Right before Alarmeren: ask the controller whether these cars are still ours to send.
         // It answers one frame at a time and marks them taken at once, so two windows can never
         // both send the same car, however long ago their vehicle lists were loaded.
+        // "Dooralarmeren": take a vehicle of the patient's type that is driving to another
+        // mission. The tab loads its list when clicked. Returns true when it sent one.
+        async function redirectOccupied(job, report, doneKey) {
+            const tab = document.querySelector('a[tabload="occupied"], a[href="#occupied"]');
+            if (!tab) return false;
+            tab.click();
+            let boxes = [];
+            for (let i = 0; i < 40; i++) {
+                await sleep(250);
+                boxes = [...document.querySelectorAll('#occupied input.vehicle_checkbox')];
+                if (boxes.length || document.querySelector('#occupied table tbody')) break;
+            }
+            const never = new Set([...(job.noRedirect || []), ...(job.avoid || [])].map(String));
+            const c = boxes.filter((b) => b.getAttribute('vehicle_type_id') === String(job.patientVt) && !never.has(b.value))
+                .sort((a, b) => Number(a.getAttribute('data-distance')) - Number(b.getAttribute('data-distance')))[0];
+            if (!c) return false;
+            document.querySelectorAll('input.vehicle_checkbox:checked').forEach((x) => x.click());
+            c.click();
+            const btn = document.getElementById('alert_btn');
+            if (!btn || !c.checked) { if (c.checked) c.click(); return false; }
+            const taken = await claimCars([c.value]);
+            if (taken.length) { c.click(); return false; }
+            try { sessionStorage.setItem(doneKey, '1'); } catch (e) { /* ignore */ }
+            const from = ((c.closest('tr')?.textContent || '').replace(/\s+/g, ' ').match(/\((.+)\)\s+[\d,.]+\s*km/) || [])[1];
+            report('sending', { mode: 'redirect', n: 1, km: Number(c.getAttribute('data-distance')), ids: [c.value],
+                note: `doorgealarmeerd${from ? ` (was onderweg naar ${from.slice(0, 60)})` : ''}` });
+            btn.click();
+            return true;
+        }
         function claimCars(ids) {
             return new Promise((resolve) => {
                 const key = Math.random().toString(36).slice(2);
@@ -1706,6 +1738,7 @@ MKS.module({
                         result = ev.data;
                         if (result.result !== 'sending') return cleanup(result);
                         (result.ids || []).forEach((v) => recentCars.set(String(v), Date.now()));
+                        if (result.mode === 'redirect') noteRedirected(result.ids || []);
                         // Confirmed by our own list (mission no longer red, vehicle no longer
                         // status 5) or by the page the frame lands on afterwards. A top-up
                         // starts from a mission that is not red, so it waits for the page.
@@ -1876,6 +1909,20 @@ MKS.module({
                 teamNoted.set(text, Date.now());
                 addLog('Teaminzetten', text, 'idle');
             };
+            // Vehicles taken over via "Dooralarmeren": never redirected a second time (3 hours).
+            const REDIRECT_KEY = 'mks.autoDispatch.redirected.v1';
+            function redirectedIds() {
+                let m;
+                try { m = JSON.parse(GM_getValue(REDIRECT_KEY, '{}')) || {}; } catch (e) { m = {}; }
+                const now = Date.now();
+                for (const [v, t] of Object.entries(m)) if (now - t > 3 * 3600000) delete m[v];
+                return m;
+            }
+            function noteRedirected(ids) {
+                const m = redirectedIds();
+                ids.forEach((v) => { m[String(v)] = Date.now(); });
+                try { GM_setValue(REDIRECT_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ }
+            }
             // Cars either loop sent in the last 2 minutes: vehicle id -> when.
             const recentCars = new Map();
             function avoidCars() {
@@ -2017,7 +2064,7 @@ MKS.module({
                                 maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: ctx.cfg.topUp,
                                 ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((x) => x.trim()).filter(Boolean),
                                 bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry), true), ownJobOnly: ownJobOnly(),
-                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!ambQ });
+                                ovdgFrom: 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], noRedirect: Object.keys(redirectedIds()), optionalAmb: !!ambQ });
                             // One unit: straight through the alarm form, no window. Else, or when that
                             // does not fit, the hidden window as before.
                             let res = null;
@@ -2353,7 +2400,7 @@ MKS.module({
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits, true), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], optionalAmb: !!amb0 });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], noRedirect: Object.keys(redirectedIds()), optionalAmb: !!amb0 });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
@@ -2384,7 +2431,7 @@ MKS.module({
                             stats.sent++;
                             errorStreak = 0;
                             sent.push(Date.now());
-                            const verb = res.mode === 'full' ? 'gealarmeerd' : 'bijgestuurd';
+                            const verb = res.mode === 'full' ? 'gealarmeerd' : res.mode === 'redirect' ? 'MICU' : 'bijgestuurd';
                             addLog(name, `${res.result === 'sent' ? verb : `${verb} (niet bevestigd)`}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km${res.note ? `, ${res.note}` : ''}${res.short ? `, te weinig: ${res.short}` : ''}`, 'ok');
                         } else if (res.result === 'wait') {
                             // Vehicles still driving: look again in a minute, not after retryMin.
