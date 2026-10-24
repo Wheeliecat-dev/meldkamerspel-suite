@@ -79,6 +79,9 @@ MKS.module({
             help: 'Alles op één teamevenement: het best betalende dat nog iets mist. Het krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
                 + 'ook brandweer, elke minuut opnieuw bekeken. Is het compleet, dan gaat de focus naar het volgende best betalende; de andere evenementen wachten tot dan. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
                 + 'krijgen alleen voertuigen die geen open evenement nu kan gebruiken. Gewone teaminzetten blijven zoals ingesteld.' },
+        { key: 'eventComplete', parent: 'eventFocus', label: 'Teamevenementen: alleen als het compleet kan', type: 'bool', default: true,
+            help: 'Er gaat pas iets naar een evenement als alles wat het nog mist er ook bij kan (binnen de afstand). Kan dat niet, dan gaat de focus naar het '
+                + 'volgende evenement en wordt dit na 15 minuten opnieuw bekeken. Een Natuurbrand die 4 HOvD mist, hield anders 100+ voertuigen vast.' },
         { key: 'eventKm', parent: 'eventFocus', label: 'Teamevenementen: maximale afstand', type: 'number', default: 40, min: 5, max: 300, step: 5, unit: 'km',
             help: 'Helikopters mogen verder (hun eigen grens).' },
         { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
@@ -2218,7 +2221,7 @@ MKS.module({
                         const r = (await loadMissions())[keyOf(entry)];
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         fullJob = { full: true, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                            maxKm: evFocus ? ctx.cfg.eventKm : ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: evFocus ? false : ctx.cfg.needAll, dropFar: evFocus,
+                            maxKm: evFocus ? ctx.cfg.eventKm : ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: evFocus ? !!ctx.cfg.eventComplete : ctx.cfg.needAll, dropFar: evFocus && !ctx.cfg.eventComplete,
                             patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: true,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
@@ -2233,10 +2236,17 @@ MKS.module({
                             eventSkip.set(id, Date.now() + (res.finished ? 6 * 3600000 : res.notYet ? 30 * 60000 : 5 * 60000));
                             if (res.covered) addLog(name, 'compleet: focus gaat naar het volgende teamevenement', 'ok');
                         }
-                        if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
+                        const cannot = ctx.cfg.eventComplete && res.result === 'skip' && !res.covered && !res.notYet && !res.finished;
+                        if (cannot) {
+                            // Not completable now (something it misses is not free or too far):
+                            // nothing goes, the focus moves on, and this one waits 15 minutes.
+                            eventSkip.set(id, Date.now() + 15 * 60000);
+                            eventNeeds.delete(id);
+                            addLog(name, `kan nu niet compleet (${res.reason}): focus gaat naar het volgende teamevenement, over 15 min opnieuw`, 'idle');
+                        } else if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
                         else if (res.result !== 'wait' && res.result !== 'error') noteEventNeeds(id, titleOf(entry), creditsOf(entry), res);
                         // Looked at again every minute until nothing is missing.
-                        if (res.result === 'sent' || res.result === 'unconfirmed' || (res.result === 'skip' && !res.covered && !res.notYet)) {
+                        if (!cannot && (res.result === 'sent' || res.result === 'unconfirmed' || (res.result === 'skip' && !res.covered && !res.notYet))) {
                             tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
                         }
                     }
@@ -2288,7 +2298,8 @@ MKS.module({
                         // A big team mission or event short of rare units (handcrew, FBO-heli for a
                         // 70k Natuurbrand): held like our own big missions, so small ones leave
                         // those units for it and it is looked at again every minute.
-                        if (full) updateHold(id, name, creditsOf(entry), res);
+                        // A focus event that cannot be completed holds nothing: it is left for now.
+                        if (full && !(evFocus && ctx.cfg.eventComplete)) updateHold(id, name, creditsOf(entry), res);
                         // Otherwise (nothing to hold, or something we cannot send at all): look
                         // again in 20 minutes, not every round (861 tries in one afternoon).
                         if (!holds.has(id) && !evFocus && /te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
