@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261022205258 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261024114354 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261022205258';
+    const VERSION = '1.7.0.20261024114354';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -14074,7 +14074,13 @@ MKS.module({
          * ==================================================================== */
         const token = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
         async function getDoc(url) {
-            const r = await fetch(url, { credentials: 'same-origin' });
+            // A network hiccup ("Failed to fetch") is tried once more after a few seconds;
+            // if it fails again the error says which page.
+            let r;
+            try { r = await fetch(url, { credentials: 'same-origin' }); } catch (e) {
+                await sleep(3000);
+                try { r = await fetch(url, { credentials: 'same-origin' }); } catch (e2) { throw new Error(`${e2.message}: ${String(url).replace(/\d{5,}/g, '#')}`); }
+            }
             if (!r.ok) throw new Error(`${url}: ${r.status}`);
             return new DOMParser().parseFromString(await r.text(), 'text/html');
         }
@@ -15473,9 +15479,9 @@ MKS.module({
                             // The API lists small ones as the normal kind with small_building set.
                             const kind = { 17: 0, 18: 5, 13: 3 }[type] ?? type;
                             let nb = null;
-                            for (let i = 0; i < 10 && !nb; i++) {
-                                nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind));
-                                if (!nb) await sleep(2000);
+                            for (let i = 0; i < 20 && !nb; i++) {
+                                try { nb = (await api('/api/buildings')).find((b) => !before.has(b.id) && (b.building_type === type || b.building_type === kind)); } catch (e) { /* server busy */ }
+                                if (!nb) await sleep(3000);
                             }
                             if (g.vt == null) return; // hospital: nothing to buy for it
                             if (nb && ctx.cfg.buildMode) projects().push({ building: nb.id, caption: nb.caption, vt: g.vt, need, stage: 'grow', kind: g.name, levels: 0, people: [], started: Date.now() });
@@ -15510,7 +15516,9 @@ MKS.module({
                 .sort((a, b) => a.d - b.d);
             if (!posts.length) return { skip: `${c.name}: geen vrije echte post binnen ${maxKm} km` };
             const post = posts[0].p;
-            const bname = opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3];
+            // A post without a name in the map data: the kind and a number (a building "" was tried).
+            const bname = (opts.prefix ? `${opts.prefix[0].toUpperCase()}${opts.prefix.slice(1)} ${post[3]}` : post[3])
+                || `${(BT_NAME[type] || 'Post').replace(/^./, (x) => x.toUpperCase())} ${data.buildings.length + 1}`;
             const doc = await getDoc('/buildings/new');
             const form = [...doc.forms].find((f) => /\/buildings$/.test(f.getAttribute('action') || ''));
             const btn = form && form.querySelector(`#build_credits_${type}`);
@@ -15553,11 +15561,18 @@ MKS.module({
                 check: async () => {
                     // One building more, or the credits went down by about its price: the API
                     // can take well over 10 seconds to list a new building.
-                    for (let i = 0; i < 8; i++) {
-                        if ((await api('/api/buildings')).length > data.buildings.length) return true;
-                        const c = await api('/api/credits');
-                        if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
-                        await sleep(3000);
+                    // A busy server ("Please try again", 504) made the check give up on 11
+                    // buildings that were bought: each try may fail, and the new one is also
+                    // found by its spot or name.
+                    for (let i = 0; i < 20; i++) {
+                        try {
+                            const now = await api('/api/buildings');
+                            if (now.length > data.buildings.length) return true;
+                            if (now.some((b) => km(posOf(b), [post[0], post[1]]) < 0.3 || norm(b.caption || '') === norm(bname))) return true;
+                            const c = await api('/api/credits');
+                            if (Number(c.credits_user_current) <= data.credits - cost * 0.9) return true;
+                        } catch (e) { /* server busy: try again */ }
+                        await sleep(4000);
                     }
                     return false;
                 },
@@ -16109,7 +16124,8 @@ MKS.module({
                 ctx.err(e);
                 // Where it happened (first line of our own code), to find it from the log.
                 const where = String(e.stack || '').split('\n').slice(1).find((l) => !/^\s*at (?:async )?(?:Array|Promise|new Promise)/.test(l));
-                addLog(`fout: ${e.message}${where ? ` (${where.trim().slice(0, 120)})` : ''}`, 'error');
+                const fn = where && (where.match(/at (?:async )?([\w.$]+) /) || [])[1];
+                addLog(`fout: ${e.message}${fn ? ` (in ${fn})` : ''}`, 'error');
             } finally {
                 busy = false;
                 save();
@@ -16124,7 +16140,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261022205258' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261024114354' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16249,6 +16265,7 @@ MKS.module({
     category: 'auto',
     description: 'Zet elk uur (instelbaar) de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
         + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel. '
+        + 'Houdt ook zelf je inkomsten bij (elke 10 minuten), ook als Automatisch uitbreiden uit staat. '
         + 'Op afstand stoppen: zet een bestand met de naam STOP in die repository (bijv. via de GitHub-app). Automatisch alarmeren en '
         + 'Automatisch uitbreiden stoppen dan binnen een paar minuten, op elke computer. Verwijder het bestand om weer te kunnen starten.',
     at: 'ready',
@@ -16268,6 +16285,9 @@ MKS.module({
         const TOKEN_KEY = 'mks.logGithub.token';
         const LAST_KEY = 'mks.logGithub.last';
         const SHA_KEY = 'mks.logGithub.sha';
+        // Income of its own, every 10 minutes, so the log has it also while Automatisch
+        // uitbreiden (which records it too) is off: [time, credits earned in total].
+        const INCOME_KEY = 'mks.logGithub.income.v1';
         const read = (key, fallback) => { try { return JSON.parse(GM_getValue(key, '')) || fallback; } catch (e) { return fallback; } };
         let busy = false;
         let lastResult = null;
@@ -16305,6 +16325,32 @@ MKS.module({
             return btoa(s);
         }
 
+        async function sampleIncome() {
+            const list = read(INCOME_KEY, []);
+            const lastAt = list.length ? list[list.length - 1][0] : 0;
+            if (Date.now() - lastAt < 9 * 60 * 1000) return; // another tab took this one
+            try {
+                const c = await (await fetch('/api/credits', { credentials: 'same-origin' })).json();
+                const total = Number(c.credits_user_total);
+                if (!total) return;
+                list.push([Date.now(), total]);
+                const keep = Date.now() - 14 * 86400 * 1000;
+                GM_setValue(INCOME_KEY, JSON.stringify(list.filter((x) => x[0] >= keep)));
+            } catch (e) { /* server busy: next time */ }
+        }
+        // Credits per hour over the last h hours, from those samples.
+        function incomeSummary() {
+            const list = read(INCOME_KEY, []);
+            if (list.length < 2) return null;
+            const last = list[list.length - 1];
+            const rate = (h) => {
+                const from = list.find((x) => x[0] >= last[0] - h * 3600 * 1000);
+                return from && last[0] > from[0] ? Math.round((last[1] - from[1]) / ((last[0] - from[0]) / 3600000)) : null;
+            };
+            return { perHour: { '1h': rate(1), '3h': rate(3), '6h': rate(6), '12h': rate(12), '24h': rate(24), '7d': rate(168) },
+                total: last[1], samples: list.filter((x) => x[0] >= last[0] - 7 * 86400 * 1000) };
+        }
+
         // Everything both automation modules keep: GM storage is shared by all
         // tabs, the live extras (stats, ranking) only exist in the tab that runs them.
         function snapshot() {
@@ -16314,8 +16360,9 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261022205258',
+                version: '1.7.0.20261024114354',
                 page: location.pathname,
+                income: incomeSummary(),
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
                     uncrewed: read('mks.autoDispatch.uncrewed.v1', {}),
@@ -16390,8 +16437,8 @@ MKS.module({
         });
 
         ctx.onSettings(() => ctx.refresh());
-        const timer = setInterval(() => upload(false), 60 * 1000);
-        setTimeout(() => upload(false), 15 * 1000);
+        const timer = setInterval(() => { sampleIncome(); upload(false); }, 60 * 1000);
+        setTimeout(() => { sampleIncome(); upload(false); }, 15 * 1000);
         return { stop() { clearInterval(timer); } };
     },
 });

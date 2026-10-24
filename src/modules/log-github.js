@@ -6,6 +6,7 @@ MKS.module({
     category: 'auto',
     description: 'Zet elk uur (instelbaar) de logboeken van Automatisch alarmeren en Automatisch uitbreiden in een bestand in je eigen '
         + '(privé) GitHub-repository, zodat ze daar te lezen zijn zonder dat het spel open hoeft te staan. Verandert niets in het spel. '
+        + 'Houdt ook zelf je inkomsten bij (elke 10 minuten), ook als Automatisch uitbreiden uit staat. '
         + 'Op afstand stoppen: zet een bestand met de naam STOP in die repository (bijv. via de GitHub-app). Automatisch alarmeren en '
         + 'Automatisch uitbreiden stoppen dan binnen een paar minuten, op elke computer. Verwijder het bestand om weer te kunnen starten.',
     at: 'ready',
@@ -25,6 +26,9 @@ MKS.module({
         const TOKEN_KEY = 'mks.logGithub.token';
         const LAST_KEY = 'mks.logGithub.last';
         const SHA_KEY = 'mks.logGithub.sha';
+        // Income of its own, every 10 minutes, so the log has it also while Automatisch
+        // uitbreiden (which records it too) is off: [time, credits earned in total].
+        const INCOME_KEY = 'mks.logGithub.income.v1';
         const read = (key, fallback) => { try { return JSON.parse(GM_getValue(key, '')) || fallback; } catch (e) { return fallback; } };
         let busy = false;
         let lastResult = null;
@@ -62,6 +66,32 @@ MKS.module({
             return btoa(s);
         }
 
+        async function sampleIncome() {
+            const list = read(INCOME_KEY, []);
+            const lastAt = list.length ? list[list.length - 1][0] : 0;
+            if (Date.now() - lastAt < 9 * 60 * 1000) return; // another tab took this one
+            try {
+                const c = await (await fetch('/api/credits', { credentials: 'same-origin' })).json();
+                const total = Number(c.credits_user_total);
+                if (!total) return;
+                list.push([Date.now(), total]);
+                const keep = Date.now() - 14 * 86400 * 1000;
+                GM_setValue(INCOME_KEY, JSON.stringify(list.filter((x) => x[0] >= keep)));
+            } catch (e) { /* server busy: next time */ }
+        }
+        // Credits per hour over the last h hours, from those samples.
+        function incomeSummary() {
+            const list = read(INCOME_KEY, []);
+            if (list.length < 2) return null;
+            const last = list[list.length - 1];
+            const rate = (h) => {
+                const from = list.find((x) => x[0] >= last[0] - h * 3600 * 1000);
+                return from && last[0] > from[0] ? Math.round((last[1] - from[1]) / ((last[0] - from[0]) / 3600000)) : null;
+            };
+            return { perHour: { '1h': rate(1), '3h': rate(3), '6h': rate(6), '12h': rate(12), '24h': rate(24), '7d': rate(168) },
+                total: last[1], samples: list.filter((x) => x[0] >= last[0] - 7 * 86400 * 1000) };
+        }
+
         // Everything both automation modules keep: GM storage is shared by all
         // tabs, the live extras (stats, ranking) only exist in the tab that runs them.
         function snapshot() {
@@ -73,6 +103,7 @@ MKS.module({
                 at: new Date().toISOString(),
                 version: '{{VERSION}}',
                 page: location.pathname,
+                income: incomeSummary(),
                 dispatch: {
                     events: read('mks.autoDispatch.events.v1', []).filter((e) => e.t >= since),
                     uncrewed: read('mks.autoDispatch.uncrewed.v1', {}),
@@ -147,8 +178,8 @@ MKS.module({
         });
 
         ctx.onSettings(() => ctx.refresh());
-        const timer = setInterval(() => upload(false), 60 * 1000);
-        setTimeout(() => upload(false), 15 * 1000);
+        const timer = setInterval(() => { sampleIncome(); upload(false); }, 60 * 1000);
+        setTimeout(() => { sampleIncome(); upload(false); }, 15 * 1000);
         return { stop() { clearInterval(timer); } };
     },
 });
