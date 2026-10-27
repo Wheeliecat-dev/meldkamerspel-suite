@@ -98,7 +98,8 @@ MKS.module({
         { advanced: true, key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
             help: 'Zoveel van de waardevolste tekorten worden uitgewerkt; de stap met de meeste credits per uitgegeven credit wint.' },
         { advanced: true, key: 'groupMax', label: 'Gebouwen per opleiding', type: 'number', default: 5, min: 1, max: 10, step: 1,
-            help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste.' },
+            help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste. '
+                + 'Met "Specialisten gelijkmatig spreiden" aan geldt dit maximum niet: dan vult de klas zich met de posten die het verst van zo\'n voertuig af liggen, tot de klas vol is.' },
         { advanced: true, key: 'teamSchools', label: 'Teamscholen gebruiken', type: 'bool', default: true,
             help: 'Is er geen vrij klaslokaal in je eigen scholen, dan doet je personeel mee aan een gratis opengestelde teamopleiding, '
                 + 'of start het script er zelf een in een school van het team (Team > Gebouwen), gratis voor teamleden.' },
@@ -1116,23 +1117,32 @@ MKS.module({
          * place: the old rule (near the shortages) applies. Helicopters keep the old rule. */
         const HELI = new Set([23, 28, 80, 85]);
         let denseCache = null;
-        function coverGap(c, data) {
-            const vts = c.vts.filter((id) => VT[id]);
-            if (!vts.length || vts.some((id) => PLAIN.has(id) || HELI.has(id))) return null;
-            const holds = new Set(vts.flatMap((id) => VT[id][3]));
+        const coverable = (vts) => vts.length > 0 && !vts.some((id) => PLAIN.has(id) || HELI.has(id));
+        // Where vehicles of these types are (own, or coming in a project).
+        function coverHave(vts, data) {
             const have = data.vehicles.filter((x) => vts.includes(x.vehicle_type)).map((x) => data.byId[x.building_id]).filter(Boolean).map(posOf);
             for (const p of projects()) if (vts.includes(p.vt) && data.byId[p.building]) have.push(posOf(data.byId[p.building]));
+            return have;
+        }
+        // The building of `pool` with the biggest gap to `have`, weighed by how built-up its area is.
+        function bestGap(pool, have, data) {
+            if (!denseCache) denseCache = new Map();
             const all = data.buildings.map(posOf);
             let best = null;
-            for (const b of data.buildings) {
-                if (!holds.has(b.building_type) || b.enabled === false) continue;
+            for (const b of pool) {
                 const at = posOf(b);
                 const gap = have.length ? Math.min(...have.map((h) => km(at, h))) : 99;
                 if (!denseCache.has(b.id)) denseCache.set(b.id, Math.min(1, all.filter((p) => km(at, p) <= 10).length / 8));
-                const dense = denseCache.get(b.id);
-                const score = Math.min(gap, 40) * dense;
+                const score = Math.min(gap, 40) * denseCache.get(b.id);
                 if (!best || score > best.score) best = { at, gap, score, b };
             }
+            return best;
+        }
+        function coverGap(c, data) {
+            const vts = c.vts.filter((id) => VT[id]);
+            if (!coverable(vts)) return null;
+            const holds = new Set(vts.flatMap((id) => VT[id][3]));
+            const best = bestGap(data.buildings.filter((b) => holds.has(b.building_type) && b.enabled !== false), coverHave(vts, data), data);
             return best && best.gap >= ctx.cfg.coverKm ? best : null;
         }
         function applyCover(cands, data) {
@@ -1270,28 +1280,49 @@ MKS.module({
                     const learnIds = firstClass.map((p) => p.pid); // who goes to the school now
                     if (learners.length > seats) group[0].queue = learners.slice(seats).map((p) => p.pid);
                     // More buildings in the same training, each its own project (train, level,
-                    // buy, link): the ones nearest to the most places where the vehicle
-                    // was missing, so the new vehicles spread over the problem areas.
-                    const hits = new Map();
-                    for (const at of (c.t.pos || []).map((p) => [p[0], p[1]])) {
-                        const nearest = own.filter((o) => km(posOf(o.b), at) <= ctx.cfg.nearKm * 2).sort((x, y) => km(posOf(x.b), at) - km(posOf(y.b), at))[0];
-                        if (nearest) hits.set(nearest.b.id, (hits.get(nearest.b.id) || 0) + 1);
-                    }
-                    const extraBuildings = own.filter((o) => o.b.id !== b.id && hits.has(o.b.id)).sort((x, y) => hits.get(y.b.id) - hits.get(x.b.id));
-                    for (const { b: ob } of extraBuildings) {
-                        if (group.length >= ctx.cfg.groupMax || learnIds.length >= seats) break;
-                        if (projects().some((p) => p.building === ob.id)) continue;
+                    // buy, link). Can it take one: no extension needed, room (or a level),
+                    // staff left, and enough free people to crew it.
+                    const tryAdd = async (ob) => {
+                        if (projects().some((p) => p.building === ob.id)) return false;
                         const oinfo = await buildingInfo(ob.id);
-                        if (oinfo.exts.some((e) => unlocks(e.text, c.vt))) continue; // needs an extension first
-                        if (oinfo.used >= oinfo.max && !(ctx.cfg.doLevels && await nextLevel(ob.id))) continue; // full for good
+                        if (oinfo.exts.some((e) => unlocks(e.text, c.vt))) return false; // needs an extension first
+                        if (oinfo.used >= oinfo.max && !(ctx.cfg.doLevels && await nextLevel(ob.id))) return false; // full for good
                         const oleft = (ob.personal_count || 0) - data.vehicles.filter((x) => x.building_id === ob.id).reduce((s, x) => s + crewOf(x.vehicle_type), 0);
-                        if (oleft < need) continue;
+                        if (oleft < need) return false;
                         const oppl = await peopleAt(ob.id, edu.key);
                         const otrained = oppl.filter((p) => p.free && p.has).slice(0, want);
                         const olearn = oppl.filter((p) => p.free && !p.has).slice(0, want - otrained.length);
-                        if (otrained.length + olearn.length < want || learnIds.length + olearn.length > seats) continue;
+                        if (otrained.length + olearn.length < want || learnIds.length + olearn.length > seats) return false;
                         group.push(mk(ob, otrained.map((p) => p.pid), olearn.map((p) => p.pid)));
                         learnIds.push(...olearn.map((p) => p.pid));
+                        return true;
+                    };
+                    if (ctx.cfg.evenCover && coverable(c.vts)) {
+                        // Even coverage: the empty seats go to the next posts with the biggest gap,
+                        // one at a time (each one taken closes the gap around it), until the class
+                        // is full or every post has one within coverKm.
+                        const have = [...coverHave(c.vts, data), posOf(b)];
+                        const pool = own.map((o) => o.b).filter((ob) => ob.id !== b.id);
+                        for (let tries = 0; tries < 30 && pool.length && learnIds.length < seats; tries++) {
+                            if (stopped) break;
+                            const g = bestGap(pool, have, data);
+                            if (!g || g.gap < ctx.cfg.coverKm) break;
+                            pool.splice(pool.indexOf(g.b), 1);
+                            if (await tryAdd(g.b)) have.push(g.at);
+                        }
+                    } else {
+                        // The ones nearest to the most places where the vehicle was missing,
+                        // so the new vehicles spread over the problem areas.
+                        const hits = new Map();
+                        for (const at of (c.t.pos || []).map((p) => [p[0], p[1]])) {
+                            const nearest = own.filter((o) => km(posOf(o.b), at) <= ctx.cfg.nearKm * 2).sort((x, y) => km(posOf(x.b), at) - km(posOf(y.b), at))[0];
+                            if (nearest) hits.set(nearest.b.id, (hits.get(nearest.b.id) || 0) + 1);
+                        }
+                        const extraBuildings = own.filter((o) => o.b.id !== b.id && hits.has(o.b.id)).sort((x, y) => hits.get(y.b.id) - hits.get(x.b.id));
+                        for (const { b: ob } of extraBuildings) {
+                            if (group.length >= ctx.cfg.groupMax || learnIds.length >= seats) break;
+                            await tryAdd(ob);
+                        }
                     }
                     const step = {
                         label: `opleiding ${v[4]} voor ${learnIds.length} pers.: ${group.length} gebouw(en) met project`
