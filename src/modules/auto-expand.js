@@ -79,7 +79,7 @@ MKS.module({
         { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
             help: '"auto" = een passend model, opgevraagd bij de dienst (OpenRouter: een gratis model, OpenAI: een "mini"-model, Gemini: Flash). Of vul zelf een modelnaam in.' },
         { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
-            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
+            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (drone, OvD-P) gaan voor.',
             help: 'Gaat elke keer mee naar de AI.' },
 
         { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
@@ -241,6 +241,9 @@ MKS.module({
             153: ["DB-RI", 25000, 2, [0,17], "?", "all", 6], 154: ["RIA", 6000, 0, [0,17], null, null, 0],
             155: ["DB-VI", 25000, 4, [0,17], "?", "all", 6], 156: ["VIA", 6000, 0, [0,17], null, null, 0],
         };
+        // Never bought, by any path (needs, free spots, focus, projects): MICU. More MICUs
+        // only bring more Interfacilitair Transport missions, so the shortage never ends.
+        const NEVER_BUY = new Set([103]);
         // Plain vehicles: fire engines, ambulances, police cars. Specialist ones weigh more.
         const PLAIN = new Set([0, 1, 6, 7, 8, 9, 12, 14, 15, 17, 16, 22, 25, 59, 75, 20, 21]);
         const norm = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').replace(/^(een|elke)\s+/, '').trim();
@@ -798,6 +801,7 @@ MKS.module({
             return pids.filter((pid) => after.querySelector(`a[personal_id="${pid}"]`)?.classList.contains('btn-assigned')).length === pids.length && done > 0;
         }
         async function buyAction(b, c, v, info, d) {
+            if (NEVER_BUY.has(Number(c.vt))) return { skip: `${b.caption}: ${v[0]} wordt nooit gekocht` };
             const market = await getDoc(`/buildings/${b.id}/vehicles/new`);
             const btn = [...market.querySelectorAll('a.buy-vehicle-btn')].find((a) => new RegExp(`/vehicle/\\d+/${c.vt}/credits`).test(a.getAttribute('href')));
             if (!btn || btn.classList.contains('disabled')) return { skip: `${b.caption}: ${v[0]} niet te koop` };
@@ -811,6 +815,11 @@ MKS.module({
             for (const p of [...projects()]) {
                 if (stopped) return null;
                 const b = data.byId[p.building];
+                if (NEVER_BUY.has(Number(p.vt))) {
+                    state.projects = projects().filter((x) => x !== p);
+                    addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (wordt nooit gekocht)`, 'warn');
+                    continue;
+                }
                 if (!b || Date.now() - p.started > 14 * 86400000) {
                     state.projects = projects().filter((x) => x !== p);
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
@@ -1041,7 +1050,7 @@ MKS.module({
                 const left = (b.personal_count || 0) - here.reduce((sum, x) => sum + crewOf(x.vehicle_type), 0);
                 let info = null;
                 for (const c of types) {
-                    const vt = c.vts.find((id) => VT[id] && VT[id][3].includes(b.building_type));
+                    const vt = c.vts.find((id) => VT[id] && !NEVER_BUY.has(id) && VT[id][3].includes(b.building_type));
                     if (vt == null || VT[vt][4] === '?') continue;
                     const v = VT[vt];
                     if (left < crewOf(vt)) continue;
@@ -1095,6 +1104,8 @@ MKS.module({
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
+            c.vts = c.vts.filter((id) => !NEVER_BUY.has(id));
+            if (!c.vts.length) return { skip: `${c.name}: wordt nooit gekocht` };
             c.vt = c.vts.find((id) => VT[id] && VT[id][3].some((t) => types.has(t))) ?? c.vts[0];
             const v = VT[c.vt];
             if (!v) return { skip: `${c.name}: onbekend voertuig` };
