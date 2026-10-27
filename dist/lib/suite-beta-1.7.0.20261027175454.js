@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261027172801 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261027175454 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261027172801';
+    const VERSION = '1.7.0.20261027175454';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -239,194 +239,268 @@ const MKS = (() => {
      * ---------------------------------------------------------------------- */
     const CSS = `
     #mks-dash, #mks-dock, .mks-ui {
-        --m-bg:#0a0e13; --m-s1:#11161d; --m-s2:#171e27; --m-s3:#1e2733; --m-s4:#29333f;
-        --m-bd:#26303c; --m-bd2:#34404e; --m-tx:#e7ecf1; --m-dim:#9aa6b4; --m-faint:#66717e;
-        --m-ac:#31c4dd; --m-ac-d:#133d46; --m-ok:#3ecf8e; --m-ok-d:#123526; --m-wa:#f0a83c; --m-wa-d:#3d2d12;
-        --m-er:#ef4a52; --m-er-d:#401a1d;
+        --m-bg:#0b1118; --m-s1:#0e151e; --m-s2:#121a24; --m-s3:#151e29; --m-s4:#1a2533; --m-s5:#2b3644;
+        --m-bd:#1f2a38; --m-bd2:#243041; --m-tx:#e6edf3; --m-tx2:#c3ccd6; --m-dim:#aab5c2; --m-faint:#8b98a8; --m-mute:#5d6a7a;
+        --m-ac:#22c3e6; --m-ac-t:#5fd4ef; --m-ac-d:#0f2e37; --m-ok:#3fcf7f; --m-ok-t:#7ee2a8; --m-ok-d:#12291f;
+        --m-wa:#f0a36b; --m-wa-d:#21170f; --m-wa-b:#5a3a22; --m-er:#ff8a8f; --m-er-d:#24161a; --m-er-b:#3a2a2e;
         --m-sans:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
         --m-mono:'IBM Plex Mono', ui-monospace, Consolas, monospace;
     }
-    #mks-dash { position:fixed; inset:0; z-index:100050; background:rgba(3,6,10,.62); display:flex;
-        align-items:center; justify-content:center; padding:24px; font:13px/1.45 var(--m-sans); color:var(--m-tx); }
+    #mks-dash { position:fixed; inset:0; z-index:100050; background:rgba(3,6,10,.66); display:flex;
+        align-items:center; justify-content:center; padding:24px; font:14px/1.5 var(--m-sans); color:var(--m-tx); }
     #mks-dash *, #mks-dock * { box-sizing:border-box; }
-    #mks-dash .mks-win { width:min(1180px,100%); height:min(820px,100%); background:var(--m-s1); border:1px solid var(--m-bd);
-        border-radius:12px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 30px 80px -20px rgba(0,0,0,.7); }
-    #mks-dash .mks-top { display:flex; align-items:center; gap:14px; padding:12px 16px; background:var(--m-s2); border-bottom:1px solid var(--m-bd); }
-    #mks-dash .mks-brand { display:flex; align-items:center; gap:10px; white-space:nowrap; }
+    #mks-dash .mks-win { width:min(1280px,100%); height:min(860px,100%); background:var(--m-s1); border:1px solid var(--m-bd);
+        border-radius:14px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 30px 90px -20px rgba(0,0,0,.75); }
+
+    /* top bar */
+    #mks-dash .mks-top { height:56px; flex:none; display:flex; align-items:center; gap:12px; padding:0 16px 0 20px; border-bottom:1px solid var(--m-bd); }
+    #mks-dash .mks-brand { display:flex; align-items:center; gap:12px; white-space:nowrap; min-width:0; }
     #mks-dash .mks-brand b { font-size:15px; font-weight:600; }
-    #mks-dash .mks-logo { width:26px; height:26px; border-radius:7px; background:var(--m-ac); color:#03242b; display:grid; place-items:center; font-weight:700; font-size:13px; }
-    #mks-dash .mks-ver { font:500 11px var(--m-mono); color:var(--m-faint); }
-    #mks-dash .mks-count { font:500 12px var(--m-mono); color:var(--m-dim); margin-left:auto; white-space:nowrap; }
-    #mks-dash input.mks-search { width:220px !important; }
-    #mks-dash .mks-x { width:32px; height:32px; padding:0 !important; font-size:15px !important; }
-    #mks-dash .mks-reload { display:flex; align-items:center; gap:12px; padding:9px 16px; background:var(--m-wa-d); color:#ffd9a0;
-        border-bottom:1px solid #5a4219; font-size:13px; }
+    #mks-dash .mks-logo { width:28px; height:28px; border-radius:7px; background:var(--m-ac); color:#06222b; display:grid; place-items:center; font-weight:600; font-size:14px; flex:none; }
+    #mks-dash .mks-ver { font:400 12px var(--m-mono); color:var(--m-faint); }
+    #mks-dash .mks-sp { flex:1; }
+    #mks-dash .mks-find { display:flex; align-items:center; gap:8px; width:260px; height:34px; padding:0 12px; border-radius:8px;
+        background:var(--m-s3); border:1px solid var(--m-bd2); color:var(--m-faint); }
+    #mks-dash .mks-find:focus-within { border-color:var(--m-ac); }
+    #mks-dash .mks-find svg { flex:none; }
+    #mks-dash .mks-find input.mks-search { background:none !important; border:0 !important; padding:0 !important; width:100%; height:auto !important; }
+    #mks-dash .mks-iconbtn { width:34px; height:34px; flex:none; border-radius:8px; background:none !important; border:1px solid var(--m-bd2) !important;
+        color:var(--m-tx2) !important; display:grid; place-items:center; cursor:pointer; padding:0 !important; }
+    #mks-dash .mks-iconbtn:hover { background:var(--m-s3) !important; color:var(--m-tx) !important; }
+    #mks-dash .mks-reload { display:flex; align-items:center; gap:12px; padding:9px 20px; background:var(--m-wa-d); color:#f6cfae;
+        border-bottom:1px solid var(--m-wa-b); font-size:13px; }
     #mks-dash .mks-reload[hidden] { display:none; }
     #mks-dash .mks-reload button { margin-left:auto; }
+    #mks-dash .mks-wip { display:flex; align-items:center; gap:8px; padding:7px 20px; color:var(--m-faint); border-bottom:1px solid var(--m-bd); font-size:12.5px; }
+    #mks-dash .mks-wip svg { color:var(--m-wa); flex:none; }
+    #mks-dash .mks-wip b { color:var(--m-tx2); font-weight:500; }
     #mks-dash .mks-main { flex:1; display:flex; min-height:0; }
-    #mks-dash .mks-side { width:300px; flex:none; overflow:auto; border-right:1px solid var(--m-bd); padding:8px; background:var(--m-s1); }
-    #mks-dash .mks-group { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); padding:12px 10px 5px; }
-    #mks-dash .mks-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; cursor:pointer; border:1px solid transparent; }
+
+    /* sidebar */
+    #mks-dash .mks-side { width:264px; flex:none; display:flex; flex-direction:column; border-right:1px solid var(--m-bd); background:var(--m-bg); min-height:0; }
+    #mks-dash .mks-nav { flex:1; overflow:auto; padding:12px 10px; display:flex; flex-direction:column; gap:2px; }
+    #mks-dash .mks-count { padding:12px 20px; font:400 12px var(--m-mono); color:var(--m-faint); border-top:1px solid var(--m-bd); white-space:nowrap; }
+    #mks-dash .mks-gh { display:flex; align-items:center; gap:8px; width:100%; height:34px; padding:0 10px; margin-top:6px; border:0 !important; border-radius:7px !important;
+        background:none !important; color:var(--m-faint) !important; font:500 11px var(--m-sans) !important; letter-spacing:.08em; text-transform:uppercase;
+        cursor:pointer; text-align:left; box-shadow:none !important; }
+    #mks-dash .mks-gh:hover { color:var(--m-tx2) !important; }
+    #mks-dash .mks-gh svg { flex:none; transition:transform .15s; }
+    #mks-dash .mks-grp.open .mks-gh svg { transform:rotate(90deg); }
+    #mks-dash .mks-gh span { flex:1; }
+    #mks-dash .mks-gh .n { flex:none; font:400 12px var(--m-mono); letter-spacing:0; text-transform:none; }
+    #mks-dash .mks-gl { display:none; flex-direction:column; gap:2px; }
+    #mks-dash .mks-grp.open .mks-gl { display:flex; }
+    #mks-dash .mks-row { display:flex; align-items:center; gap:10px; min-height:40px; padding:6px 10px 6px 12px; border-radius:7px; cursor:pointer; color:var(--m-tx2); }
     #mks-dash .mks-row:hover { background:var(--m-s2); }
-    #mks-dash .mks-row.sel { background:var(--m-s3); border-color:var(--m-bd2); }
-    #mks-dash .mks-row.off .mks-ico, #mks-dash .mks-row.off .mks-nm { opacity:.45; }
-    #mks-dash .mks-ico { width:28px; height:28px; flex:none; border-radius:7px; background:var(--m-s3); display:grid; place-items:center; font-size:15px; }
-    #mks-dash .mks-row.sel .mks-ico { background:var(--m-s4); }
+    #mks-dash .mks-row:focus-visible { outline:2px solid var(--m-ac); outline-offset:-2px; }
+    #mks-dash .mks-row.sel { background:var(--m-s4); color:#fff; box-shadow:inset 2px 0 0 var(--m-ac); }
+    #mks-dash .mks-row.off { color:#7f8b9a; }
     #mks-dash .mks-rt { flex:1; min-width:0; display:flex; flex-direction:column; }
-    #mks-dash .mks-nm { font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    #mks-dash .mks-st { font-size:11.5px; color:var(--m-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    #mks-dash .mks-st.t-ok { color:var(--m-ok); } #mks-dash .mks-st.t-warn { color:var(--m-wa); }
-    #mks-dash .mks-st.t-error { color:var(--m-er); } #mks-dash .mks-st.t-busy { color:var(--m-ac); }
-    #mks-dash .mks-detail { flex:1; overflow:auto; padding:22px 26px 30px; min-width:0; }
-    #mks-dash .mks-dh { display:flex; align-items:center; gap:14px; }
-    #mks-dash .mks-dh .mks-ico { width:44px; height:44px; font-size:22px; border-radius:10px; }
-    #mks-dash .mks-dh h2 { margin:0; font:600 19px var(--m-sans); color:var(--m-tx); }
-    #mks-dash .mks-dh .mks-pills { display:flex; gap:6px; margin-top:4px; flex-wrap:wrap; }
-    #mks-dash .mks-dh .mks-sw { margin-left:auto; }
-    #mks-dash .mks-desc { color:var(--m-dim); margin:14px 0 0; max-width:760px; font-size:13.5px; }
-    #mks-dash h4.mks-h { font:600 11px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); margin:26px 0 10px; }
-    #mks-dash .mks-status { margin-top:18px; background:var(--m-s2); border:1px solid var(--m-bd); border-radius:9px; padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
-    #mks-dash .mks-status .mks-line { display:flex; align-items:center; gap:10px; }
-    #mks-dash .mks-dot { width:9px; height:9px; border-radius:50%; background:var(--m-faint); flex:none; }
+    #mks-dash .mks-nm { font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    #mks-dash .mks-row.sel .mks-nm { font-weight:500; }
+    #mks-dash .mks-nm .mks-wsign { color:var(--m-wa); font-size:12px; }
+    #mks-dash .mks-st { font-size:12px; color:var(--m-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    #mks-dash .mks-st.t-ok { color:var(--m-ok-t); } #mks-dash .mks-st.t-warn { color:var(--m-wa); }
+    #mks-dash .mks-st.t-error { color:var(--m-er); } #mks-dash .mks-st.t-busy { color:var(--m-ac-t); }
+    #mks-dash .mks-led { width:7px; height:7px; border-radius:50%; background:#3a4655; flex:none; }
+    #mks-dash .mks-led.on { background:var(--m-ac); }
+    #mks-dash .mks-led.t-error { background:var(--m-er); }
+
+    /* detail */
+    #mks-dash .mks-detail { flex:1; overflow:auto; padding:36px 56px 48px; min-width:0; }
+    #mks-dash .mks-detail > * { max-width:820px; }
+    #mks-dash .mks-detail > .mks-panel { max-width:none; }
+    #mks-dash .mks-dh { display:flex; align-items:center; gap:16px; }
+    #mks-dash .mks-dht { flex:1; min-width:0; display:flex; align-items:center; gap:8px 14px; flex-wrap:wrap; }
+    #mks-dash .mks-dh h2 { margin:0; font:600 24px/1.25 var(--m-sans); color:var(--m-tx); }
+    #mks-dash .mks-dh .mks-pills { display:flex; gap:6px; flex-wrap:wrap; }
+    #mks-dash .mks-dh .mks-sw { margin-left:auto !important; }
+    #mks-dash ::-webkit-scrollbar { width:10px; height:10px; }
+    #mks-dash ::-webkit-scrollbar-track { background:transparent; }
+    #mks-dash ::-webkit-scrollbar-thumb { background:#243041; border-radius:5px; border:2px solid transparent; background-clip:padding-box; }
+    #mks-dash ::-webkit-scrollbar-thumb:hover { background:#2f3d50; background-clip:padding-box; border:2px solid transparent; }
+    #mks-dash ::-webkit-scrollbar-button { display:none; height:0; width:0; }
+    #mks-dash * { scrollbar-color:#243041 transparent; scrollbar-width:thin; }
+    #mks-dash .mks-desc { color:var(--m-dim); margin:10px 0 0; font-size:14px; line-height:1.55; }
+    #mks-dash .mks-desc a { color:var(--m-ac-t); }
+    #mks-dash h4.mks-h { font:500 12px var(--m-sans); letter-spacing:.08em; text-transform:uppercase; color:var(--m-faint); margin:32px 0 6px; }
+    #mks-dash .mks-status { margin-top:24px; background:var(--m-s2); border:1px solid var(--m-bd); border-radius:16px; padding:22px 24px; display:flex; flex-direction:column; gap:8px; }
+    #mks-dash .mks-status .mks-line { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--m-faint); }
+    #mks-dash .mks-status.t-ok .mks-line { color:var(--m-ok-t); } #mks-dash .mks-status.t-busy .mks-line { color:var(--m-ac-t); }
+    #mks-dash .mks-status.t-warn .mks-line { color:var(--m-wa); } #mks-dash .mks-status.t-error { border-color:var(--m-er-b); }
+    #mks-dash .mks-status.t-error .mks-line { color:var(--m-er); }
+    #mks-dash .mks-status .t { font-size:20px; font-weight:600; line-height:1.35; color:var(--m-tx); word-break:break-word; }
+    #mks-dash .mks-dot { width:8px; height:8px; border-radius:50%; background:var(--m-faint); flex:none; }
     .mks-dot.t-ok { background:var(--m-ok) !important; } .mks-dot.t-warn { background:var(--m-wa) !important; }
     .mks-dot.t-error { background:var(--m-er) !important; } .mks-dot.t-busy { background:var(--m-ac) !important; animation:mks-pulse 1.2s ease-in-out infinite; }
     @keyframes mks-pulse { 50% { opacity:.35; } }
-    #mks-dash .mks-bar { height:6px; background:var(--m-s4); border-radius:3px; overflow:hidden; }
+    @media (prefers-reduced-motion: reduce) { .mks-dot.t-busy, #mks-dash .mks-btn.busy::before { animation:none; } }
+    #mks-dash .mks-bar { height:6px; background:var(--m-s5); border-radius:3px; overflow:hidden; margin-top:6px; }
     #mks-dash .mks-bar i { display:block; height:100%; background:var(--m-ac); border-radius:3px; transition:width .3s; }
-    #mks-dash .mks-acts { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
-    #mks-dash .mks-panel { margin-top:6px; }
+    #mks-dash .mks-acts { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+    #mks-dash .mks-acts:empty { display:none; }
+    #mks-dash .mks-panel { margin-top:8px; }
     #mks-dash .mks-panel:empty { display:none; }
-    #mks-dash .mks-set { display:grid; grid-template-columns:minmax(200px, 1fr) minmax(200px, 300px); gap:6px 24px; align-items:center;
-        padding:11px 0; border-bottom:1px solid var(--m-bd); max-width:820px; }
-    #mks-dash .mks-set:last-of-type { border-bottom:0; }
-    #mks-dash .mks-set .l { font-weight:500; }
-    #mks-dash .mks-sg { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); padding:14px 0 2px; }
-    #mks-dash .mks-adv { margin-top:10px; }
-    #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-faint); font-weight:500; padding:6px 0; }
-    #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12px; font-weight:400; margin-top:1px; }
-    #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; }
+
+    /* settings */
+    #mks-dash .mks-set { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:6px 32px; align-items:center;
+        padding:14px 0; border-bottom:1px solid var(--m-bd); }
+    #mks-dash .mks-set .c input[type=text], #mks-dash .mks-set .c select { width:260px; max-width:100%; }
+    #mks-dash .mks-set .l { font-weight:400; color:var(--m-tx); }
+    #mks-dash .mks-sg { font:600 13px var(--m-sans); color:var(--m-tx2); padding:26px 0 4px; }
+    #mks-dash h4.mks-h + .mks-sg { padding-top:6px; }
+    #mks-dash .mks-adv { margin-top:18px; border:1px solid var(--m-bd); border-radius:12px; padding:0 18px; }
+    #mks-dash .mks-adv > summary { display:list-item; cursor:pointer; color:var(--m-dim); font-weight:500; padding:12px 0; }
+    #mks-dash .mks-adv[open] > summary { border-bottom:1px solid var(--m-bd); }
+    #mks-dash .mks-adv .mks-set:last-child { border-bottom:0; }
+    #mks-dash .mks-set .h { display:block; color:var(--m-faint); font-size:12.5px; font-weight:400; margin-top:2px; line-height:1.45; max-width:68ch; }
+    #mks-dash .mks-set .c { display:flex; align-items:center; gap:8px; justify-content:flex-end; color:var(--m-faint); }
     #mks-dash .mks-set .l.mks-xl { cursor:pointer; }
-    #mks-dash .mks-set-x { padding:2px 0 12px 16px; border-bottom:1px solid var(--m-bd); max-width:820px; }
-    #mks-dash .mks-set-x .mks-set { max-width:804px; }
-    #mks-dash .mks-set-x .mks-set:last-of-type { border-bottom:1px solid var(--m-bd); }
+    #mks-dash .mks-set .l.mks-xl:hover { color:var(--m-ac-t); }
+    #mks-dash .mks-set-x { padding:2px 0 12px 18px; margin-left:2px; border-left:2px solid var(--m-bd); border-bottom:1px solid var(--m-bd); }
     #mks-dash .mks-xn { color:var(--m-faint); font-weight:400; }
-    #mks-dash .mks-set .u { color:var(--m-dim); font-size:12px; white-space:nowrap; }
+    #mks-dash .mks-set .u { color:var(--m-faint); font-size:13px; white-space:nowrap; }
     #mks-dash .mks-set .rv { font:500 12px var(--m-mono); color:var(--m-tx); min-width:42px; text-align:right; }
-    #mks-dash .mks-reset { margin-top:12px; }
-    #mks-dash .mks-empty { color:var(--m-faint); padding:28px 0; }
+    #mks-dash .mks-reset { margin-top:16px; }
+    #mks-dash .mks-empty { color:var(--m-faint); padding:20px 0; }
 
     /* controls — !important because the dark theme styles every input/button on the page */
     #mks-dash input[type=text], #mks-dash input[type=search], #mks-dash input[type=number], #mks-dash select, #mks-dash textarea,
     .mks-ui input[type=text], .mks-ui input[type=number], .mks-ui textarea {
-        background:var(--m-bg) !important; color:var(--m-tx) !important; border:1px solid var(--m-bd2) !important; border-radius:7px !important;
-        padding:6px 9px !important; font:13px var(--m-sans) !important; height:auto !important; box-shadow:none !important; margin:0 !important; width:100%; }
+        background:var(--m-bg) !important; color:var(--m-tx) !important; border:1px solid var(--m-bd2) !important; border-radius:6px !important;
+        padding:5px 9px !important; font:14px var(--m-sans) !important; height:auto !important; box-shadow:none !important; margin:0 !important; width:100%; }
     #mks-dash textarea { font:12px var(--m-mono) !important; resize:vertical; }
     #mks-dash input:focus, #mks-dash select:focus, #mks-dash textarea:focus { outline:none !important; border-color:var(--m-ac) !important; }
-    #mks-dash input[type=number] { width:110px; text-align:right; }
+    #mks-dash input[type=number] { width:90px; text-align:right; font-variant-numeric:tabular-nums; }
     #mks-dash input[type=range] { width:170px; accent-color:var(--m-ac); margin:0; }
-    #mks-dash .mks-btn, .mks-ui .mks-btn { display:inline-flex; align-items:center; gap:6px; background:var(--m-s3) !important; color:var(--m-tx) !important;
-        border:1px solid var(--m-bd2) !important; border-radius:7px !important; padding:6px 12px !important; font:500 13px var(--m-sans) !important;
-        cursor:pointer; text-shadow:none !important; box-shadow:none !important; line-height:1.3 !important; }
-    #mks-dash .mks-btn:hover, .mks-ui .mks-btn:hover { background:var(--m-s4) !important; }
-    #mks-dash .mks-btn.primary, .mks-ui .mks-btn.primary { background:var(--m-ac) !important; border-color:var(--m-ac) !important; color:#03242b !important; }
-    #mks-dash .mks-btn.primary:hover { filter:brightness(1.1); }
-    #mks-dash .mks-btn.danger { color:#ffb3b7 !important; border-color:#5d2a2e !important; background:var(--m-er-d) !important; }
+    #mks-dash .mks-btn, .mks-ui .mks-btn { display:inline-flex; align-items:center; gap:6px; height:34px; background:var(--m-s3) !important; color:var(--m-tx) !important;
+        border:1px solid var(--m-bd2) !important; border-radius:8px !important; padding:0 14px !important; font:500 13.5px var(--m-sans) !important;
+        cursor:pointer; text-shadow:none !important; box-shadow:none !important; line-height:1 !important; }
+    #mks-dash .mks-btn:hover, .mks-ui .mks-btn:hover { background:var(--m-s4) !important; border-color:#2f3d50 !important; }
+    #mks-dash .mks-btn.primary, .mks-ui .mks-btn.primary { background:var(--m-ac) !important; border-color:var(--m-ac) !important; color:#06222b !important; }
+    #mks-dash .mks-btn.primary:hover { filter:brightness(1.08); }
+    #mks-dash .mks-btn.danger { color:#ffb3b6 !important; border-color:var(--m-er-b) !important; background:var(--m-er-d) !important; }
+    #mks-dash .mks-btn.danger:hover { border-color:#5a3438 !important; }
     #mks-dash .mks-btn[disabled] { opacity:.5; cursor:default; }
+    #mks-dash .mks-btn:focus-visible, #mks-dash .mks-iconbtn:focus-visible, #mks-dash .mks-gh:focus-visible { outline:2px solid var(--m-ac) !important; outline-offset:2px; }
     #mks-dash .mks-btn.busy::before { content:''; width:11px; height:11px; border-radius:50%; border:2px solid currentColor; border-right-color:transparent; animation:mks-spin .7s linear infinite; }
     @keyframes mks-spin { to { transform:rotate(360deg); } }
-    #mks-dash a.mks-link { color:var(--m-ac); cursor:pointer; text-decoration:none; }
-    #mks-dash a.mks-link:hover { text-decoration:underline; }
+    #mks-dash a.mks-link { color:var(--m-ac-t); cursor:pointer; text-decoration:none; }
+    #mks-dash a.mks-link:hover { color:#9be5f6; text-decoration:underline; }
 
     /* switch */
     .mks-sw { position:relative; display:inline-block; width:36px; height:20px; flex:none; margin:0 !important; cursor:pointer; }
     .mks-sw input { position:absolute; opacity:0; width:0; height:0; margin:0; }
-    .mks-sw i { position:absolute; inset:0; background:var(--m-s4); border-radius:10px; transition:background .15s; }
-    .mks-sw i::after { content:''; position:absolute; left:3px; top:3px; width:14px; height:14px; border-radius:50%; background:#aeb8c4; transition:transform .15s, background .15s; }
-    .mks-sw input:checked + i { background:var(--m-ac); }
-    .mks-sw input:checked + i::after { transform:translateX(16px); background:#fff; }
-    .mks-sw input:focus-visible + i { outline:2px solid var(--m-ac); outline-offset:2px; }
-    .mks-sw.lg { width:44px; height:24px; } .mks-sw.lg i::after { width:18px; height:18px; } .mks-sw.lg input:checked + i::after { transform:translateX(20px); }
+    .mks-sw i { position:absolute; inset:0; background:#2b3644; border-radius:10px; transition:background .15s; }
+    .mks-sw i::after { content:''; position:absolute; left:2px; top:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform .15s; }
+    .mks-sw input:checked + i { background:#22c3e6; }
+    .mks-sw input:checked + i::after { transform:translateX(16px); }
+    .mks-sw input:focus-visible + i { outline:2px solid #22c3e6; outline-offset:2px; }
+    .mks-sw.lg { width:44px; height:24px; } .mks-sw.lg i { border-radius:12px; } .mks-sw.lg i::after { width:20px; height:20px; } .mks-sw.lg input:checked + i::after { transform:translateX(20px); }
 
     /* pills, tags, tables, tiles — also used by module panels */
-    .mks-pill { display:inline-flex; align-items:center; gap:5px; font:500 11.5px var(--m-sans); padding:2px 9px; border-radius:20px; background:var(--m-s3); color:var(--m-dim); white-space:nowrap; }
-    .mks-pill.t-ok { background:var(--m-ok-d); color:#9ff0c8; } .mks-pill.t-warn { background:var(--m-wa-d); color:#ffd59a; }
-    .mks-pill.t-error { background:var(--m-er-d); color:#ffb3b7; } .mks-pill.t-busy { background:var(--m-ac-d); color:#9fe9f5; }
-    #mks-dash .mks-tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; margin-top:4px; }
-    #mks-dash .mks-tile { background:var(--m-s2); border:1px solid var(--m-bd); border-radius:9px; padding:11px 13px; }
-    #mks-dash .mks-tile .v { font:600 21px var(--m-mono); color:var(--m-tx); font-variant-numeric:tabular-nums; }
-    #mks-dash .mks-tile .k { color:var(--m-faint); font-size:11.5px; margin-top:2px; }
-    #mks-dash .mks-tile.t-warn .v { color:var(--m-wa); } #mks-dash .mks-tile.t-error .v { color:var(--m-er); } #mks-dash .mks-tile.t-ok .v { color:var(--m-ok); }
-    #mks-dash details.mks-fold { border:1px solid var(--m-bd); border-radius:10px; background:var(--m-s1); margin:10px 0; }
-    #mks-dash details.mks-fold > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; padding:11px 14px;
-        font:600 11.5px var(--m-sans); letter-spacing:.08em; text-transform:uppercase; color:var(--m-dim); user-select:none; }
+    .mks-pill { display:inline-flex; align-items:center; gap:6px; font:500 12px var(--m-sans); padding:3px 10px; border-radius:999px; background:var(--m-s3); color:var(--m-faint); white-space:nowrap; }
+    .mks-pill.t-ok { background:var(--m-ok-d); color:var(--m-ok-t); } .mks-pill.t-warn { background:var(--m-wa-d); color:var(--m-wa); box-shadow:inset 0 0 0 1px var(--m-wa-b); }
+    .mks-pill.t-error { background:var(--m-er-d); color:var(--m-er); box-shadow:inset 0 0 0 1px var(--m-er-b); } .mks-pill.t-busy { background:var(--m-ac-d); color:var(--m-ac-t); }
+    #mks-dash .mks-dh .mks-pill.t-ok::before, #mks-dash .mks-dh .mks-pill.t-busy::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; }
+    #mks-dash .mks-tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; margin-top:6px; }
+    #mks-dash .mks-tile { background:transparent; border:1px solid var(--m-bd); border-radius:12px; padding:16px 18px; }
+    #mks-dash .mks-tile .v { font:600 22px var(--m-sans); color:var(--m-tx); font-variant-numeric:tabular-nums; }
+    #mks-dash .mks-tile .k { color:var(--m-faint); font-size:13px; margin-top:2px; }
+    #mks-dash .mks-tile.t-warn { border-color:var(--m-wa-b); } #mks-dash .mks-tile.t-error { border-color:var(--m-er-b); }
+    #mks-dash .mks-tile.t-warn .v { color:var(--m-wa); } #mks-dash .mks-tile.t-error .v { color:var(--m-er); } #mks-dash .mks-tile.t-ok .v { color:var(--m-ok-t); }
+    #mks-dash details.mks-fold { border:1px solid var(--m-bd); border-radius:12px; background:transparent; margin:12px 0; }
+    #mks-dash details.mks-fold[open] { background:var(--m-s2); }
+    #mks-dash details.mks-fold > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px; min-height:46px; padding:0 16px;
+        font:500 14px var(--m-sans); color:var(--m-tx); user-select:none; border-radius:12px; }
     #mks-dash details.mks-fold > summary::-webkit-details-marker { display:none; }
-    #mks-dash details.mks-fold > summary::before { content:'▸'; color:var(--m-faint); display:inline-block; transition:transform .15s; }
-    #mks-dash details.mks-fold[open] > summary::before { transform:rotate(90deg); }
-    #mks-dash details.mks-fold > summary:hover { color:var(--m-tx); }
-    #mks-dash details.mks-fold > summary .n { margin-left:auto; font:500 11.5px var(--m-mono); letter-spacing:0; color:var(--m-faint);
-        background:var(--m-s3); border-radius:20px; padding:1px 9px; }
-    #mks-dash details.mks-fold > .b { padding:0 14px 14px; }
+    #mks-dash details.mks-fold > summary::before { content:''; width:7px; height:7px; border-right:2px solid var(--m-faint); border-bottom:2px solid var(--m-faint);
+        transform:rotate(-45deg); transition:transform .15s; flex:none; margin-right:2px; }
+    #mks-dash details.mks-fold[open] > summary::before { transform:rotate(45deg); }
+    #mks-dash details.mks-fold > summary:hover { background:var(--m-s2); }
+    #mks-dash details.mks-fold > summary .n { margin-left:auto; font:400 13px var(--m-mono); color:var(--m-faint); background:none; padding:0; }
+    #mks-dash details.mks-fold > .b { padding:2px 16px 16px; }
     #mks-dash details.mks-fold > .b > .mks-note:first-child { margin-top:0; }
-    #mks-dash .mks-hero { background:var(--m-s2); border:1px solid var(--m-bd2); border-radius:12px; padding:14px 16px; margin:4px 0 12px; }
-    #mks-dash .mks-hero .k { font:600 10.5px var(--m-sans); letter-spacing:.1em; text-transform:uppercase; color:var(--m-faint); }
-    #mks-dash .mks-hero .t { font:600 15.5px var(--m-sans); color:var(--m-tx); margin-top:5px; line-height:1.35; }
-    #mks-dash .mks-hero .s { color:var(--m-dim); font-size:12.5px; margin-top:5px; line-height:1.45; }
-    #mks-dash .mks-hero.t-ok { border-left:4px solid var(--m-ok); } #mks-dash .mks-hero.t-warn { border-left:4px solid var(--m-wa); }
-    #mks-dash .mks-hero.t-busy { border-left:4px solid var(--m-ac); }
-    #mks-dash table.mks-tbl td.mks-tone { width:4px; padding:0 !important; }
+    #mks-dash .mks-hero { background:var(--m-s2); border:1px solid var(--m-bd); border-radius:16px; padding:20px 24px; margin:6px 0 14px; }
+    #mks-dash .mks-hero .k { font-size:13px; color:var(--m-faint); }
+    #mks-dash .mks-hero .t { font:600 20px var(--m-sans); color:var(--m-tx); margin-top:4px; line-height:1.35; }
+    #mks-dash .mks-hero .s { color:var(--m-faint); font-size:13.5px; margin-top:6px; line-height:1.5; }
+    #mks-dash .mks-hero.t-ok .k { color:var(--m-ok-t); } #mks-dash .mks-hero.t-warn .k { color:var(--m-wa); } #mks-dash .mks-hero.t-busy .k { color:var(--m-ac-t); }
+    #mks-dash .mks-hero.t-warn { border-color:var(--m-wa-b); }
+    #mks-dash table.mks-tbl td.mks-tone { width:3px; padding:0 !important; }
     #mks-dash table.mks-tbl td.mks-tone.t-ok { background:var(--m-ok) !important; } #mks-dash table.mks-tbl td.mks-tone.t-warn { background:var(--m-wa) !important; }
     #mks-dash table.mks-tbl td.mks-tone.t-error { background:var(--m-er) !important; }
-    #mks-dash .mks-tblwrap { max-height:340px; overflow:auto; border:1px solid var(--m-bd); border-radius:9px; }
-    #mks-dash table.mks-tbl { width:100%; border-collapse:collapse; font-size:12.5px; background:transparent !important; margin:0; }
-    #mks-dash table.mks-tbl th { position:sticky; top:0; background:var(--m-s3) !important; color:var(--m-dim) !important; text-align:left; font-weight:600;
-        padding:7px 10px !important; border:0 !important; border-bottom:1px solid var(--m-bd) !important; white-space:nowrap; }
-    #mks-dash table.mks-tbl td { padding:6px 10px !important; border:0 !important; border-bottom:1px solid var(--m-bd) !important; color:var(--m-tx) !important;
+    #mks-dash .mks-tblwrap { max-height:360px; overflow:auto; border:1px solid var(--m-bd); border-radius:10px; background:var(--m-s1); }
+    #mks-dash table.mks-tbl { width:100%; border-collapse:collapse; font-size:13px; background:transparent !important; margin:0; font-variant-numeric:tabular-nums; }
+    #mks-dash table.mks-tbl th { position:sticky; top:0; background:var(--m-s3) !important; color:var(--m-faint) !important; text-align:left; font-weight:500;
+        padding:8px 12px !important; border:0 !important; border-bottom:1px solid var(--m-bd) !important; white-space:nowrap; }
+    #mks-dash table.mks-tbl td { padding:8px 12px !important; border:0 !important; border-bottom:1px solid #1a2431 !important; color:var(--m-tx) !important;
         background:transparent !important; vertical-align:top; }
+    #mks-dash table.mks-tbl tbody tr:hover td { background:var(--m-s2) !important; }
     #mks-dash table.mks-tbl tr:last-child td { border-bottom:0 !important; }
-    #mks-dash table.mks-tbl td.mono, #mks-dash .mono { font-family:var(--m-mono); font-size:12px; }
-    #mks-dash table.mks-tbl a { color:var(--m-ac); }
+    #mks-dash table.mks-tbl td.mono, #mks-dash .mono { font-family:var(--m-mono); font-size:12.5px; }
+    #mks-dash table.mks-tbl a { color:var(--m-ac-t); }
     #mks-dash .mks-dim { color:var(--m-faint); }
-    #mks-dash .mks-note { color:var(--m-dim); font-size:12.5px; margin:8px 0; max-width:780px; }
-    #mks-dash .mks-callout { border:1px solid #5a4219; background:var(--m-wa-d); color:#ffe0b0; border-radius:9px; padding:12px 14px; margin-top:16px; max-width:820px; }
-    #mks-dash .mks-callout b { color:#fff; }
-    #mks-dash .mks-callout .mks-acts { margin-top:10px; }
-    #mks-dash .mks-warn { border:1px solid #6b262b; background:var(--m-er-d); color:#ffd0d3; border-radius:9px; padding:13px 15px 13px 46px;
-        margin-top:16px; max-width:820px; position:relative; font-size:13.5px; }
-    #mks-dash .mks-warn::before { content:'⚠'; position:absolute; left:15px; top:10px; font-size:20px; color:var(--m-er); }
-    #mks-dash .mks-warn b { color:#fff; }
-    #mks-dash .mks-wip { display:flex; align-items:center; gap:10px; padding:7px 16px; background:var(--m-ac-d); color:#bdeef6;
-        border-bottom:1px solid #1f5966; font-size:12.5px; }
-    #mks-dash .mks-wip b { color:#fff; }
+    #mks-dash .mks-note { color:var(--m-faint); font-size:13px; margin:8px 0; max-width:760px; line-height:1.5; }
+    #mks-dash .mks-callout { border:1px solid var(--m-bd); background:var(--m-s2); color:var(--m-dim); border-radius:12px; padding:16px 18px; margin-top:20px; }
+    #mks-dash .mks-callout b { color:var(--m-tx); }
+    #mks-dash .mks-callout .mks-acts { margin-top:12px; }
+    #mks-dash .mks-warn { display:flex; gap:10px; align-items:flex-start; color:#f2c4a0; font-size:13px; line-height:1.5; margin-top:14px;
+        padding:12px 14px; border:1px solid var(--m-wa-b); background:var(--m-wa-d); border-radius:10px; }
+    #mks-dash .mks-warn svg { flex:none; color:var(--m-wa); margin-top:2px; }
+    #mks-dash .mks-warn b { color:#ffe2cc; }
     #mks-dash .mks-cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; }
-    #mks-dash .mks-card { background:var(--m-s2); border:1px solid var(--m-bd); border-radius:9px; padding:12px 14px; }
-    #mks-dash .mks-now { display:flex; flex-direction:column; gap:2px; }
-    #mks-dash .mks-now .mks-row { cursor:pointer; }
-    #mks-dash kbd { font:11px var(--m-mono); background:var(--m-s3); border:1px solid var(--m-bd2); border-radius:4px; padding:0 5px; color:var(--m-tx); }
+    #mks-dash .mks-card { background:transparent; border:1px solid var(--m-bd); border-radius:12px; padding:18px 20px; }
+    #mks-dash .mks-stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); margin-top:24px; border:1px solid var(--m-bd); border-radius:12px; background:var(--m-s2); overflow:hidden; }
+    #mks-dash .mks-stats > div { padding:16px 18px; border-right:1px solid var(--m-bd); min-width:0; }
+    #mks-dash .mks-stats > div:last-child { border-right:0; }
+    #mks-dash .mks-stats b { display:block; font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--m-tx); }
+    #mks-dash .mks-stats span { font-size:12px; color:var(--m-faint); }
+    #mks-dash .mks-stats .t-error b { color:var(--m-er); } #mks-dash .mks-stats .t-ok b { color:var(--m-ok-t); }
+    #mks-dash .mks-now { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:10px; }
+    #mks-dash .mks-now .mks-row { border:1px solid var(--m-bd); border-radius:10px; min-height:56px; padding:10px 14px; }
+    #mks-dash .mks-now .mks-row:hover { border-color:var(--m-bd2); }
+    #mks-dash kbd { font:12px var(--m-mono); background:var(--m-s3); border:1px solid var(--m-bd2); border-radius:4px; padding:0 5px; color:var(--m-tx); }
 
     /* dock */
-    #mks-dock { position:fixed; left:8px; bottom:8px; z-index:99990; display:flex; flex-direction:column-reverse; gap:5px; align-items:flex-start;
-        font:12px/1.3 var(--m-sans); pointer-events:none; }
-    #mks-dock .mks-chip { pointer-events:auto; display:flex; align-items:center; gap:7px; max-width:320px; background:rgba(17,22,29,.94); color:var(--m-tx);
-        border:1px solid var(--m-bd2); border-radius:8px; padding:5px 10px 5px 8px; cursor:pointer; box-shadow:0 6px 18px -6px rgba(0,0,0,.6); }
+    #mks-dock { position:fixed; left:8px; bottom:8px; z-index:99990; display:flex; flex-direction:column-reverse; gap:6px; align-items:flex-start;
+        font:12.5px/1.3 var(--m-sans); pointer-events:none; }
+    #mks-dock .mks-chip { pointer-events:auto; display:flex; align-items:center; gap:8px; max-width:340px; background:rgba(14,21,30,.95); color:var(--m-tx);
+        border:1px solid var(--m-bd2); border-radius:999px; padding:5px 12px 5px 10px; cursor:pointer; box-shadow:0 8px 22px -8px rgba(0,0,0,.65); }
     #mks-dock .mks-chip:hover { border-color:var(--m-ac); }
     #mks-dock .mks-chip .n { font-weight:600; white-space:nowrap; }
-    #mks-dock .mks-chip .s { color:var(--m-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
-    #mks-dock .mks-chip .mks-dot { width:8px; height:8px; border-radius:50%; background:var(--m-faint); flex:none; }
-    #mks-dock .mks-chip .mks-bar { width:60px; height:4px; background:var(--m-s4); border-radius:2px; overflow:hidden; flex:none; }
+    #mks-dock .mks-chip .s { color:var(--m-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
+    #mks-dock .mks-chip .mks-dot { width:7px; height:7px; border-radius:50%; background:var(--m-faint); flex:none; }
+    #mks-dock .mks-chip .mks-bar { width:60px; height:4px; background:var(--m-s5); border-radius:2px; overflow:hidden; flex:none; }
     #mks-dock .mks-chip .mks-bar i { display:block; height:100%; background:var(--m-ac); }
 
+    @media (max-width: 860px) {
+        #mks-dash .mks-detail { padding:24px 24px 36px; }
+        #mks-dash .mks-find { width:180px; }
+    }
     @media (max-width: 760px) {
         #mks-dash { padding:0; }
         #mks-dash .mks-win { height:100%; border-radius:0; }
         #mks-dash .mks-main { flex-direction:column; }
-        #mks-dash .mks-side { width:auto; max-height:38vh; border-right:0; border-bottom:1px solid var(--m-bd); }
-        #mks-dash .mks-detail { padding:16px; }
-        #mks-dash .mks-set { grid-template-columns:1fr; }
-        #mks-dash .mks-set .c { justify-content:flex-start; }
-        #mks-dash input.mks-search { width:120px !important; }
+        #mks-dash .mks-side { width:auto; max-height:40vh; border-right:0; border-bottom:1px solid var(--m-bd); }
         #mks-dash .mks-count { display:none; }
+        #mks-dash .mks-detail { padding:18px 16px 28px; }
+        #mks-dash .mks-dh h2 { font-size:20px; }
+        #mks-dash .mks-set { grid-template-columns:1fr; }
+        #mks-dash .mks-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+        #mks-dash .mks-set .c { justify-content:flex-start; }
+        #mks-dash .mks-find { width:auto; flex:1; min-width:0; }
+        #mks-dash .mks-brand b, #mks-dash .mks-ver { display:none; }
     }
     `;
+
+    const ICON = {
+        search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>',
+        close: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>',
+        pip: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><rect x="12" y="12" width="7" height="5" rx="1"></rect></svg>',
+        chevron: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>',
+        warn: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3 2 20h20L12 3z"></path><path d="M12 10v4M12 17v.5"></path></svg>',
+    };
 
     let styled = false;
     function ensureStyle() {
@@ -606,7 +680,7 @@ const MKS = (() => {
             d.head.appendChild(font);
             const st = d.createElement('style');
             st.textContent = `${CSS}
-            html, body { margin:0; height:100%; background:#11161d; }
+            html, body { margin:0; height:100%; background:#0e151e; }
             #mks-dash.mks-pip { position:static; inset:auto; height:100vh; padding:0; background:none; }
             #mks-dash.mks-pip .mks-win { width:100%; height:100%; max-width:none; max-height:none; border:0; border-radius:0; box-shadow:none; }
             #mks-dash.mks-pip .mks-pipbtn, #mks-dash.mks-pip .mks-wip { display:none; }
@@ -629,18 +703,18 @@ const MKS = (() => {
             root.innerHTML = `
             <div class="mks-win" role="dialog" aria-label="Wheeliecat's scripts">
               <div class="mks-top">
-                <div class="mks-brand"><span class="mks-logo">W</span><b>Wheeliecat's scripts</b><span class="mks-ver">v${VERSION}</span>${CHANNEL === 'beta' ? '<span class="mks-pill t-warn">beta</span>' : ''}</div>
-                <span class="mks-count"></span>
-                <input class="mks-search" type="search" placeholder="Zoek script…" aria-label="Zoek script">
-                ${canPip() ? '<button class="mks-btn mks-x mks-pipbtn" title="Zwevend venster: blijft boven alles, ook als je het spel gebruikt">⧉</button>' : ''}
-                <button class="mks-btn mks-x mks-close" title="Sluiten (Esc)">✕</button>
+                <div class="mks-brand"><span class="mks-logo">W</span><b>Wheeliecat's scripts</b><span class="mks-ver">v${VERSION}${CHANNEL === 'beta' ? ' · beta' : ''}</span></div>
+                <span class="mks-sp"></span>
+                <label class="mks-find">${ICON.search}<input class="mks-search" type="search" placeholder="Zoek script…" aria-label="Zoek script"></label>
+                ${canPip() ? `<button class="mks-iconbtn mks-pipbtn" title="Zwevend venster: blijft boven alles, ook als je het spel gebruikt" aria-label="Zwevend venster">${ICON.pip}</button>` : ''}
+                <button class="mks-iconbtn mks-close" title="Sluiten (Esc)" aria-label="Sluiten">${ICON.close}</button>
               </div>
-              <div class="mks-wip"><span>🚧</span><span><b>Werk in uitvoering.</b> Deze scripts worden nog volop aangepast. Er kunnen fouten in zitten;
+              <div class="mks-wip">${ICON.warn}<span><b>Werk in uitvoering.</b> Deze scripts worden nog volop aangepast. Er kunnen fouten in zitten;
                 gebruik ze op eigen risico en controleer wat ze doen.</span></div>
               <div class="mks-reload" hidden><span>Sommige wijzigingen werken pas na herladen van de pagina.</span>
                 <button class="mks-btn primary">Nu herladen</button></div>
               <div class="mks-main">
-                <div class="mks-side"></div>
+                <div class="mks-side"><nav class="mks-nav" aria-label="Scripts"></nav><div class="mks-count"></div></div>
                 <div class="mks-detail"></div>
               </div>
             </div>`;
@@ -667,32 +741,45 @@ const MKS = (() => {
             renderDetail();
         }
 
+        // A sidebar group is open unless folded away (remembered); a search opens all,
+        // and so does the group of the script that is shown.
+        const groupOpen = (cat) => !!query || folds[`side:${cat}`] !== false || (byId[view] && byId[view].category === cat);
         function renderSide() {
             if (!root) return;
-            const side = root.querySelector('.mks-side');
+            const side = root.querySelector('.mks-nav');
             const match = (d) => !query || `${d.name} ${d.description} ${d.id}`.toLowerCase().includes(query);
-            let html = `<div class="mks-row ${view === HOME ? 'sel' : ''}" data-id="${HOME}"><span class="mks-ico">🧩</span>
-                <span class="mks-rt"><span class="mks-nm">Overzicht</span><span class="mks-st">Status, importeren, back-up</span></span></div>`;
+            const row = (id, name, tone, text, cls, led) => `<div class="mks-row ${view === id ? 'sel' : ''} ${cls}" data-id="${id}" role="button" tabindex="0">
+                <span class="mks-rt"><span class="mks-nm">${name}</span><span class="mks-st ${tone}">${esc(text)}</span></span>${led}</div>`;
+            let html = row(HOME, 'Overzicht', '', 'Status, importeren, back-up', '', '');
             for (const cat of CATEGORIES) {
                 const list = defs.filter((d) => d.category === cat.id && match(d));
                 if (!list.length) continue;
-                html += `<div class="mks-group">${esc(cat.label)}</div>`;
+                const on = list.filter(isEnabled).length;
+                html += `<div class="mks-grp ${groupOpen(cat.id) ? 'open' : ''}" data-cat="${cat.id}">
+                    <button class="mks-gh" aria-expanded="${groupOpen(cat.id)}">${ICON.chevron}<span>${esc(cat.label)}</span><span class="n">${on}/${list.length}</span></button>
+                    <div class="mks-gl">`;
                 for (const d of list) {
                     const [tone, text] = rowStatus(d);
-                    html += `<div class="mks-row ${view === d.id ? 'sel' : ''} ${isEnabled(d) ? '' : 'off'}" data-id="${d.id}">
-                        <span class="mks-ico">${d.icon || '•'}</span>
-                        <span class="mks-rt"><span class="mks-nm">${esc(d.name)}${d.warning ? ' <span title="Let op: zie waarschuwing" style="color:var(--m-wa)">⚠</span>' : ''}</span><span class="mks-st ${tone}">${esc(text)}</span></span>
-                        ${switchHtml(isEnabled(d))}</div>`;
+                    const name = `${esc(d.name)}${d.warning ? ' <span class="mks-wsign" title="Let op: zie waarschuwing">⚠</span>' : ''}`;
+                    html += row(d.id, name, tone, text, isEnabled(d) ? '' : 'off', `<span class="mks-led ${isEnabled(d) ? 'on' : ''} ${runtime(d).error ? 't-error' : ''}" aria-hidden="true"></span>`);
                 }
+                html += '</div></div>';
             }
             side.innerHTML = html;
-            side.querySelectorAll('.mks-row').forEach((row) => {
-                row.addEventListener('click', (e) => { if (!e.target.closest('.mks-sw')) select(row.dataset.id); });
-                const cb = row.querySelector('.mks-sw input');
-                if (cb) cb.addEventListener('change', () => setEnabled(byId[row.dataset.id], cb.checked));
+            side.querySelectorAll('.mks-row').forEach((r) => {
+                r.addEventListener('click', () => select(r.dataset.id));
+                r.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(r.dataset.id); } });
             });
+            side.querySelectorAll('.mks-gh').forEach((b) => b.addEventListener('click', () => {
+                const g = b.parentNode;
+                const open = !g.classList.contains('open');
+                g.classList.toggle('open', open);
+                b.setAttribute('aria-expanded', String(open));
+                folds[`side:${g.dataset.cat}`] = open;
+                try { GM_setValue(FOLDS_KEY, JSON.stringify(folds)); } catch (e) { /* ignore */ }
+            }));
             const on = defs.filter(isEnabled).length;
-            root.querySelector('.mks-count').textContent = `${on}/${defs.length} aan`;
+            root.querySelector('.mks-count').textContent = `${on} van ${defs.length} scripts aan`;
             root.querySelector('.mks-reload').hidden = !defs.some((d) => runtime(d).needsReload);
         }
 
@@ -705,12 +792,11 @@ const MKS = (() => {
             const r = runtime(def);
             el.innerHTML = `
                 <div class="mks-dh">
-                  <span class="mks-ico">${def.icon || '•'}</span>
-                  <div><h2>${esc(def.name)}</h2><div class="mks-pills">${pillsFor(def)}</div></div>
+                  <div class="mks-dht"><h2>${esc(def.name)}</h2><div class="mks-pills">${pillsFor(def)}</div></div>
                   ${switchHtml(isEnabled(def), 'lg')}
                 </div>
                 <p class="mks-desc">${def.description || ''}</p>
-                ${def.warning ? `<div class="mks-warn">${def.warning}</div>` : ''}
+                ${def.warning ? `<div class="mks-warn">${ICON.warn}<div>${def.warning}</div></div>` : ''}
                 <div class="mks-status-slot"></div>
                 <div class="mks-acts"></div>
                 <div class="mks-panel"></div>
@@ -730,7 +816,9 @@ const MKS = (() => {
             const s = r.error ? { text: `Gecrasht: ${r.error.message || r.error}. Zie console (F12).`, tone: 'error' } : (r.running ? r.status : null);
             if (!s) { slot.innerHTML = ''; return; }
             const p = s.progress && s.progress[1] ? Math.min(100, (s.progress[0] / s.progress[1]) * 100) : null;
-            slot.innerHTML = `<div class="mks-status"><div class="mks-line"><span class="mks-dot t-${esc(s.tone)}"></span><span>${esc(s.text)}</span></div>
+            const label = { ok: 'Loopt in dit tabblad', busy: 'Bezig', warn: 'Let op', error: 'Fout' }[s.tone] || 'Status';
+            slot.innerHTML = `<div class="mks-status t-${esc(s.tone)}"><div class="mks-line"><span class="mks-dot t-${esc(s.tone)}"></span><span>${label}</span></div>
+                <div class="t">${esc(s.text)}</div>
                 ${p != null ? `<div class="mks-bar"><i style="width:${p}%"></i></div>` : ''}</div>`;
         }
 
@@ -871,18 +959,24 @@ const MKS = (() => {
         function renderHome(el) {
             const running = defs.filter((d) => runtime(d).running && runtime(d).status);
             const on = defs.filter(isEnabled).length;
+            const errors = defs.filter((d) => runtime(d).error).length;
             el.innerHTML = `
-                <div class="mks-dh"><span class="mks-ico">🧩</span><div><h2>Overzicht</h2>
-                  <div class="mks-pills"><span class="mks-pill t-ok">${on} aan</span><span class="mks-pill">${defs.length - on} uit</span></div></div></div>
+                <div class="mks-dh"><h2>Overzicht</h2></div>
+                <div class="mks-stats">
+                  <div class="t-ok"><b>${on}</b><span>aan</span></div>
+                  <div><b>${defs.length - on}</b><span>uit</span></div>
+                  <div><b>${running.length}</b><span>actief op deze pagina</span></div>
+                  <div class="${errors ? 't-error' : ''}"><b>${errors}</b><span>fouten</span></div>
+                </div>
                 ${on ? '' : `<div class="mks-callout"><b>Alles staat nog uit.</b> Kies links welke scripts je wilt gebruiken:
-                  klik op een script om te lezen wat het doet, en zet het aan met het schuifje.</div>`}
-                <p class="mks-desc">Wheeliecat's scripts voor Meldkamerspel, allemaal in één. Zet ze links aan of uit en klik op een script voor de instellingen.
+                  klik op een script om te lezen wat het doet, en zet het aan met het schuifje rechtsboven.</div>`}
+                <p class="mks-desc">Wheeliecat's scripts voor Meldkamerspel, allemaal in één. Kies links een script om te lezen wat het doet, zet het aan met het schuifje en pas de instellingen aan.
                   De meeste wijzigingen werken direct; anders verschijnt bovenin een knop om te herladen.</p>
                 <h4 class="mks-h">Nu actief op deze pagina</h4>
                 <div class="mks-now">${running.length ? running.map((d) => {
                     const s = runtime(d).status;
-                    return `<div class="mks-row" data-go="${d.id}"><span class="mks-ico">${d.icon}</span><span class="mks-rt">
-                        <span class="mks-nm">${esc(d.name)}</span><span class="mks-st t-${esc(s.tone)}">${esc(s.text)}</span></span></div>`;
+                    return `<div class="mks-row" data-go="${d.id}" role="button" tabindex="0"><span class="mks-rt">
+                        <span class="mks-nm">${esc(d.name)}</span><span class="mks-st t-${esc(s.tone)}">${esc(s.text)}</span></span><span class="mks-dot t-${esc(s.tone)}"></span></div>`;
                 }).join('') : '<div class="mks-empty">Geen scripts met een status op deze pagina.</div>'}</div>
 
                 <h4 class="mks-h">Opslag van de oude losse scripts importeren</h4>
@@ -8890,7 +8984,7 @@ MKS.module({
     icon: '🗺️',
     category: 'map',
     description: 'Kaartlaag die kleurt hoe snel je nearest (of 2e) brandweer-, ambulance- of politiepost ergens is: hemelsbreed of over echte wegen (OSRM). '
-        + 'Laat zien waar een nieuwe post nodig is. Aan/uit en discipline kies je in het vakje rechtsboven op de kaart. Alleen lezen: koopt of verplaatst nooit iets.',
+        + 'Laat zien waar een nieuwe post nodig is. Ook per specialist (OvD-B, Voorlichter, AGS, ME, USAR, …), met rode stippen waar een inzet die de afgelopen 7 dagen miste. Aan/uit en discipline kies je in het vakje rechtsboven op de kaart. Alleen lezen: koopt of verplaatst nooit iets.',
     tagline: 'Bediening rechtsboven op de kaart',
     at: 'ready',
     frames: 'top',
@@ -8906,6 +9000,8 @@ MKS.module({
         { key: 'samplePx', label: 'Detail', type: 'range', default: 8, min: 4, max: 16, step: 2, unit: ' px', help: 'Grootte van een kleurvlak. Kleiner = scherper maar trager.' },
         { key: 'gridKm', label: 'Rasterafstand over de weg', type: 'number', default: 1.5, min: 0.5, max: 5, step: 0.5, unit: 'km',
             help: 'Kleiner = fijner, maar veel meer verzoeken aan de OSRM-server (eerste keer enkele minuten).' },
+        { key: 'specialMin', label: 'Norm specialisten', type: 'number', default: 15, min: 5, max: 45, step: 1, unit: 'min',
+            help: 'Groen tot 60% hiervan, geel tot de norm, oranje tot 150%, rood daarboven.' },
         { key: 'requireVehicles', label: 'Alleen posten met voertuigen', type: 'bool', default: true, help: 'Een lege post dekt niets.' },
     ],
 
@@ -8955,7 +9051,50 @@ MKS.module({
                 ambulance: { label: 'Ambulance', types: [3, 13],     speedKmh: ctx.cfg.ambuKmh, turnoutMin: 0, normMin: 15 },
                 police:    { label: 'Politie',   types: [5, 11, 18], speedKmh: ctx.cfg.policeKmh, turnoutMin: 0, normMin: 15 },
             },
+            // Specialists: posts that have at least one vehicle of these types. "needs" are the
+            // shortage names Auto-alarmeren records (their places show as red dots).
+            SPECIALISTS: {
+                ovdb:  { label: 'OvD-B', vts: [3], speed: 'fire', needs: ['Officier van Dienst Brandweer'] },
+                hovd:  { label: 'HOvD', vts: [19], speed: 'fire', needs: ['Hoofdofficier van Dienst'] },
+                cvo:   { label: 'Commandovoertuig', vts: [31, 32], speed: 'fire', needs: ['Commandovoertuig'] },
+                vl:    { label: 'Voorlichter', vts: [56], speed: 'fire', needs: ['Voorlichters'] },
+                ags:   { label: 'AGS', vts: [24], speed: 'fire', needs: ['Adviseur Gevaarlijke Stoffen'] },
+                vke:   { label: 'Verkenningseenheid', vts: [11], speed: 'fire', needs: ['Dienstbus Verkenningseenheid'] },
+                sw:    { label: 'Slangenwagen / water', vts: [10, 34, 29, 61], speed: 'fire', needs: ['Slangenwagen', 'Water (in Liters)'] },
+                ab:    { label: 'Adembescherming', vts: [5, 27], speed: 'fire', needs: ['Adembeschermingsvoertuig'] },
+                hv:    { label: 'HV / TS-HV', vts: [4, 62, 51], speed: 'fire', needs: ['HV of TS-HV'] },
+                sb:    { label: 'Schuimblus', vts: [68, 69, 70], speed: 'fire', needs: ['Schuimblusvoertuigen', 'Liter SVM'] },
+                ib:    { label: 'Industrie (SB-BA/IB, AS, TS-IB)', vts: [130, 131, 132, 133], speed: 'fire', needs: ['SB-BA, SB-IB of AS', 'Industriële Tankautospuit'] },
+                pclog: { label: 'DB-PC-LOG', vts: [124], speed: 'fire', needs: ['DB-PC-LOG'] },
+                usar:  { label: 'USAR', vts: [92, 93, 94], speed: 'fire', needs: ['Dienstvoertuig USAR', 'TS-USAR'] },
+                nht:   { label: 'NHT / GGB', vts: [100, 101], speed: 'ambu', needs: ['NHT', 'GGB'] },
+                ovdg:  { label: 'OvD-G', vts: [38], speed: 'ambu', needs: ['Officier van Dienst Geneeskunde'] },
+                ovdp:  { label: 'OvD-P', vts: [35], speed: 'police', needs: ['Officier van Dienst - Politie'] },
+                me:    { label: 'ME Flexbus', vts: [40], speed: 'police', needs: ['ME Flexbus'] },
+                mec:   { label: 'ME Commando', vts: [39], speed: 'police', needs: ['ME Commandovoertuig'] },
+                ae:    { label: 'ME Aanhouding', vts: [64], speed: 'police', needs: ['ME Aanhoudingseenheid'] },
+                ww:    { label: 'Waterwerper', vts: [84], speed: 'police', needs: ['Waterwerper'] },
+            },
         };
+
+        const SPEED = { fire: ctx.cfg.fireKmh, ambu: ctx.cfg.ambuKmh, police: ctx.cfg.policeKmh };
+        for (const [k, sp] of Object.entries(CONFIG.SPECIALISTS)) {
+            CONFIG.DISCIPLINES[k] = { label: sp.label, vts: sp.vts, needs: sp.needs, speedKmh: SPEED[sp.speed], turnoutMin: 0, normMin: ctx.cfg.specialMin, special: true };
+        }
+        const NEEDS_KEY = 'mks.autoDispatch.needs.v1';
+        // Places (last 7 days) where a mission missed one of these vehicles: [{lat, lon, credits}].
+        function missedFor(d) {
+            if (!d || !d.needs) return [];
+            let needs = null;
+            try { needs = JSON.parse(GM_getValue(NEEDS_KEY, 'null')); } catch (e) { needs = null; }
+            const since = Date.now() - 7 * 86400000;
+            const out = [];
+            for (const [name, t] of Object.entries((needs && needs.types) || {})) {
+                if (!d.needs.some((n) => name.startsWith(n))) continue;
+                for (const p of t.pos || []) if (p[2] >= since) out.push({ lat: p[0], lon: p[1], credits: p[3] || 0 });
+            }
+            return out;
+        }
 
         const STORE_KEY = 'mks-coverage-map';
         const log = (...a) => { if (CONFIG.DEBUG) console.log('%c[CoverageMap]', 'color:#0a6', ...a); };
@@ -8992,13 +9131,27 @@ MKS.module({
         async function loadStations() {
             const [buildings, vehicles] = await Promise.all([
                 apiGet('/api/buildings'),
-                CONFIG.REQUIRE_VEHICLES ? apiGet('/api/vehicles') : Promise.resolve([]),
+                apiGet('/api/vehicles'),
             ]);
             const vehicleCount = {};
-            for (const v of vehicles) vehicleCount[v.building_id] = (vehicleCount[v.building_id] || 0) + 1;
+            const typeCount = {}; // building id -> vehicle type -> count
+            for (const v of vehicles) {
+                vehicleCount[v.building_id] = (vehicleCount[v.building_id] || 0) + 1;
+                const t = typeCount[v.building_id] = typeCount[v.building_id] || {};
+                t[v.vehicle_type] = (t[v.vehicle_type] || 0) + 1;
+            }
 
             const out = {};
             for (const [key, d] of Object.entries(CONFIG.DISCIPLINES)) {
+                if (d.vts) {
+                    out[key] = buildings
+                        .filter((b) => b.enabled !== false)
+                        .map((b) => ({ b, n: d.vts.reduce((sum, t) => sum + ((typeCount[b.id] || {})[t] || 0), 0) }))
+                        .filter((x) => x.n > 0)
+                        .map(({ b, n }) => ({ lat: Number(b.latitude), lon: Number(b.longitude), name: b.caption, vehicles: n }))
+                        .filter((st) => Number.isFinite(st.lat) && Number.isFinite(st.lon));
+                    continue;
+                }
                 const types = new Set(d.types);
                 out[key] = buildings
                     .filter((b) => types.has(b.building_type))
@@ -9225,15 +9378,28 @@ MKS.module({
             let roadStatus = '';
 
             const layer = new CoverageLayer({ opacity: settings.opacity, zIndex: 250, pane: 'overlayPane' });
+            const missedLayer = L.layerGroup();
+            function drawMissed() {
+                missedLayer.clearLayers();
+                const d = CONFIG.DISCIPLINES[settings.discipline];
+                if (!d || !d.special || settings.missed === false) { if (map.hasLayer(missedLayer)) map.removeLayer(missedLayer); return; }
+                for (const m of missedFor(d)) {
+                    L.circleMarker([m.lat, m.lon], { radius: 4 + Math.min(6, Math.sqrt(m.credits / 2000)), color: '#b00020', weight: 1,
+                        fillColor: '#dc3545', fillOpacity: 0.55, interactive: false }).addTo(missedLayer);
+                }
+                if (!map.hasLayer(missedLayer)) missedLayer.addTo(map);
+            }
 
             const Control = L.Control.extend({
                 options: { position: 'topright' },
                 onAdd() {
                     const box = L.DomUtil.create('div', 'leaflet-bar mks-coverage-control');
                     box.style.cssText = 'background:#fff;color:#222;padding:6px 8px;font-size:12px;line-height:1.5;min-width:170px;';
-                    const discOptions = ['<option value="off">Uit</option>']
-                        .concat(Object.entries(CONFIG.DISCIPLINES).map(([k, d]) => `<option value="${k}">${d.label}</option>`))
-                        .join('');
+                    const opt = ([k, d]) => `<option value="${k}">${d.label}</option>`;
+                    const entries = Object.entries(CONFIG.DISCIPLINES);
+                    const discOptions = '<option value="off">Uit</option>'
+                        + `<optgroup label="Posten">${entries.filter(([, d]) => !d.special).map(opt).join('')}</optgroup>`
+                        + `<optgroup label="Specialisten">${entries.filter(([, d]) => d.special).map(opt).join('')}</optgroup>`;
                     box.innerHTML = `
                         <b>Dekking</b>
                         <select class="mks-cov-disc" style="width:100%;margin:2px 0;color:#222">${discOptions}</select>
@@ -9243,6 +9409,7 @@ MKS.module({
                                 <option value="road">Over de weg</option>
                             </select>
                             <label style="font-weight:normal;margin:0"><input type="checkbox" class="mks-cov-rank"> 2e post (back-up)</label>
+                            <label class="mks-cov-misswrap" style="font-weight:normal;margin:0;display:block"><input type="checkbox" class="mks-cov-miss"> Gemiste inzetten (7 dagen)</label>
                             <input type="range" class="mks-cov-opacity" min="0.1" max="0.8" step="0.05" style="width:100%" title="Doorzichtigheid">
                             <div class="mks-cov-legend"></div>
                             <div class="mks-cov-status" style="color:#777"></div>
@@ -9258,6 +9425,9 @@ MKS.module({
                     mode.addEventListener('change', () => { settings.mode = mode.value; saveSettings(settings); apply(); });
                     sel.value = CONFIG.DISCIPLINES[settings.discipline] ? settings.discipline : 'off';
                     rank.checked = settings.rank === 2;
+                    const missBox = box.querySelector('.mks-cov-miss');
+                    missBox.checked = settings.missed !== false;
+                    missBox.addEventListener('change', () => { settings.missed = missBox.checked; saveSettings(settings); apply(); });
                     opacity.value = settings.opacity;
 
                     sel.addEventListener('change', () => { settings.discipline = sel.value; saveSettings(settings); apply(); });
@@ -9278,8 +9448,10 @@ MKS.module({
                     this.box.querySelector('.mks-cov-legend').innerHTML = BANDS.map((b) =>
                         `<div><span style="display:inline-block;width:10px;height:10px;margin-right:4px;background:rgb(${b.color.join(',')})"></span>${b.label(d.normMin)}</div>`
                     ).join('');
+                    this.box.querySelector('.mks-cov-misswrap').style.display = d.special ? 'block' : 'none';
                     const n = (stations[settings.discipline] || []).length;
-                    const status = n ? `${n} posten meegeteld` : 'Geen posten gevonden';
+                    let status = n ? `${n} posten meegeteld` : 'Geen posten gevonden';
+                    if (d.special && settings.missed !== false) status += ` · ${missedLayer.getLayers().length} gemist`;
                     this.box.querySelector('.mks-cov-status').textContent = settings.mode === 'road' && roadStatus ? `${status} · ${roadStatus}` : status;
                 },
             });
@@ -9312,6 +9484,7 @@ MKS.module({
                 if (!on && map.hasLayer(layer)) map.removeLayer(layer);
                 if (on && settings.mode === 'road') { rebuildRoadGrid(); startRoads(); }
                 if (on) layer.redraw();
+                drawMissed();
                 control.render();
             }
 
@@ -13821,6 +13994,11 @@ MKS.module({
                 + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna krijgen posten met een volle parkeerplaats hun volgende level '
                 + '(goedkoopste eerst), zodat er ruimte is voor de volgende specialist; posten met vrije plekken niet. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
+        { group: 'Wat het mag kopen', key: 'evenCover', label: 'Specialisten gelijkmatig spreiden', type: 'bool', default: true,
+            help: 'Een specialist (OvD, Voorlichter, AGS, ME, USAR, …) komt bij het gebouw dat het verst van zo\'n voertuig af ligt, zodat je hele gebied gedekt is, '
+                + 'in plaats van waar de meeste credits gemist werden. Dunbezette uithoeken tellen minder. Staat er overal al een binnen de afstand hieronder, '
+                + 'dan is het een kwestie van aantal en komt hij bij de tekorten. Helikopters en gewone voertuigen (TS, ambulance, noodhulp) volgen altijd de tekorten.' },
+        { group: 'Wat het mag kopen', parent: 'evenCover', key: 'coverKm', label: 'Gedekt binnen', type: 'number', default: 10, min: 3, max: 40, step: 1, unit: 'km' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -13879,7 +14057,8 @@ MKS.module({
         { advanced: true, key: 'planDepth', label: 'Opties vergelijken per stap', type: 'number', default: 6, min: 1, max: 15, step: 1,
             help: 'Zoveel van de waardevolste tekorten worden uitgewerkt; de stap met de meeste credits per uitgegeven credit wint.' },
         { advanced: true, key: 'groupMax', label: 'Gebouwen per opleiding', type: 'number', default: 5, min: 1, max: 10, step: 1,
-            help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste.' },
+            help: 'Eén opleiding kan meerdere gebouwen tegelijk een voertuig geven: de gebouwen die het dichtst liggen bij de meeste plekken waar het miste. '
+                + 'Met "Specialisten gelijkmatig spreiden" aan geldt dit maximum niet: dan vult de klas zich met de posten die het verst van zo\'n voertuig af liggen, tot de klas vol is.' },
         { advanced: true, key: 'teamSchools', label: 'Teamscholen gebruiken', type: 'bool', default: true,
             help: 'Is er geen vrij klaslokaal in je eigen scholen, dan doet je personeel mee aan een gratis opengestelde teamopleiding, '
                 + 'of start het script er zelf een in een school van het team (Team > Gebouwen), gratis voor teamleden.' },
@@ -14591,7 +14770,8 @@ MKS.module({
             const market = await getDoc(`/buildings/${b.id}/vehicles/new`);
             const btn = [...market.querySelectorAll('a.buy-vehicle-btn')].find((a) => new RegExp(`/vehicle/\\d+/${c.vt}/credits`).test(a.getAttribute('href')));
             if (!btn || btn.classList.contains('disabled')) return { skip: `${b.caption}: ${v[0]} niet te koop` };
-            return { label: `${v[0]} voor ${b.caption}${d != null ? ` (${d.toFixed(1)} km van de inzetten)` : ''}`, cost: v[1], building: b.id, vt: c.vt, before: info.vehicleIds,
+            const where = c.cover ? ` (spreiden: was ${c.cover.gap.toFixed(1)} km tot de dichtstbijzijnde)` : d != null ? ` (${d.toFixed(1)} km van de inzetten)` : '';
+            return { label: `${v[0]} voor ${b.caption}${where}`, cost: v[1], building: b.id, vt: c.vt, before: info.vehicleIds,
                 run: () => hit(btn.getAttribute('href')),
                 check: async () => ((await buildingInfo(b.id)).used || 0) > (info.used || 0) };
         }
@@ -14887,6 +15067,53 @@ MKS.module({
             noExtCache[k] = ok;
             return ok;
         }
+        /* EVEN COVERAGE — a specialist goes where your own buildings are furthest from one
+         * of its kind, not where the most credits were missed. Of the buildings that can
+         * hold it, the one with the longest way to the nearest such vehicle (own or on its
+         * way in a project) wins; its distance counts less in thin areas (fewer than 8
+         * own buildings within 10 km), so an outpost like a far-off airbase does not.
+         * When every building has one within coverKm, the shortage is about numbers, not
+         * place: the old rule (near the shortages) applies. Helicopters keep the old rule. */
+        const HELI = new Set([23, 28, 80, 85]);
+        let denseCache = null;
+        const coverable = (vts) => vts.length > 0 && !vts.some((id) => PLAIN.has(id) || HELI.has(id));
+        // Where vehicles of these types are (own, or coming in a project).
+        function coverHave(vts, data) {
+            const have = data.vehicles.filter((x) => vts.includes(x.vehicle_type)).map((x) => data.byId[x.building_id]).filter(Boolean).map(posOf);
+            for (const p of projects()) if (vts.includes(p.vt) && data.byId[p.building]) have.push(posOf(data.byId[p.building]));
+            return have;
+        }
+        // The building of `pool` with the biggest gap to `have`, weighed by how built-up its area is.
+        function bestGap(pool, have, data) {
+            if (!denseCache) denseCache = new Map();
+            const all = data.buildings.map(posOf);
+            let best = null;
+            for (const b of pool) {
+                const at = posOf(b);
+                const gap = have.length ? Math.min(...have.map((h) => km(at, h))) : 99;
+                if (!denseCache.has(b.id)) denseCache.set(b.id, Math.min(1, all.filter((p) => km(at, p) <= 10).length / 8));
+                const score = Math.min(gap, 40) * denseCache.get(b.id);
+                if (!best || score > best.score) best = { at, gap, score, b };
+            }
+            return best;
+        }
+        function coverGap(c, data) {
+            const vts = c.vts.filter((id) => VT[id]);
+            if (!coverable(vts)) return null;
+            const holds = new Set(vts.flatMap((id) => VT[id][3]));
+            const best = bestGap(data.buildings.filter((b) => holds.has(b.building_type) && b.enabled !== false), coverHave(vts, data), data);
+            return best && best.gap >= ctx.cfg.coverKm ? best : null;
+        }
+        function applyCover(cands, data) {
+            if (!ctx.cfg.evenCover) return cands;
+            denseCache = new Map();
+            for (const c of cands) {
+                if (c.kind !== 'vehicle') continue;
+                const g = coverGap(c, data);
+                if (g) { c.at = g.at; c.cover = g; }
+            }
+            return cands;
+        }
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
@@ -15012,28 +15239,49 @@ MKS.module({
                     const learnIds = firstClass.map((p) => p.pid); // who goes to the school now
                     if (learners.length > seats) group[0].queue = learners.slice(seats).map((p) => p.pid);
                     // More buildings in the same training, each its own project (train, level,
-                    // buy, link): the ones nearest to the most places where the vehicle
-                    // was missing, so the new vehicles spread over the problem areas.
-                    const hits = new Map();
-                    for (const at of (c.t.pos || []).map((p) => [p[0], p[1]])) {
-                        const nearest = own.filter((o) => km(posOf(o.b), at) <= ctx.cfg.nearKm * 2).sort((x, y) => km(posOf(x.b), at) - km(posOf(y.b), at))[0];
-                        if (nearest) hits.set(nearest.b.id, (hits.get(nearest.b.id) || 0) + 1);
-                    }
-                    const extraBuildings = own.filter((o) => o.b.id !== b.id && hits.has(o.b.id)).sort((x, y) => hits.get(y.b.id) - hits.get(x.b.id));
-                    for (const { b: ob } of extraBuildings) {
-                        if (group.length >= ctx.cfg.groupMax || learnIds.length >= seats) break;
-                        if (projects().some((p) => p.building === ob.id)) continue;
+                    // buy, link). Can it take one: no extension needed, room (or a level),
+                    // staff left, and enough free people to crew it.
+                    const tryAdd = async (ob) => {
+                        if (projects().some((p) => p.building === ob.id)) return false;
                         const oinfo = await buildingInfo(ob.id);
-                        if (oinfo.exts.some((e) => unlocks(e.text, c.vt))) continue; // needs an extension first
-                        if (oinfo.used >= oinfo.max && !(ctx.cfg.doLevels && await nextLevel(ob.id))) continue; // full for good
+                        if (oinfo.exts.some((e) => unlocks(e.text, c.vt))) return false; // needs an extension first
+                        if (oinfo.used >= oinfo.max && !(ctx.cfg.doLevels && await nextLevel(ob.id))) return false; // full for good
                         const oleft = (ob.personal_count || 0) - data.vehicles.filter((x) => x.building_id === ob.id).reduce((s, x) => s + crewOf(x.vehicle_type), 0);
-                        if (oleft < need) continue;
+                        if (oleft < need) return false;
                         const oppl = await peopleAt(ob.id, edu.key);
                         const otrained = oppl.filter((p) => p.free && p.has).slice(0, want);
                         const olearn = oppl.filter((p) => p.free && !p.has).slice(0, want - otrained.length);
-                        if (otrained.length + olearn.length < want || learnIds.length + olearn.length > seats) continue;
+                        if (otrained.length + olearn.length < want || learnIds.length + olearn.length > seats) return false;
                         group.push(mk(ob, otrained.map((p) => p.pid), olearn.map((p) => p.pid)));
                         learnIds.push(...olearn.map((p) => p.pid));
+                        return true;
+                    };
+                    if (ctx.cfg.evenCover && coverable(c.vts)) {
+                        // Even coverage: the empty seats go to the next posts with the biggest gap,
+                        // one at a time (each one taken closes the gap around it), until the class
+                        // is full or every post has one within coverKm.
+                        const have = [...coverHave(c.vts, data), posOf(b)];
+                        const pool = own.map((o) => o.b).filter((ob) => ob.id !== b.id);
+                        for (let tries = 0; tries < 30 && pool.length && learnIds.length < seats; tries++) {
+                            if (stopped) break;
+                            const g = bestGap(pool, have, data);
+                            if (!g || g.gap < ctx.cfg.coverKm) break;
+                            pool.splice(pool.indexOf(g.b), 1);
+                            if (await tryAdd(g.b)) have.push(g.at);
+                        }
+                    } else {
+                        // The ones nearest to the most places where the vehicle was missing,
+                        // so the new vehicles spread over the problem areas.
+                        const hits = new Map();
+                        for (const at of (c.t.pos || []).map((p) => [p[0], p[1]])) {
+                            const nearest = own.filter((o) => km(posOf(o.b), at) <= ctx.cfg.nearKm * 2).sort((x, y) => km(posOf(x.b), at) - km(posOf(y.b), at))[0];
+                            if (nearest) hits.set(nearest.b.id, (hits.get(nearest.b.id) || 0) + 1);
+                        }
+                        const extraBuildings = own.filter((o) => o.b.id !== b.id && hits.has(o.b.id)).sort((x, y) => hits.get(y.b.id) - hits.get(x.b.id));
+                        for (const { b: ob } of extraBuildings) {
+                            if (group.length >= ctx.cfg.groupMax || learnIds.length >= seats) break;
+                            await tryAdd(ob);
+                        }
                     }
                     const step = {
                         label: `opleiding ${v[4]} voor ${learnIds.length} pers.: ${group.length} gebouw(en) met project`
@@ -15120,7 +15368,7 @@ MKS.module({
          * training, whatever planVehicle finds. Never a new building, never filler vehicles.
          * The best credits-per-credit step first, like the normal ranking. */
         async function planLvlFocus(data) {
-            const cands = candidates(readNeeds()).filter((c) => c.kind === 'vehicle' && c.value > 0);
+            const cands = applyCover(candidates(readNeeds()), data).filter((c) => c.kind === 'vehicle' && c.value > 0);
             const steps = [];
             let looked = 0;
             for (const c of cands) {
@@ -16089,7 +16337,7 @@ MKS.module({
                     // Plan the most valuable needs, then take the step with the most blocked
                     // credits per credit spent (a free training step wins outright).
                     ranking = [];
-                    const cands = candidates(readNeeds());
+                    const cands = applyCover(candidates(readNeeds()), data);
                     if (ctx.cfg.doVehicles) {
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
@@ -16213,7 +16461,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261027172801' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261027175454' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16433,7 +16681,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261027172801',
+                version: '1.7.0.20261027175454',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {
