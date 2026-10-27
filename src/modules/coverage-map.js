@@ -4,7 +4,7 @@ MKS.module({
     icon: '🗺️',
     category: 'map',
     description: 'Kaartlaag die kleurt hoe snel je nearest (of 2e) brandweer-, ambulance- of politiepost ergens is: hemelsbreed of over echte wegen (OSRM). '
-        + 'Laat zien waar een nieuwe post nodig is. Aan/uit en discipline kies je in het vakje rechtsboven op de kaart. Alleen lezen: koopt of verplaatst nooit iets.',
+        + 'Laat zien waar een nieuwe post nodig is. Ook per specialist (OvD-B, Voorlichter, AGS, ME, USAR, …), met rode stippen waar een inzet die de afgelopen 7 dagen miste. Aan/uit en discipline kies je in het vakje rechtsboven op de kaart. Alleen lezen: koopt of verplaatst nooit iets.',
     tagline: 'Bediening rechtsboven op de kaart',
     at: 'ready',
     frames: 'top',
@@ -20,6 +20,8 @@ MKS.module({
         { key: 'samplePx', label: 'Detail', type: 'range', default: 8, min: 4, max: 16, step: 2, unit: ' px', help: 'Grootte van een kleurvlak. Kleiner = scherper maar trager.' },
         { key: 'gridKm', label: 'Rasterafstand over de weg', type: 'number', default: 1.5, min: 0.5, max: 5, step: 0.5, unit: 'km',
             help: 'Kleiner = fijner, maar veel meer verzoeken aan de OSRM-server (eerste keer enkele minuten).' },
+        { key: 'specialMin', label: 'Norm specialisten', type: 'number', default: 15, min: 5, max: 45, step: 1, unit: 'min',
+            help: 'Groen tot 60% hiervan, geel tot de norm, oranje tot 150%, rood daarboven.' },
         { key: 'requireVehicles', label: 'Alleen posten met voertuigen', type: 'bool', default: true, help: 'Een lege post dekt niets.' },
     ],
 
@@ -69,7 +71,50 @@ MKS.module({
                 ambulance: { label: 'Ambulance', types: [3, 13],     speedKmh: ctx.cfg.ambuKmh, turnoutMin: 0, normMin: 15 },
                 police:    { label: 'Politie',   types: [5, 11, 18], speedKmh: ctx.cfg.policeKmh, turnoutMin: 0, normMin: 15 },
             },
+            // Specialists: posts that have at least one vehicle of these types. "needs" are the
+            // shortage names Auto-alarmeren records (their places show as red dots).
+            SPECIALISTS: {
+                ovdb:  { label: 'OvD-B', vts: [3], speed: 'fire', needs: ['Officier van Dienst Brandweer'] },
+                hovd:  { label: 'HOvD', vts: [19], speed: 'fire', needs: ['Hoofdofficier van Dienst'] },
+                cvo:   { label: 'Commandovoertuig', vts: [31, 32], speed: 'fire', needs: ['Commandovoertuig'] },
+                vl:    { label: 'Voorlichter', vts: [56], speed: 'fire', needs: ['Voorlichters'] },
+                ags:   { label: 'AGS', vts: [24], speed: 'fire', needs: ['Adviseur Gevaarlijke Stoffen'] },
+                vke:   { label: 'Verkenningseenheid', vts: [11], speed: 'fire', needs: ['Dienstbus Verkenningseenheid'] },
+                sw:    { label: 'Slangenwagen / water', vts: [10, 34, 29, 61], speed: 'fire', needs: ['Slangenwagen', 'Water (in Liters)'] },
+                ab:    { label: 'Adembescherming', vts: [5, 27], speed: 'fire', needs: ['Adembeschermingsvoertuig'] },
+                hv:    { label: 'HV / TS-HV', vts: [4, 62, 51], speed: 'fire', needs: ['HV of TS-HV'] },
+                sb:    { label: 'Schuimblus', vts: [68, 69, 70], speed: 'fire', needs: ['Schuimblusvoertuigen', 'Liter SVM'] },
+                ib:    { label: 'Industrie (SB-BA/IB, AS, TS-IB)', vts: [130, 131, 132, 133], speed: 'fire', needs: ['SB-BA, SB-IB of AS', 'Industriële Tankautospuit'] },
+                pclog: { label: 'DB-PC-LOG', vts: [124], speed: 'fire', needs: ['DB-PC-LOG'] },
+                usar:  { label: 'USAR', vts: [92, 93, 94], speed: 'fire', needs: ['Dienstvoertuig USAR', 'TS-USAR'] },
+                nht:   { label: 'NHT / GGB', vts: [100, 101], speed: 'ambu', needs: ['NHT', 'GGB'] },
+                ovdg:  { label: 'OvD-G', vts: [38], speed: 'ambu', needs: ['Officier van Dienst Geneeskunde'] },
+                ovdp:  { label: 'OvD-P', vts: [35], speed: 'police', needs: ['Officier van Dienst - Politie'] },
+                me:    { label: 'ME Flexbus', vts: [40], speed: 'police', needs: ['ME Flexbus'] },
+                mec:   { label: 'ME Commando', vts: [39], speed: 'police', needs: ['ME Commandovoertuig'] },
+                ae:    { label: 'ME Aanhouding', vts: [64], speed: 'police', needs: ['ME Aanhoudingseenheid'] },
+                ww:    { label: 'Waterwerper', vts: [84], speed: 'police', needs: ['Waterwerper'] },
+            },
         };
+
+        const SPEED = { fire: ctx.cfg.fireKmh, ambu: ctx.cfg.ambuKmh, police: ctx.cfg.policeKmh };
+        for (const [k, sp] of Object.entries(CONFIG.SPECIALISTS)) {
+            CONFIG.DISCIPLINES[k] = { label: sp.label, vts: sp.vts, needs: sp.needs, speedKmh: SPEED[sp.speed], turnoutMin: 0, normMin: ctx.cfg.specialMin, special: true };
+        }
+        const NEEDS_KEY = 'mks.autoDispatch.needs.v1';
+        // Places (last 7 days) where a mission missed one of these vehicles: [{lat, lon, credits}].
+        function missedFor(d) {
+            if (!d || !d.needs) return [];
+            let needs = null;
+            try { needs = JSON.parse(GM_getValue(NEEDS_KEY, 'null')); } catch (e) { needs = null; }
+            const since = Date.now() - 7 * 86400000;
+            const out = [];
+            for (const [name, t] of Object.entries((needs && needs.types) || {})) {
+                if (!d.needs.some((n) => name.startsWith(n))) continue;
+                for (const p of t.pos || []) if (p[2] >= since) out.push({ lat: p[0], lon: p[1], credits: p[3] || 0 });
+            }
+            return out;
+        }
 
         const STORE_KEY = 'mks-coverage-map';
         const log = (...a) => { if (CONFIG.DEBUG) console.log('%c[CoverageMap]', 'color:#0a6', ...a); };
@@ -106,13 +151,27 @@ MKS.module({
         async function loadStations() {
             const [buildings, vehicles] = await Promise.all([
                 apiGet('/api/buildings'),
-                CONFIG.REQUIRE_VEHICLES ? apiGet('/api/vehicles') : Promise.resolve([]),
+                apiGet('/api/vehicles'),
             ]);
             const vehicleCount = {};
-            for (const v of vehicles) vehicleCount[v.building_id] = (vehicleCount[v.building_id] || 0) + 1;
+            const typeCount = {}; // building id -> vehicle type -> count
+            for (const v of vehicles) {
+                vehicleCount[v.building_id] = (vehicleCount[v.building_id] || 0) + 1;
+                const t = typeCount[v.building_id] = typeCount[v.building_id] || {};
+                t[v.vehicle_type] = (t[v.vehicle_type] || 0) + 1;
+            }
 
             const out = {};
             for (const [key, d] of Object.entries(CONFIG.DISCIPLINES)) {
+                if (d.vts) {
+                    out[key] = buildings
+                        .filter((b) => b.enabled !== false)
+                        .map((b) => ({ b, n: d.vts.reduce((sum, t) => sum + ((typeCount[b.id] || {})[t] || 0), 0) }))
+                        .filter((x) => x.n > 0)
+                        .map(({ b, n }) => ({ lat: Number(b.latitude), lon: Number(b.longitude), name: b.caption, vehicles: n }))
+                        .filter((st) => Number.isFinite(st.lat) && Number.isFinite(st.lon));
+                    continue;
+                }
                 const types = new Set(d.types);
                 out[key] = buildings
                     .filter((b) => types.has(b.building_type))
@@ -339,15 +398,28 @@ MKS.module({
             let roadStatus = '';
 
             const layer = new CoverageLayer({ opacity: settings.opacity, zIndex: 250, pane: 'overlayPane' });
+            const missedLayer = L.layerGroup();
+            function drawMissed() {
+                missedLayer.clearLayers();
+                const d = CONFIG.DISCIPLINES[settings.discipline];
+                if (!d || !d.special || settings.missed === false) { if (map.hasLayer(missedLayer)) map.removeLayer(missedLayer); return; }
+                for (const m of missedFor(d)) {
+                    L.circleMarker([m.lat, m.lon], { radius: 4 + Math.min(6, Math.sqrt(m.credits / 2000)), color: '#b00020', weight: 1,
+                        fillColor: '#dc3545', fillOpacity: 0.55, interactive: false }).addTo(missedLayer);
+                }
+                if (!map.hasLayer(missedLayer)) missedLayer.addTo(map);
+            }
 
             const Control = L.Control.extend({
                 options: { position: 'topright' },
                 onAdd() {
                     const box = L.DomUtil.create('div', 'leaflet-bar mks-coverage-control');
                     box.style.cssText = 'background:#fff;color:#222;padding:6px 8px;font-size:12px;line-height:1.5;min-width:170px;';
-                    const discOptions = ['<option value="off">Uit</option>']
-                        .concat(Object.entries(CONFIG.DISCIPLINES).map(([k, d]) => `<option value="${k}">${d.label}</option>`))
-                        .join('');
+                    const opt = ([k, d]) => `<option value="${k}">${d.label}</option>`;
+                    const entries = Object.entries(CONFIG.DISCIPLINES);
+                    const discOptions = '<option value="off">Uit</option>'
+                        + `<optgroup label="Posten">${entries.filter(([, d]) => !d.special).map(opt).join('')}</optgroup>`
+                        + `<optgroup label="Specialisten">${entries.filter(([, d]) => d.special).map(opt).join('')}</optgroup>`;
                     box.innerHTML = `
                         <b>Dekking</b>
                         <select class="mks-cov-disc" style="width:100%;margin:2px 0;color:#222">${discOptions}</select>
@@ -357,6 +429,7 @@ MKS.module({
                                 <option value="road">Over de weg</option>
                             </select>
                             <label style="font-weight:normal;margin:0"><input type="checkbox" class="mks-cov-rank"> 2e post (back-up)</label>
+                            <label class="mks-cov-misswrap" style="font-weight:normal;margin:0;display:block"><input type="checkbox" class="mks-cov-miss"> Gemiste inzetten (7 dagen)</label>
                             <input type="range" class="mks-cov-opacity" min="0.1" max="0.8" step="0.05" style="width:100%" title="Doorzichtigheid">
                             <div class="mks-cov-legend"></div>
                             <div class="mks-cov-status" style="color:#777"></div>
@@ -372,6 +445,9 @@ MKS.module({
                     mode.addEventListener('change', () => { settings.mode = mode.value; saveSettings(settings); apply(); });
                     sel.value = CONFIG.DISCIPLINES[settings.discipline] ? settings.discipline : 'off';
                     rank.checked = settings.rank === 2;
+                    const missBox = box.querySelector('.mks-cov-miss');
+                    missBox.checked = settings.missed !== false;
+                    missBox.addEventListener('change', () => { settings.missed = missBox.checked; saveSettings(settings); apply(); });
                     opacity.value = settings.opacity;
 
                     sel.addEventListener('change', () => { settings.discipline = sel.value; saveSettings(settings); apply(); });
@@ -392,8 +468,10 @@ MKS.module({
                     this.box.querySelector('.mks-cov-legend').innerHTML = BANDS.map((b) =>
                         `<div><span style="display:inline-block;width:10px;height:10px;margin-right:4px;background:rgb(${b.color.join(',')})"></span>${b.label(d.normMin)}</div>`
                     ).join('');
+                    this.box.querySelector('.mks-cov-misswrap').style.display = d.special ? 'block' : 'none';
                     const n = (stations[settings.discipline] || []).length;
-                    const status = n ? `${n} posten meegeteld` : 'Geen posten gevonden';
+                    let status = n ? `${n} posten meegeteld` : 'Geen posten gevonden';
+                    if (d.special && settings.missed !== false) status += ` · ${missedLayer.getLayers().length} gemist`;
                     this.box.querySelector('.mks-cov-status').textContent = settings.mode === 'road' && roadStatus ? `${status} · ${roadStatus}` : status;
                 },
             });
@@ -426,6 +504,7 @@ MKS.module({
                 if (!on && map.hasLayer(layer)) map.removeLayer(layer);
                 if (on && settings.mode === 'road') { rebuildRoadGrid(); startRoads(); }
                 if (on) layer.redraw();
+                drawMissed();
                 control.render();
             }
 

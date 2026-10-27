@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261024185428 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261027174543 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261024185428';
+    const VERSION = '1.7.0.20261027174543';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -8890,7 +8890,7 @@ MKS.module({
     icon: '🗺️',
     category: 'map',
     description: 'Kaartlaag die kleurt hoe snel je nearest (of 2e) brandweer-, ambulance- of politiepost ergens is: hemelsbreed of over echte wegen (OSRM). '
-        + 'Laat zien waar een nieuwe post nodig is. Aan/uit en discipline kies je in het vakje rechtsboven op de kaart. Alleen lezen: koopt of verplaatst nooit iets.',
+        + 'Laat zien waar een nieuwe post nodig is. Ook per specialist (OvD-B, Voorlichter, AGS, ME, USAR, …), met rode stippen waar een inzet die de afgelopen 7 dagen miste. Aan/uit en discipline kies je in het vakje rechtsboven op de kaart. Alleen lezen: koopt of verplaatst nooit iets.',
     tagline: 'Bediening rechtsboven op de kaart',
     at: 'ready',
     frames: 'top',
@@ -8906,6 +8906,8 @@ MKS.module({
         { key: 'samplePx', label: 'Detail', type: 'range', default: 8, min: 4, max: 16, step: 2, unit: ' px', help: 'Grootte van een kleurvlak. Kleiner = scherper maar trager.' },
         { key: 'gridKm', label: 'Rasterafstand over de weg', type: 'number', default: 1.5, min: 0.5, max: 5, step: 0.5, unit: 'km',
             help: 'Kleiner = fijner, maar veel meer verzoeken aan de OSRM-server (eerste keer enkele minuten).' },
+        { key: 'specialMin', label: 'Norm specialisten', type: 'number', default: 15, min: 5, max: 45, step: 1, unit: 'min',
+            help: 'Groen tot 60% hiervan, geel tot de norm, oranje tot 150%, rood daarboven.' },
         { key: 'requireVehicles', label: 'Alleen posten met voertuigen', type: 'bool', default: true, help: 'Een lege post dekt niets.' },
     ],
 
@@ -8955,7 +8957,50 @@ MKS.module({
                 ambulance: { label: 'Ambulance', types: [3, 13],     speedKmh: ctx.cfg.ambuKmh, turnoutMin: 0, normMin: 15 },
                 police:    { label: 'Politie',   types: [5, 11, 18], speedKmh: ctx.cfg.policeKmh, turnoutMin: 0, normMin: 15 },
             },
+            // Specialists: posts that have at least one vehicle of these types. "needs" are the
+            // shortage names Auto-alarmeren records (their places show as red dots).
+            SPECIALISTS: {
+                ovdb:  { label: 'OvD-B', vts: [3], speed: 'fire', needs: ['Officier van Dienst Brandweer'] },
+                hovd:  { label: 'HOvD', vts: [19], speed: 'fire', needs: ['Hoofdofficier van Dienst'] },
+                cvo:   { label: 'Commandovoertuig', vts: [31, 32], speed: 'fire', needs: ['Commandovoertuig'] },
+                vl:    { label: 'Voorlichter', vts: [56], speed: 'fire', needs: ['Voorlichters'] },
+                ags:   { label: 'AGS', vts: [24], speed: 'fire', needs: ['Adviseur Gevaarlijke Stoffen'] },
+                vke:   { label: 'Verkenningseenheid', vts: [11], speed: 'fire', needs: ['Dienstbus Verkenningseenheid'] },
+                sw:    { label: 'Slangenwagen / water', vts: [10, 34, 29, 61], speed: 'fire', needs: ['Slangenwagen', 'Water (in Liters)'] },
+                ab:    { label: 'Adembescherming', vts: [5, 27], speed: 'fire', needs: ['Adembeschermingsvoertuig'] },
+                hv:    { label: 'HV / TS-HV', vts: [4, 62, 51], speed: 'fire', needs: ['HV of TS-HV'] },
+                sb:    { label: 'Schuimblus', vts: [68, 69, 70], speed: 'fire', needs: ['Schuimblusvoertuigen', 'Liter SVM'] },
+                ib:    { label: 'Industrie (SB-BA/IB, AS, TS-IB)', vts: [130, 131, 132, 133], speed: 'fire', needs: ['SB-BA, SB-IB of AS', 'Industriële Tankautospuit'] },
+                pclog: { label: 'DB-PC-LOG', vts: [124], speed: 'fire', needs: ['DB-PC-LOG'] },
+                usar:  { label: 'USAR', vts: [92, 93, 94], speed: 'fire', needs: ['Dienstvoertuig USAR', 'TS-USAR'] },
+                nht:   { label: 'NHT / GGB', vts: [100, 101], speed: 'ambu', needs: ['NHT', 'GGB'] },
+                ovdg:  { label: 'OvD-G', vts: [38], speed: 'ambu', needs: ['Officier van Dienst Geneeskunde'] },
+                ovdp:  { label: 'OvD-P', vts: [35], speed: 'police', needs: ['Officier van Dienst - Politie'] },
+                me:    { label: 'ME Flexbus', vts: [40], speed: 'police', needs: ['ME Flexbus'] },
+                mec:   { label: 'ME Commando', vts: [39], speed: 'police', needs: ['ME Commandovoertuig'] },
+                ae:    { label: 'ME Aanhouding', vts: [64], speed: 'police', needs: ['ME Aanhoudingseenheid'] },
+                ww:    { label: 'Waterwerper', vts: [84], speed: 'police', needs: ['Waterwerper'] },
+            },
         };
+
+        const SPEED = { fire: ctx.cfg.fireKmh, ambu: ctx.cfg.ambuKmh, police: ctx.cfg.policeKmh };
+        for (const [k, sp] of Object.entries(CONFIG.SPECIALISTS)) {
+            CONFIG.DISCIPLINES[k] = { label: sp.label, vts: sp.vts, needs: sp.needs, speedKmh: SPEED[sp.speed], turnoutMin: 0, normMin: ctx.cfg.specialMin, special: true };
+        }
+        const NEEDS_KEY = 'mks.autoDispatch.needs.v1';
+        // Places (last 7 days) where a mission missed one of these vehicles: [{lat, lon, credits}].
+        function missedFor(d) {
+            if (!d || !d.needs) return [];
+            let needs = null;
+            try { needs = JSON.parse(GM_getValue(NEEDS_KEY, 'null')); } catch (e) { needs = null; }
+            const since = Date.now() - 7 * 86400000;
+            const out = [];
+            for (const [name, t] of Object.entries((needs && needs.types) || {})) {
+                if (!d.needs.some((n) => name.startsWith(n))) continue;
+                for (const p of t.pos || []) if (p[2] >= since) out.push({ lat: p[0], lon: p[1], credits: p[3] || 0 });
+            }
+            return out;
+        }
 
         const STORE_KEY = 'mks-coverage-map';
         const log = (...a) => { if (CONFIG.DEBUG) console.log('%c[CoverageMap]', 'color:#0a6', ...a); };
@@ -8992,13 +9037,27 @@ MKS.module({
         async function loadStations() {
             const [buildings, vehicles] = await Promise.all([
                 apiGet('/api/buildings'),
-                CONFIG.REQUIRE_VEHICLES ? apiGet('/api/vehicles') : Promise.resolve([]),
+                apiGet('/api/vehicles'),
             ]);
             const vehicleCount = {};
-            for (const v of vehicles) vehicleCount[v.building_id] = (vehicleCount[v.building_id] || 0) + 1;
+            const typeCount = {}; // building id -> vehicle type -> count
+            for (const v of vehicles) {
+                vehicleCount[v.building_id] = (vehicleCount[v.building_id] || 0) + 1;
+                const t = typeCount[v.building_id] = typeCount[v.building_id] || {};
+                t[v.vehicle_type] = (t[v.vehicle_type] || 0) + 1;
+            }
 
             const out = {};
             for (const [key, d] of Object.entries(CONFIG.DISCIPLINES)) {
+                if (d.vts) {
+                    out[key] = buildings
+                        .filter((b) => b.enabled !== false)
+                        .map((b) => ({ b, n: d.vts.reduce((sum, t) => sum + ((typeCount[b.id] || {})[t] || 0), 0) }))
+                        .filter((x) => x.n > 0)
+                        .map(({ b, n }) => ({ lat: Number(b.latitude), lon: Number(b.longitude), name: b.caption, vehicles: n }))
+                        .filter((st) => Number.isFinite(st.lat) && Number.isFinite(st.lon));
+                    continue;
+                }
                 const types = new Set(d.types);
                 out[key] = buildings
                     .filter((b) => types.has(b.building_type))
@@ -9225,15 +9284,28 @@ MKS.module({
             let roadStatus = '';
 
             const layer = new CoverageLayer({ opacity: settings.opacity, zIndex: 250, pane: 'overlayPane' });
+            const missedLayer = L.layerGroup();
+            function drawMissed() {
+                missedLayer.clearLayers();
+                const d = CONFIG.DISCIPLINES[settings.discipline];
+                if (!d || !d.special || settings.missed === false) { if (map.hasLayer(missedLayer)) map.removeLayer(missedLayer); return; }
+                for (const m of missedFor(d)) {
+                    L.circleMarker([m.lat, m.lon], { radius: 4 + Math.min(6, Math.sqrt(m.credits / 2000)), color: '#b00020', weight: 1,
+                        fillColor: '#dc3545', fillOpacity: 0.55, interactive: false }).addTo(missedLayer);
+                }
+                if (!map.hasLayer(missedLayer)) missedLayer.addTo(map);
+            }
 
             const Control = L.Control.extend({
                 options: { position: 'topright' },
                 onAdd() {
                     const box = L.DomUtil.create('div', 'leaflet-bar mks-coverage-control');
                     box.style.cssText = 'background:#fff;color:#222;padding:6px 8px;font-size:12px;line-height:1.5;min-width:170px;';
-                    const discOptions = ['<option value="off">Uit</option>']
-                        .concat(Object.entries(CONFIG.DISCIPLINES).map(([k, d]) => `<option value="${k}">${d.label}</option>`))
-                        .join('');
+                    const opt = ([k, d]) => `<option value="${k}">${d.label}</option>`;
+                    const entries = Object.entries(CONFIG.DISCIPLINES);
+                    const discOptions = '<option value="off">Uit</option>'
+                        + `<optgroup label="Posten">${entries.filter(([, d]) => !d.special).map(opt).join('')}</optgroup>`
+                        + `<optgroup label="Specialisten">${entries.filter(([, d]) => d.special).map(opt).join('')}</optgroup>`;
                     box.innerHTML = `
                         <b>Dekking</b>
                         <select class="mks-cov-disc" style="width:100%;margin:2px 0;color:#222">${discOptions}</select>
@@ -9243,6 +9315,7 @@ MKS.module({
                                 <option value="road">Over de weg</option>
                             </select>
                             <label style="font-weight:normal;margin:0"><input type="checkbox" class="mks-cov-rank"> 2e post (back-up)</label>
+                            <label class="mks-cov-misswrap" style="font-weight:normal;margin:0;display:block"><input type="checkbox" class="mks-cov-miss"> Gemiste inzetten (7 dagen)</label>
                             <input type="range" class="mks-cov-opacity" min="0.1" max="0.8" step="0.05" style="width:100%" title="Doorzichtigheid">
                             <div class="mks-cov-legend"></div>
                             <div class="mks-cov-status" style="color:#777"></div>
@@ -9258,6 +9331,9 @@ MKS.module({
                     mode.addEventListener('change', () => { settings.mode = mode.value; saveSettings(settings); apply(); });
                     sel.value = CONFIG.DISCIPLINES[settings.discipline] ? settings.discipline : 'off';
                     rank.checked = settings.rank === 2;
+                    const missBox = box.querySelector('.mks-cov-miss');
+                    missBox.checked = settings.missed !== false;
+                    missBox.addEventListener('change', () => { settings.missed = missBox.checked; saveSettings(settings); apply(); });
                     opacity.value = settings.opacity;
 
                     sel.addEventListener('change', () => { settings.discipline = sel.value; saveSettings(settings); apply(); });
@@ -9278,8 +9354,10 @@ MKS.module({
                     this.box.querySelector('.mks-cov-legend').innerHTML = BANDS.map((b) =>
                         `<div><span style="display:inline-block;width:10px;height:10px;margin-right:4px;background:rgb(${b.color.join(',')})"></span>${b.label(d.normMin)}</div>`
                     ).join('');
+                    this.box.querySelector('.mks-cov-misswrap').style.display = d.special ? 'block' : 'none';
                     const n = (stations[settings.discipline] || []).length;
-                    const status = n ? `${n} posten meegeteld` : 'Geen posten gevonden';
+                    let status = n ? `${n} posten meegeteld` : 'Geen posten gevonden';
+                    if (d.special && settings.missed !== false) status += ` · ${missedLayer.getLayers().length} gemist`;
                     this.box.querySelector('.mks-cov-status').textContent = settings.mode === 'road' && roadStatus ? `${status} · ${roadStatus}` : status;
                 },
             });
@@ -9312,6 +9390,7 @@ MKS.module({
                 if (!on && map.hasLayer(layer)) map.removeLayer(layer);
                 if (on && settings.mode === 'road') { rebuildRoadGrid(); startRoads(); }
                 if (on) layer.redraw();
+                drawMissed();
                 control.render();
             }
 
@@ -10983,6 +11062,9 @@ MKS.module({
             help: 'Alles op één teamevenement: het best betalende dat nog iets mist. Het krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
                 + 'ook brandweer, elke minuut opnieuw bekeken. Is het compleet, dan gaat de focus naar het volgende best betalende; de andere evenementen wachten tot dan. Wat een evenement nog mist, wordt bewaard: je eigen inzetten en de snelle baan '
                 + 'krijgen alleen voertuigen die geen open evenement nu kan gebruiken. Gewone teaminzetten blijven zoals ingesteld.' },
+        { key: 'eventComplete', parent: 'eventFocus', label: 'Teamevenementen: alleen als het compleet kan', type: 'bool', default: true,
+            help: 'Er gaat pas iets naar een evenement als alles wat het nog mist er ook bij kan (binnen de afstand). Kan dat niet, dan gaat de focus naar het '
+                + 'volgende evenement en wordt dit na 15 minuten opnieuw bekeken. Een Natuurbrand die 4 HOvD mist, hield anders 100+ voertuigen vast.' },
         { key: 'eventKm', parent: 'eventFocus', label: 'Teamevenementen: maximale afstand', type: 'number', default: 40, min: 5, max: 300, step: 5, unit: 'km',
             help: 'Helikopters mogen verder (hun eigen grens).' },
         { key: 'pauseSec', parent: 'maxPerHour', label: 'Pauze tussen inzetten', type: 'number', default: 4, min: 1, max: 60, step: 1, unit: 'sec' },
@@ -13122,7 +13204,7 @@ MKS.module({
                         const r = (await loadMissions())[keyOf(entry)];
                         const p = r ? plan(r) : { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
                         fullJob = { full: true, slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
-                            maxKm: evFocus ? ctx.cfg.eventKm : ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: evFocus ? false : ctx.cfg.needAll, dropFar: evFocus,
+                            maxKm: evFocus ? ctx.cfg.eventKm : ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: evFocus ? !!ctx.cfg.eventComplete : ctx.cfg.needAll, dropFar: evFocus && !ctx.cfg.eventComplete,
                             patients: ctx.cfg.patients, patientText: ctx.cfg.patients ? sidebarPatients(entry) : '', topUp: true,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, creditsOf(entry)), ownJobOnly: ownJobOnly(),
@@ -13137,10 +13219,17 @@ MKS.module({
                             eventSkip.set(id, Date.now() + (res.finished ? 6 * 3600000 : res.notYet ? 30 * 60000 : 5 * 60000));
                             if (res.covered) addLog(name, 'compleet: focus gaat naar het volgende teamevenement', 'ok');
                         }
-                        if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
+                        const cannot = ctx.cfg.eventComplete && res.result === 'skip' && !res.covered && !res.notYet && !res.finished;
+                        if (cannot) {
+                            // Not completable now (something it misses is not free or too far):
+                            // nothing goes, the focus moves on, and this one waits 15 minutes.
+                            eventSkip.set(id, Date.now() + 15 * 60000);
+                            eventNeeds.delete(id);
+                            addLog(name, `kan nu niet compleet (${res.reason}): focus gaat naar het volgende teamevenement, over 15 min opnieuw`, 'idle');
+                        } else if (res.result === 'skip' && (res.notYet || res.finished)) eventNeeds.delete(id);
                         else if (res.result !== 'wait' && res.result !== 'error') noteEventNeeds(id, titleOf(entry), creditsOf(entry), res);
                         // Looked at again every minute until nothing is missing.
-                        if (res.result === 'sent' || res.result === 'unconfirmed' || (res.result === 'skip' && !res.covered && !res.notYet)) {
+                        if (!cannot && (res.result === 'sent' || res.result === 'unconfirmed' || (res.result === 'skip' && !res.covered && !res.notYet))) {
                             tried.set(id, Date.now() - ctx.cfg.retryMin * 60000 + 60000);
                         }
                     }
@@ -13192,7 +13281,8 @@ MKS.module({
                         // A big team mission or event short of rare units (handcrew, FBO-heli for a
                         // 70k Natuurbrand): held like our own big missions, so small ones leave
                         // those units for it and it is looked at again every minute.
-                        if (full) updateHold(id, name, creditsOf(entry), res);
+                        // A focus event that cannot be completed holds nothing: it is left for now.
+                        if (full && !(evFocus && ctx.cfg.eventComplete)) updateHold(id, name, creditsOf(entry), res);
                         // Otherwise (nothing to hold, or something we cannot send at all): look
                         // again in 20 minutes, not every round (861 tries in one afternoon).
                         if (!holds.has(id) && !evFocus && /te weinig|kan niet sturen/i.test(String(res.reason || ''))) tried.set(id, Date.now() + 20 * 60000 - ctx.cfg.retryMin * 60000);
@@ -13810,6 +13900,11 @@ MKS.module({
                 + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna krijgen posten met een volle parkeerplaats hun volgende level '
                 + '(goedkoopste eerst), zodat er ruimte is voor de volgende specialist; posten met vrije plekken niet. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
+        { group: 'Wat het mag kopen', key: 'evenCover', label: 'Specialisten gelijkmatig spreiden', type: 'bool', default: true,
+            help: 'Een specialist (OvD, Voorlichter, AGS, ME, USAR, …) komt bij het gebouw dat het verst van zo\'n voertuig af ligt, zodat je hele gebied gedekt is, '
+                + 'in plaats van waar de meeste credits gemist werden. Dunbezette uithoeken tellen minder. Staat er overal al een binnen de afstand hieronder, '
+                + 'dan is het een kwestie van aantal en komt hij bij de tekorten. Helikopters en gewone voertuigen (TS, ambulance, noodhulp) volgen altijd de tekorten.' },
+        { group: 'Wat het mag kopen', parent: 'evenCover', key: 'coverKm', label: 'Gedekt binnen', type: 'number', default: 10, min: 3, max: 40, step: 1, unit: 'km' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -13854,7 +13949,7 @@ MKS.module({
         { group: 'AI', parent: 'aiOn', key: 'aiModel', label: 'Model', type: 'text', default: 'auto',
             help: '"auto" = een passend model, opgevraagd bij de dienst (OpenRouter: een gratis model, OpenAI: een "mini"-model, Gemini: Flash). Of vul zelf een modelnaam in.' },
         { group: 'AI', parent: 'aiOn', key: 'aiNotes', label: 'Jouw wensen', type: 'text',
-            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (MICU, drone, OvD-P) gaan voor.',
+            default: 'Groei met brandweerkazernes (beste inzetten). Geen nieuwe ambulanceposten, wel bestaande uitbreiden. Specialistische tekorten (drone, OvD-P) gaan voor.',
             help: 'Gaat elke keer mee naar de AI.' },
 
         { advanced: true, key: 'minMissions', label: 'Pas kopen na zoveel gemiste inzetten', type: 'number', default: 2, min: 1, max: 50, step: 1,
@@ -14016,6 +14111,9 @@ MKS.module({
             153: ["DB-RI", 25000, 2, [0,17], "?", "all", 6], 154: ["RIA", 6000, 0, [0,17], null, null, 0],
             155: ["DB-VI", 25000, 4, [0,17], "?", "all", 6], 156: ["VIA", 6000, 0, [0,17], null, null, 0],
         };
+        // Never bought, by any path (needs, free spots, focus, projects): MICU. More MICUs
+        // only bring more Interfacilitair Transport missions, so the shortage never ends.
+        const NEVER_BUY = new Set([103]);
         // Plain vehicles: fire engines, ambulances, police cars. Specialist ones weigh more.
         const PLAIN = new Set([0, 1, 6, 7, 8, 9, 12, 14, 15, 17, 16, 22, 25, 59, 75, 20, 21]);
         const norm = (s) => String(s).toLowerCase().replace(/\s+[-–]\s+/g, ' ').replace(/\s+/g, ' ').replace(/^(een|elke)\s+/, '').trim();
@@ -14573,10 +14671,12 @@ MKS.module({
             return pids.filter((pid) => after.querySelector(`a[personal_id="${pid}"]`)?.classList.contains('btn-assigned')).length === pids.length && done > 0;
         }
         async function buyAction(b, c, v, info, d) {
+            if (NEVER_BUY.has(Number(c.vt))) return { skip: `${b.caption}: ${v[0]} wordt nooit gekocht` };
             const market = await getDoc(`/buildings/${b.id}/vehicles/new`);
             const btn = [...market.querySelectorAll('a.buy-vehicle-btn')].find((a) => new RegExp(`/vehicle/\\d+/${c.vt}/credits`).test(a.getAttribute('href')));
             if (!btn || btn.classList.contains('disabled')) return { skip: `${b.caption}: ${v[0]} niet te koop` };
-            return { label: `${v[0]} voor ${b.caption}${d != null ? ` (${d.toFixed(1)} km van de inzetten)` : ''}`, cost: v[1], building: b.id, vt: c.vt, before: info.vehicleIds,
+            const where = c.cover ? ` (spreiden: was ${c.cover.gap.toFixed(1)} km tot de dichtstbijzijnde)` : d != null ? ` (${d.toFixed(1)} km van de inzetten)` : '';
+            return { label: `${v[0]} voor ${b.caption}${where}`, cost: v[1], building: b.id, vt: c.vt, before: info.vehicleIds,
                 run: () => hit(btn.getAttribute('href')),
                 check: async () => ((await buildingInfo(b.id)).used || 0) > (info.used || 0) };
         }
@@ -14586,6 +14686,11 @@ MKS.module({
             for (const p of [...projects()]) {
                 if (stopped) return null;
                 const b = data.byId[p.building];
+                if (NEVER_BUY.has(Number(p.vt))) {
+                    state.projects = projects().filter((x) => x !== p);
+                    addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (wordt nooit gekocht)`, 'warn');
+                    continue;
+                }
                 if (!b || Date.now() - p.started > 14 * 86400000) {
                     state.projects = projects().filter((x) => x !== p);
                     addLog(`project gestopt: ${VT[p.vt]?.[0]} voor ${p.caption} (${b ? 'te lang' : 'gebouw weg'})`, 'warn');
@@ -14816,7 +14921,7 @@ MKS.module({
                 const left = (b.personal_count || 0) - here.reduce((sum, x) => sum + crewOf(x.vehicle_type), 0);
                 let info = null;
                 for (const c of types) {
-                    const vt = c.vts.find((id) => VT[id] && VT[id][3].includes(b.building_type));
+                    const vt = c.vts.find((id) => VT[id] && !NEVER_BUY.has(id) && VT[id][3].includes(b.building_type));
                     if (vt == null || VT[vt][4] === '?') continue;
                     const v = VT[vt];
                     if (left < crewOf(vt)) continue;
@@ -14867,9 +14972,49 @@ MKS.module({
             noExtCache[k] = ok;
             return ok;
         }
+        /* EVEN COVERAGE — a specialist goes where your own buildings are furthest from one
+         * of its kind, not where the most credits were missed. Of the buildings that can
+         * hold it, the one with the longest way to the nearest such vehicle (own or on its
+         * way in a project) wins; its distance counts less in thin areas (fewer than 8
+         * own buildings within 10 km), so an outpost like a far-off airbase does not.
+         * When every building has one within coverKm, the shortage is about numbers, not
+         * place: the old rule (near the shortages) applies. Helicopters keep the old rule. */
+        const HELI = new Set([23, 28, 80, 85]);
+        let denseCache = null;
+        function coverGap(c, data) {
+            const vts = c.vts.filter((id) => VT[id]);
+            if (!vts.length || vts.some((id) => PLAIN.has(id) || HELI.has(id))) return null;
+            const holds = new Set(vts.flatMap((id) => VT[id][3]));
+            const have = data.vehicles.filter((x) => vts.includes(x.vehicle_type)).map((x) => data.byId[x.building_id]).filter(Boolean).map(posOf);
+            for (const p of projects()) if (vts.includes(p.vt) && data.byId[p.building]) have.push(posOf(data.byId[p.building]));
+            const all = data.buildings.map(posOf);
+            let best = null;
+            for (const b of data.buildings) {
+                if (!holds.has(b.building_type) || b.enabled === false) continue;
+                const at = posOf(b);
+                const gap = have.length ? Math.min(...have.map((h) => km(at, h))) : 99;
+                if (!denseCache.has(b.id)) denseCache.set(b.id, Math.min(1, all.filter((p) => km(at, p) <= 10).length / 8));
+                const dense = denseCache.get(b.id);
+                const score = Math.min(gap, 40) * dense;
+                if (!best || score > best.score) best = { at, gap, score, b };
+            }
+            return best && best.gap >= ctx.cfg.coverKm ? best : null;
+        }
+        function applyCover(cands, data) {
+            if (!ctx.cfg.evenCover) return cands;
+            denseCache = new Map();
+            for (const c of cands) {
+                if (c.kind !== 'vehicle') continue;
+                const g = coverGap(c, data);
+                if (g) { c.at = g.at; c.cover = g; }
+            }
+            return cands;
+        }
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
+            c.vts = c.vts.filter((id) => !NEVER_BUY.has(id));
+            if (!c.vts.length) return { skip: `${c.name}: wordt nooit gekocht` };
             c.vt = c.vts.find((id) => VT[id] && VT[id][3].some((t) => types.has(t))) ?? c.vts[0];
             const v = VT[c.vt];
             if (!v) return { skip: `${c.name}: onbekend voertuig` };
@@ -15098,7 +15243,7 @@ MKS.module({
          * training, whatever planVehicle finds. Never a new building, never filler vehicles.
          * The best credits-per-credit step first, like the normal ranking. */
         async function planLvlFocus(data) {
-            const cands = candidates(readNeeds()).filter((c) => c.kind === 'vehicle' && c.value > 0);
+            const cands = applyCover(candidates(readNeeds()), data).filter((c) => c.kind === 'vehicle' && c.value > 0);
             const steps = [];
             let looked = 0;
             for (const c of cands) {
@@ -16067,7 +16212,7 @@ MKS.module({
                     // Plan the most valuable needs, then take the step with the most blocked
                     // credits per credit spent (a free training step wins outright).
                     ranking = [];
-                    const cands = candidates(readNeeds());
+                    const cands = applyCover(candidates(readNeeds()), data);
                     if (ctx.cfg.doVehicles) {
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
@@ -16191,7 +16336,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261024185428' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261027174543' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16411,7 +16556,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261024185428',
+                version: '1.7.0.20261027174543',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {

@@ -35,6 +35,11 @@ MKS.module({
                 + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna krijgen posten met een volle parkeerplaats hun volgende level '
                 + '(goedkoopste eerst), zodat er ruimte is voor de volgende specialist; posten met vrije plekken niet. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
+        { group: 'Wat het mag kopen', key: 'evenCover', label: 'Specialisten gelijkmatig spreiden', type: 'bool', default: true,
+            help: 'Een specialist (OvD, Voorlichter, AGS, ME, USAR, …) komt bij het gebouw dat het verst van zo\'n voertuig af ligt, zodat je hele gebied gedekt is, '
+                + 'in plaats van waar de meeste credits gemist werden. Dunbezette uithoeken tellen minder. Staat er overal al een binnen de afstand hieronder, '
+                + 'dan is het een kwestie van aantal en komt hij bij de tekorten. Helikopters en gewone voertuigen (TS, ambulance, noodhulp) volgen altijd de tekorten.' },
+        { group: 'Wat het mag kopen', parent: 'evenCover', key: 'coverKm', label: 'Gedekt binnen', type: 'number', default: 10, min: 3, max: 40, step: 1, unit: 'km' },
         { group: 'Wat het mag kopen', key: 'doVehicles', label: 'Voertuigen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doExtensions', label: 'Uitbreidingen', type: 'bool', default: true },
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
@@ -805,7 +810,8 @@ MKS.module({
             const market = await getDoc(`/buildings/${b.id}/vehicles/new`);
             const btn = [...market.querySelectorAll('a.buy-vehicle-btn')].find((a) => new RegExp(`/vehicle/\\d+/${c.vt}/credits`).test(a.getAttribute('href')));
             if (!btn || btn.classList.contains('disabled')) return { skip: `${b.caption}: ${v[0]} niet te koop` };
-            return { label: `${v[0]} voor ${b.caption}${d != null ? ` (${d.toFixed(1)} km van de inzetten)` : ''}`, cost: v[1], building: b.id, vt: c.vt, before: info.vehicleIds,
+            const where = c.cover ? ` (spreiden: was ${c.cover.gap.toFixed(1)} km tot de dichtstbijzijnde)` : d != null ? ` (${d.toFixed(1)} km van de inzetten)` : '';
+            return { label: `${v[0]} voor ${b.caption}${where}`, cost: v[1], building: b.id, vt: c.vt, before: info.vehicleIds,
                 run: () => hit(btn.getAttribute('href')),
                 check: async () => ((await buildingInfo(b.id)).used || 0) > (info.used || 0) };
         }
@@ -1101,6 +1107,44 @@ MKS.module({
             noExtCache[k] = ok;
             return ok;
         }
+        /* EVEN COVERAGE — a specialist goes where your own buildings are furthest from one
+         * of its kind, not where the most credits were missed. Of the buildings that can
+         * hold it, the one with the longest way to the nearest such vehicle (own or on its
+         * way in a project) wins; its distance counts less in thin areas (fewer than 8
+         * own buildings within 10 km), so an outpost like a far-off airbase does not.
+         * When every building has one within coverKm, the shortage is about numbers, not
+         * place: the old rule (near the shortages) applies. Helicopters keep the old rule. */
+        const HELI = new Set([23, 28, 80, 85]);
+        let denseCache = null;
+        function coverGap(c, data) {
+            const vts = c.vts.filter((id) => VT[id]);
+            if (!vts.length || vts.some((id) => PLAIN.has(id) || HELI.has(id))) return null;
+            const holds = new Set(vts.flatMap((id) => VT[id][3]));
+            const have = data.vehicles.filter((x) => vts.includes(x.vehicle_type)).map((x) => data.byId[x.building_id]).filter(Boolean).map(posOf);
+            for (const p of projects()) if (vts.includes(p.vt) && data.byId[p.building]) have.push(posOf(data.byId[p.building]));
+            const all = data.buildings.map(posOf);
+            let best = null;
+            for (const b of data.buildings) {
+                if (!holds.has(b.building_type) || b.enabled === false) continue;
+                const at = posOf(b);
+                const gap = have.length ? Math.min(...have.map((h) => km(at, h))) : 99;
+                if (!denseCache.has(b.id)) denseCache.set(b.id, Math.min(1, all.filter((p) => km(at, p) <= 10).length / 8));
+                const dense = denseCache.get(b.id);
+                const score = Math.min(gap, 40) * dense;
+                if (!best || score > best.score) best = { at, gap, score, b };
+            }
+            return best && best.gap >= ctx.cfg.coverKm ? best : null;
+        }
+        function applyCover(cands, data) {
+            if (!ctx.cfg.evenCover) return cands;
+            denseCache = new Map();
+            for (const c of cands) {
+                if (c.kind !== 'vehicle') continue;
+                const g = coverGap(c, data);
+                if (g) { c.at = g.at; c.cover = g; }
+            }
+            return cands;
+        }
         async function planVehicle(c, data) {
             // Of the types the name can mean, the first one an own building type can hold.
             const types = new Set(data.buildings.map((b) => b.building_type));
@@ -1334,7 +1378,7 @@ MKS.module({
          * training, whatever planVehicle finds. Never a new building, never filler vehicles.
          * The best credits-per-credit step first, like the normal ranking. */
         async function planLvlFocus(data) {
-            const cands = candidates(readNeeds()).filter((c) => c.kind === 'vehicle' && c.value > 0);
+            const cands = applyCover(candidates(readNeeds()), data).filter((c) => c.kind === 'vehicle' && c.value > 0);
             const steps = [];
             let looked = 0;
             for (const c of cands) {
@@ -2303,7 +2347,7 @@ MKS.module({
                     // Plan the most valuable needs, then take the step with the most blocked
                     // credits per credit spent (a free training step wins outright).
                     ranking = [];
-                    const cands = candidates(readNeeds());
+                    const cands = applyCover(candidates(readNeeds()), data);
                     if (ctx.cfg.doVehicles) {
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
