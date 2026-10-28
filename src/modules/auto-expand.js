@@ -32,8 +32,8 @@ MKS.module({
                 + 'kleine politieposten eerst uitbouwen tot groot (dan pas kunnen er cellen bij), en nieuwe ziekenhuizen (meteen meer bedden), goedkoopste eerst, tot alles is uitgebreid. Daarna gaat het vanzelf weer gewoon verder. Lopende projecten worden wel afgemaakt.' },
         { group: 'Wat het mag kopen', key: 'lvlFocus', label: 'Focus: tekorten oplossen, ruimte voor specialisten', type: 'bool', default: false,
             help: 'Elke credit gaat eerst naar voertuigen die tekorten oplossen (OvD-B, Voorlichter, MMT, OvD-G, politieheli, …) bij je bestaande gebouwen: een vrije plek, '
-                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Daarna krijgen posten met een volle parkeerplaats hun volgende level '
-                + '(goedkoopste eerst), zodat er ruimte is voor de volgende specialist; posten met vrije plekken niet. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
+                + 'een level voor parkeerruimte, een uitbreiding of een opleiding, beste rendement eerst. Een level alleen als het voertuig er meteen daarna komt; '
+                + 'is er niets te doen, dan spaart hij. Nooit een nieuw gebouw en nooit voertuigen zonder tekort. '
                 + 'Staat de ziekenhuis- en cellenfocus ook aan, dan gaat die eerst.' },
         { group: 'Wat het mag kopen', key: 'evenCover', label: 'Specialisten gelijkmatig spreiden', type: 'bool', default: true,
             help: 'Een specialist (OvD, Voorlichter, AGS, ME, USAR, …) komt bij het gebouw dat het verst van zo\'n voertuig af ligt, zodat je hele gebied gedekt is, '
@@ -45,6 +45,12 @@ MKS.module({
         { group: 'Wat het mag kopen', key: 'doLevels', label: 'Levels en kleine posten vergroten', type: 'bool', default: true,
             help: 'Meer parkeerplaatsen. Een kleine post wordt een gewone post (24 uur) als hij vol is, '
                 + 'of als een uitbreiding daar niet lukte omdat hij klein is.' },
+        { group: 'Wat het mag kopen', key: 'fillSpots', label: 'Parkeerplaatsen opvullen', type: 'bool', default: false,
+            help: 'Vult eerst elke lege parkeerplaats van de soorten hieronder met een gewoon voertuig, als er personeel genoeg over is om het te bemannen. '
+                + 'Gaat voor tekorten en focus; lopende projecten gaan wel eerst.' },
+        { group: 'Wat het mag kopen', parent: 'fillSpots', key: 'fillFire', label: 'Brandweer: TST 4/5', type: 'bool', default: false },
+        { group: 'Wat het mag kopen', parent: 'fillSpots', key: 'fillAmb', label: 'Ambulance: ambulance', type: 'bool', default: true },
+        { group: 'Wat het mag kopen', parent: 'fillSpots', key: 'fillPol', label: 'Politie: noodhulp', type: 'bool', default: false },
         { group: 'Wat het mag kopen', key: 'doBuild', label: 'Nieuwe gebouwen', type: 'bool', default: true,
             help: 'Op een echte post (Plaatsingsadvies): voor tekorten als er in de buurt geen geschikt gebouw is, en om te groeien. '
                 + 'Uit = nooit een nieuw gebouw, behalve in Bouwmodus.' },
@@ -1090,6 +1096,37 @@ MKS.module({
             return out;
         }
 
+        /* FILL SPOTS — every free parking spot of the chosen kinds gets its plain vehicle
+         * (TST 4/5, ambulance, noodhulp) when the building's staff can crew it. Spots come
+         * from scanSpots; the chosen building's page is read again before buying. */
+        const FILL = [['fillFire', 8, [0, 17]], ['fillAmb', 16, [3, 13]], ['fillPol', 22, [5, 18]]];
+        async function planFill(data) {
+            if (!ctx.cfg.fillSpots || !ctx.cfg.doVehicles) return null;
+            const kinds = FILL.filter(([key, vt]) => ctx.cfg[key] && !(((state.cool || {})[`Opvullen: ${VT[vt][0]}`] || 0) > Date.now()));
+            if (!kinds.length) return null;
+            await scanSpots(data, 30);
+            const free = data.buildings.filter((b) => { const f = (state.spots || {})[b.id]; return f && f.max > f.used && b.enabled !== false; })
+                .sort((a, b) => (state.spots[b.id].max - state.spots[b.id].used) - (state.spots[a.id].max - state.spots[a.id].used));
+            let read = 0;
+            for (const b of free) {
+                const kind = kinds.find(([, , types]) => types.includes(b.building_type));
+                if (!kind || projects().some((p) => p.building === b.id)) continue;
+                const vt = kind[1];
+                if (staffLeft(b, data) < crewOf(vt)) continue;
+                if (stopped || ++read > 10) break;
+                const info = await buildingInfo(b.id);
+                state.spots[b.id] = { used: info.used, max: info.max, at: Date.now() };
+                if (info.used >= info.max) continue;
+                // /api/vehicles lags behind: vehicles the page has and the API not yet need crew too.
+                const lag = Math.max(0, new Set(info.vehicleIds || []).size - data.vehicles.filter((x) => x.building_id === b.id).length);
+                if (staffLeft(b, data) - lag * crewOf(vt) < crewOf(vt)) continue;
+                const buy = await buyAction(b, { vt }, VT[vt], info, null);
+                if (buy.skip) { skipped.push(buy.skip); continue; }
+                return { ...buy, fill: true, need: `Opvullen: ${VT[vt][0]}`, value: 0, ratio: 0, label: `lege plek opvullen: ${buy.label}` };
+            }
+            return null;
+        }
+
         // Can a building of this type hold the vehicle without an extension? Checked on own
         // buildings of that type: if one of them offers an extension that unlocks it, a new
         // one would need that extension as well. Unknown (no such building) counts as no.
@@ -1421,38 +1458,12 @@ MKS.module({
                 steps.push({ ...plan, need: plan.need || c.name, value: c.value, ratio: c.value / Math.max(plan.cost, 2000), lvB: plan.building });
             }
             steps.sort((a, b) => b.ratio - a.ratio);
-            // Then: posts whose parking is full get their next level, cheapest first (fire,
-            // ambulance, police, VWS-post, MMT, police heli, police HQ), so there is room for
-            // the next specialist. Posts with free spots get none: Ambulancepost Zeist went
-            // from level 13 to 18 in six minutes for empty spots. Pages are read 15 per round
-            // and remembered 6 hours, re-read after a purchase there.
-            const levels = [];
-            let pending = 0;
-            if (ctx.cfg.doLevels) {
-                state.lvlScan = state.lvlScan || {};
-                const LVL_TYPES = [0, 3, 5, 6, 9, 11, 13];
-                const list = data.buildings.filter((b) => LVL_TYPES.includes(b.building_type) && b.enabled !== false);
-                let scanned = 0;
-                for (const b of list) {
-                    const e = state.lvlScan[b.id];
-                    if (e && 'full' in e && Date.now() - e.at < 6 * 3600000) continue;
-                    if (scanned >= 15 || stopped) break;
-                    scanned++;
-                    const info = await buildingInfo(b.id);
-                    const full = info.used != null && info.max != null && info.used >= info.max;
-                    state.lvlScan[b.id] = { at: Date.now(), full, lvl: full ? await nextLevel(b.id) : null };
-                }
-                for (const b of list) {
-                    const e = state.lvlScan[b.id];
-                    if (!e || !('full' in e)) { pending++; continue; }
-                    if (!e.full || !e.lvl || steps.some((x) => x.lvB === b.id)) continue;
-                    const lvl = e.lvl;
-                    levels.push({ label: `level ${lvl.level} voor ${b.caption} (focus: parkeerplaats vol, ruimte voor specialisten)`, cost: lvl.cost, need: 'Focus: uitbouwen', lvB: b.id, value: 0, ratio: 0,
-                        run: () => hit(lvl.href), check: async () => { const n = await nextLevel(b.id); return !n || n.level > lvl.level; } });
-                }
-                levels.sort((a, b) => a.cost - b.cost);
-            }
-            return { steps: [...steps, ...levels], pending };
+            // No levels "just in case": a full post only gets a level from planVehicle, with a
+            // project that buys the vehicle right after. Blind levels left ambulance posts with
+            // empty spots (20 levels, 1.8M on 2026-10-28) while their specialist waited for a
+            // classroom. With nothing to do the focus holds the credits.
+            delete state.lvlScan;
+            return { steps, pending: 0, hold: true };
         }
 
         /* FOCUS HOSPITALS AND CELLS — every hospital gets its levels (beds) and missing
@@ -2363,12 +2374,17 @@ MKS.module({
                 emptySweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
                 next = await advanceProjects(data);
+                const fill = !next ? await planFill(data) : null;
+                if (fill) {
+                    next = fill;
+                    ranking = [{ ...fill, eta: etaFor(fill.cost, data.credits) }];
+                }
                 let hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
                 if (!(hc && (hc.steps.length || hc.pending)) && !next && ctx.cfg.lvlFocus) {
                     hc = await planLvlFocus(data);
-                    if (hc.steps.length || hc.pending) hc.label = 'Focus tekorten bij bestaande posten';
+                    hc.label = 'Focus tekorten bij bestaande posten';
                 }
-                if (hc && (hc.steps.length || hc.pending)) {
+                if (hc && (hc.steps.length || hc.pending || hc.hold)) {
                     ranking = hc.steps.map((x) => ({ ...x, value: x.value || 0, ratio: x.ratio || 0 }));
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
@@ -2441,10 +2457,9 @@ MKS.module({
                     failStreak = 0;
                     unlocksAt = 0; // what is unlocked may have changed
                     if (next.hcB && state.hcScan) delete state.hcScan[next.hcB];
-                    if (next.lvB && state.lvlScan) delete state.lvlScan[next.lvB];
                     // A new building: plan its vehicle again soon, not after half an hour.
                     // Growth has no wait: the next post may follow at once (recentSpots keeps it off this one).
-                    if (!String(next.need).startsWith('Groei:')) state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
+                    if (!String(next.need).startsWith('Groei:') && !next.fill) state.cool[next.need] = Math.max(state.cool[next.need] || 0, Date.now() + (next.newBuilding ? 5 : 30) * 60000);
                     if (next.cost) {
                         state.bought = state.bought || {};
                         const list = (state.bought[next.need] = (state.bought[next.need] || []).filter((x) => x > Date.now() - 7 * 86400000));
@@ -2476,7 +2491,6 @@ MKS.module({
                     addLog(`niet gelukt: ${next.label}${lastSaid ? ` (spel: "${lastSaid}")` : ''}${why.note ? ` — ${why.note}` : ''}`, why.known ? 'warn' : 'error');
                     if (state.lastRound) state.lastRound.result = 'niet gelukt';
                     if (next.hcB && state.hcScan) delete state.hcScan[next.hcB];
-                    if (next.lvB && state.lvlScan) delete state.lvlScan[next.lvB];
                     if (aiLast && aiLast.label === next.label) aiJournalOutcome(aiLast.jid, { result: 'failed', said: lastSaid || null });
                     // A failure the script understands (an extension a small station cannot
                     // have yet) is handled, not a reason to stop everything.
