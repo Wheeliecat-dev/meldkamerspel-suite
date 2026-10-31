@@ -21,6 +21,10 @@ MKS.module({
                 ['18', '18 Zuid-Holland Zuid'], ['19', '19 Zeeland'], ['20', '20 Midden- en West-Brabant'], ['21', '21 Brabant-Noord'],
                 ['22', '22 Brabant-Zuidoost'], ['23', '23 Limburg-Noord'], ['24', '24 Limburg-Zuid'], ['25', '25 Flevoland']],
             help: 'Voor gebouwen waarvan de plaatsnaam niet herkend wordt.' },
+        { key: 'foreign', label: 'Duitse en Belgische roepnamen over de grens', type: 'bool', default: true,
+            help: 'Brandweer-, ambulance- en politieposten in Duitsland of België krijgen roepnamen in het systeem van dat land, met verzonnen nummers: '
+                + '"Florian Kleve 1/46-1 HLF 20", "Rettung Gronau 1/83-1 RTW", "Lommel AP 11", "PZ Lommel COMBI 11". Het land volgt uit de ligging; '
+                + 'een post precies op de grens kan aan de verkeerde kant vallen.' },
         { key: 'pollMin', label: 'Zoeken naar nieuwe voertuigen', type: 'number', default: 1, min: 1, max: 60, step: 1, unit: 'min' },
         { key: 'rescanMin', label: 'Volledige controle', type: 'number', default: 30, min: 5, max: 240, step: 5, unit: 'min' },
         { key: 'throttleSec', label: 'Pauze tussen hernoemingen', type: 'number', default: 1.5, min: 0.5, max: 10, step: 0.5, unit: 'sec' },
@@ -851,6 +855,138 @@ MKS.module({
         };
 
         /* ========================================================================
+         * CROSS-BORDER POSTS — German and Belgian call signs
+         * A fire, ambulance or police post across the border gets that country's
+         * call-sign format with made-up numbers (like the NL fallback). The
+         * country comes from ctx.countryAt (core), so a post right on the border
+         * (Vaals, Baarle) can land on the wrong side.
+         * DE: "Florian <Ort> <Wache>/<Kennzahl>-<n> <Typ>" (Kennzahlen as used in
+         * most states: 11 ELW 1, 46 HLF 20, 83 RTW, ...). BE: no published national
+         * scheme, so "<Ort> <Typ> <post><n>" with the Flemish vehicle abbreviations.
+         * ==================================================================== */
+        const countryCache = new Map();
+        function countryOf(building) {
+            const lat = Number(building.latitude);
+            const lon = Number(building.longitude);
+            if (!isFinite(lat) || !isFinite(lon)) return 'nl';
+            const key = `${lat},${lon}`;
+            if (countryCache.has(key)) return countryCache.get(key);
+            const c = ctx.countryAt(lat, lon);
+            countryCache.set(key, c);
+            return c;
+        }
+        // Which scheme a building's vehicles follow: 'de'/'be' only for fire,
+        // ambulance and police posts across the border with the setting on.
+        function schemeOf(building) {
+            if (!ctx.cfg.foreign) return 'nl';
+            if (!['fire', 'ambulance', 'police'].includes(classifyDiscipline(building.building_type))) return 'nl';
+            return countryOf(building);
+        }
+
+        // Service words in front of the place name, per country (normalized form).
+        const DE_PREFIX = /^(freiwillige feuerwehr|berufsfeuerwehr|feuerwehr|feuerwache|ff|bf|lz|loschzug|loeschzug|rettungswache|rettungsdienst|rw|rettung|polizeiwache|polizeiinspektion|polizei|pw|pi)$/;
+        const BE_PREFIX = /^(brandweerzone|brandweerpost|brandweer|hulpverleningszone|hvz|zone|post|ambulancepost|ziekenwagen|ambulance|politiezone|politiepost|politie|pz|commissariaat)$/;
+        // The place for the call sign: the caption minus leading service words, in
+        // the caption's own spelling, at most three words ("Polizeiwache Emmerich am Rhein" -> "Emmerich am Rhein").
+        function foreignPlace(building, country) {
+            const re = country === 'de' ? DE_PREFIX : BE_PREFIX;
+            const words = String(building.caption || '').trim().split(/\s+/);
+            while (words.length > 1) {
+                if (re.test(normalize(words[0]))) { words.shift(); continue; }
+                if (re.test(normalize(`${words[0]} ${words[1]}`))) { words.splice(0, 2); continue; }
+                break;
+            }
+            const place = words.slice(0, 3).join(' ').replace(/[^\p{L}\p{N}\- ]/gu, '').trim();
+            return place || 'Post';
+        }
+
+        // NL game vehicle_type -> [Kennzahl, Typ]. Unlisted fire types: 56 GW.
+        const DE_FIRE = {
+            0: ['48', 'TSF'], 1: ['46', 'HLF 20'], 2: ['33', 'DLK 23/12'], 3: ['11', 'ELW 1'], 4: ['52', 'RW'],
+            5: ['57', 'GW-A'], 6: ['23', 'TLF 3000'], 7: ['23', 'TLF 3000'], 8: ['23', 'TLF 3000'], 9: ['42', 'LF 10'],
+            10: ['64', 'SW 2000'], 11: ['59', 'GW-Mess'], 12: ['22', 'TLF-W'], 14: ['22', 'TLF-W'], 15: ['22', 'TLF-W'],
+            17: ['43', 'LF 20'], 18: ['34', 'TMF'], 19: ['10', 'KdoW'], 20: ['19', 'MTW'], 21: ['19', 'MTW'],
+            24: ['10', 'KdoW-AGS'], 26: ['66', 'WLF'], 27: ['66', 'AB-Atemschutz'], 29: ['66', 'AB-Wasser'], 31: ['12', 'ELW 2'],
+            32: ['66', 'AB-ELW'], 33: ['58', 'GW-W'], 34: ['24', 'TLF 4000'], 36: ['79', 'MZB'], 41: ['25', 'FLF'],
+            42: ['25', 'FLF'], 43: ['25', 'FLF'], 44: ['11', 'ELW 1'], 45: ['66', 'AB-Pumpe'], 49: ['58', 'GW-W'],
+            50: ['43', 'LF 20'], 51: ['66', 'AB-Rüst'], 56: ['10', 'KdoW-PR'], 61: ['66', 'AB-Schlauch'], 62: ['46', 'HLF 20'],
+            68: ['56', 'GW-Schaum'], 69: ['66', 'AB-Schaum'], 70: ['56', 'GW-Schaum'], 76: ['19', 'ATV'], 77: ['79', 'MZB'],
+            86: ['19', 'MTW-Wald'], 87: ['10', 'KdoW-Wald'], 88: ['19', 'MTW-Wald'], 89: ['22', 'TLF-W'], 90: ['46', 'HLF 20'],
+            91: ['66', 'AB-Rüst'], 92: ['19', 'MTW-SEEBA'], 93: ['46', 'HLF 20'], 94: ['56', 'GW-SEEBA'], 128: ['19', 'MTW-Drohne'],
+            132: ['46', 'HLF 20'], 133: ['43', 'LF 20'], 139: ['43', 'LF 20'], 142: ['43', 'LF 20'], 152: ['43', 'LF 20'],
+        };
+        const DE_RESCUE = {
+            16: ['83', 'RTW'], 30: ['85', 'KTW'], 37: ['82', 'NEF'], 38: ['10', 'OrgL'], 52: ['82', 'NEF'], 57: ['10', 'OrgL'],
+            63: ['82', 'NEF'], 100: ['89', 'GW-San'], 101: ['89', 'GW-San'], 102: ['83', 'RTW'], 103: ['87', 'ITW'],
+        };
+        const DE_POLICE = {
+            'NH': 'FuStW', 'NH-OV': 'Zivil', 'OVD-P': 'DGL', 'DM-P': 'Krad', 'HK9': 'DHF', 'BIKE': 'Fahrrad',
+            'AV': 'GefKw', 'ME-CO': 'BePo', 'ME-FB': 'BePo', 'ME-AE': 'BFE', 'ME-WW': 'WaWe', 'BER': 'Reiter', 'BER-AH': 'Reiter',
+            'DRONE': 'Drohne', 'AT-C': 'SEK', 'AT-O': 'SEK', 'AT-M': 'SEK', 'SIV': 'SIV', 'VOA': 'VU',
+        };
+        // Belgium: Flemish abbreviations (AP autopomp, TW tankwagen, AL autoladder, ...).
+        const BE_FIRE = {
+            0: 'AP', 1: 'AP', 2: 'AL', 3: 'OFF', 4: 'HV', 5: 'AB', 6: 'LAP', 7: 'LAP', 8: 'LAP', 9: 'AP', 10: 'SW',
+            11: 'MEET', 12: 'BBT', 14: 'BBT', 15: 'BBT', 17: 'AP', 18: 'HW', 19: 'OFF', 20: 'PV', 21: 'PV', 24: 'GEVST',
+            26: 'CT', 27: 'CT-AB', 29: 'CT-TW', 31: 'CP', 32: 'CT-CP', 33: 'DUIK', 34: 'TW', 36: 'BOOT', 41: 'CRASH',
+            42: 'CRASH', 43: 'CRASH', 44: 'OFF', 45: 'CT-POMP', 49: 'DUIK', 50: 'AP', 51: 'CT-HV', 56: 'VOORL', 61: 'CT-SW',
+            62: 'AP', 68: 'SCHUIM', 69: 'CT-SCHUIM', 70: 'SCHUIM', 76: 'QUAD', 77: 'BOOT', 86: 'PV', 87: 'OFF', 88: 'PV',
+            89: 'BBT', 90: 'AP', 91: 'CT-HV', 92: 'USAR', 93: 'AP', 94: 'USAR', 128: 'DRONE', 132: 'AP', 133: 'AP',
+        };
+        const BE_RESCUE = {
+            16: 'AMB', 30: 'NDZV', 37: 'MUG', 38: 'DIR-MED', 52: 'PIT', 57: 'DIR-MED', 63: 'PIT',
+            100: 'PSM', 101: 'PSM', 102: 'AMB', 103: 'MUG',
+        };
+        const BE_POLICE = {
+            'NH': 'COMBI', 'NH-OV': 'ANONIEM', 'OVD-P': 'OBP', 'DM-P': 'MOTO', 'HK9': 'HOND', 'BIKE': 'FIETS',
+            'AV': 'TRANSPORT', 'DRONE': 'DRONE', 'BER': 'RUITERIJ', 'BER-AH': 'RUITERIJ',
+        };
+
+        function foreignTarget(building, vehicle, country) {
+            const vt = Number(vehicle.vehicle_type);
+            // The vehicle decides the service: an ambulance at a fire station is still "Rettung".
+            let discipline = classifyDiscipline(building.building_type);
+            if (vt in DE_RESCUE) discipline = 'ambulance';
+            else if (vt in DE_FIRE) discipline = 'fire';
+            else if (vt in POLICE_TYPE_ID_TO_ROLE) discipline = 'police';
+            const place = foreignPlace(building, country);
+            const post = getOrAssignPostNumber(`${country}:${discipline}:${normalize(place)}`, building.id);
+            let label;
+            let kennung = '';
+            if (discipline === 'police') {
+                // Same role codes as the Dutch police names, then translated.
+                const role = POLICE_TYPE_ID_TO_ROLE[vt] || 'NH';
+                label = (country === 'de' ? DE_POLICE : BE_POLICE)[role] || role;
+            } else if (country === 'de') {
+                [kennung, label] = (discipline === 'fire' ? DE_FIRE : DE_RESCUE)[vt] || (discipline === 'fire' ? ['56', 'GW'] : ['83', 'RTW']);
+            } else {
+                label = (discipline === 'fire' ? BE_FIRE : BE_RESCUE)[vt] || (discipline === 'fire' ? 'AP' : 'AMB');
+            }
+            // Police cars of one station share one row of numbers (/11, /12, ...).
+            const seqKey = `${country}:${building.id}:${discipline === 'police' ? 'pol' : kennung || label}`;
+            const seq = nextSeq(seqKey);
+            let name;
+            let re;
+            if (country === 'de') {
+                const tier = discipline === 'fire' ? 'Florian' : discipline === 'ambulance' ? 'Rettung' : 'Polizei';
+                const head = `${tier} ${place} ${post}/`;
+                if (discipline === 'police') {
+                    // Police: "<Wache>/11", "/12", ... per role.
+                    name = `${head}${10 + seq} ${label}`;
+                    re = new RegExp(`^${escRe(head)}(\\d+) ${escRe(label)}$`);
+                    return { name, seqKey, exact: false, country, fits: (c) => { const m = (c || '').match(re); return m && Number(m[1]) > 10 ? { seq: Number(m[1]) - 10, exact: false } : null; } };
+                }
+                name = `${head}${kennung}-${seq} ${label}`;
+                re = new RegExp(`^${escRe(`${head}${kennung}-`)}(\\d+) ${escRe(label)}$`);
+            } else {
+                const prefix = discipline === 'police' ? `PZ ${place}` : place;
+                name = `${prefix} ${label} ${post}${seq}`;
+                re = new RegExp(`^${escRe(`${prefix} ${label} ${post}`)}(\\d+)$`);
+            }
+            return { name, seqKey, exact: false, country, fits: fitsBy(re) };
+        }
+
+        /* ========================================================================
          * NAME GENERATION ENGINE
          * ==================================================================== */
 
@@ -1112,6 +1248,8 @@ MKS.module({
                 return { name: MANUAL_VEHICLE_OVERRIDES[vehicle.id], seqKey: null, exact: true, manual: true };
             }
             if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID) return policeHeliTarget(vehicle);
+            const scheme = schemeOf(building);
+            if (scheme !== 'nl') return foreignTarget(building, vehicle, scheme);
             const discipline = classifyDiscipline(building.building_type);
             if (discipline === 'fire') {
                 const exactData = findFireStationData(building);
@@ -1437,6 +1575,15 @@ MKS.module({
             for (const vehicle of vehicles) {
                 const a = assignments[vehicle.id];
                 if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID && a && !POLICE_HELI_LIST.includes(a.name)) delete assignments[vehicle.id];
+            }
+
+            // A post across the border (or the setting switched): names made under the
+            // other country's scheme are computed again.
+            for (const vehicle of vehicles) {
+                const a = assignments[vehicle.id];
+                const building = buildingsById[vehicle.building_id];
+                if (a && building && !a.manual && Number(vehicle.vehicle_type) !== POLICE_HELI_TYPE_ID
+                    && (a.country || 'nl') !== schemeOf(building)) delete assignments[vehicle.id];
             }
 
             let ovrNamedFound = 0;

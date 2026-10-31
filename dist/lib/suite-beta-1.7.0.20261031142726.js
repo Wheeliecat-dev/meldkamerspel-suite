@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261030192606 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261031142726 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261030192606';
+    const VERSION = '1.7.0.20261031142726';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -63,6 +63,40 @@ const MKS = (() => {
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const nl = (n) => Math.round(Number(n) || 0).toLocaleString('nl-NL');
+
+    /* ------------------------------------------------------------------------
+     * COUNTRY BY POSITION — 'nl', 'be' or 'de' (ctx.countryAt). Inside an NL
+     * outline = NL, inside the BE outline = BE, otherwise east of 5.8° = DE.
+     * Outlines: Natural Earth 10m admin-0, simplified to about 400 m, so a spot
+     * right on the border can land on the wrong side.
+     * ---------------------------------------------------------------------- */
+    const NL_OUTLINES = [
+        [[53.245,7.195],[53.185,7.195],[53.138,7.172],[53.105,7.185],[53.034,7.194],[52.998,7.193],[52.966,7.184],[52.933,7.162],[52.854,7.08],[52.824,7.062],[52.647,7.037],[52.626,7.018],[52.637,6.968],[52.632,6.918],[52.642,6.865],[52.641,6.771],[52.635,6.737],[52.619,6.702],[52.609,6.71],[52.583,6.704],[52.56,6.744],[52.542,6.672],[52.526,6.684],[52.476,6.695],[52.462,6.715],[52.432,6.9],[52.437,6.951],[52.451,6.973],[52.391,7.034],[52.365,7.048],[52.329,7.04],[52.285,7.012],[52.267,7.012],[52.236,7.029],[52.231,7.026],[52.214,6.982],[52.172,6.928],[52.16,6.885],[52.113,6.831],[52.103,6.75],[52.067,6.711],[52.06,6.68],[52.05,6.673],[52.035,6.675],[52.001,6.778],[51.98,6.809],[51.961,6.811],[51.951,6.79],[51.908,6.744],[51.899,6.717],[51.898,6.628],[51.876,6.529],[51.848,6.463],[51.86,6.378],[51.838,6.387],[51.828,6.382],[51.821,6.345],[51.837,6.342],[51.846,6.287],[51.866,6.265],[51.863,6.225],[51.897,6.127],[51.885,6.093],[51.842,6.156],[51.854,6.084],[51.816,5.931],[51.807,5.928],[51.796,5.951],[51.777,5.964],[51.756,5.962],[51.743,5.94],[51.732,5.939],[51.73,5.978],[51.716,6.012],[51.71,6.022],[51.681,6.009],[51.663,6.031],[51.644,6.099],[51.608,6.082],[51.596,6.086],[51.509,6.193],[51.458,6.205],[51.399,6.193],[51.388,6.208],[51.345,6.194],[51.318,6.148],[51.232,6.065],[51.212,6.057],[51.189,6.054],[51.171,6.061],[51.163,6.084],[51.184,6.134],[51.179,6.157],[51.165,6.126],[51.152,6.147],[51.14,6.132],[51.12,6.075],[51.075,5.983],[51.031,5.938],[51.03,5.92],[51.052,5.88],[51.043,5.852],[50.991,5.874],[50.965,5.875],[50.978,5.928],[50.971,5.968],[50.974,6.004],[50.952,5.996],[50.929,6.0],[50.908,6.064],[50.891,6.055],[50.871,6.063],[50.853,6.057],[50.844,6.046],[50.84,6.009],[50.83,6.0],[50.813,6.004],[50.801,5.998],[50.792,5.984],[50.795,5.969],[50.782,5.973],[50.763,5.997],[50.75,5.995],[50.752,5.793],[50.773,5.752],[50.754,5.728],[50.754,5.707],[50.761,5.688],[50.796,5.7],[50.815,5.641],[50.83,5.624],[50.853,5.622],[50.904,5.694],[50.912,5.722],[50.959,5.764],[50.959,5.722],[51.024,5.778],[51.035,5.764],[51.058,5.771],[51.061,5.78],[51.055,5.791],[51.061,5.799],[51.082,5.812],[51.097,5.805],[51.103,5.846],[51.119,5.823],[51.13,5.826],[51.139,5.841],[51.156,5.829],[51.152,5.781],[51.184,5.731],[51.179,5.659],[51.197,5.625],[51.208,5.568],[51.22,5.546],[51.262,5.535],[51.287,5.493],[51.288,5.472],[51.259,5.389],[51.262,5.271],[51.259,5.215],[51.294,5.215],[51.308,5.197],[51.307,5.14],[51.313,5.123],[51.351,5.103],[51.384,5.062],[51.439,5.08],[51.462,5.06],[51.477,5.028],[51.474,5.012],[51.447,4.996],[51.411,4.957],[51.396,4.932],[51.392,4.91],[51.406,4.853],[51.408,4.783],[51.413,4.762],[51.425,4.768],[51.426,4.779],[51.414,4.823],[51.431,4.815],[51.461,4.826],[51.476,4.824],[51.495,4.779],[51.486,4.731],[51.426,4.654],[51.418,4.63],[51.42,4.541],[51.429,4.522],[51.468,4.533],[51.476,4.525],[51.474,4.483],[51.443,4.377],[51.435,4.389],[51.41,4.38],[51.374,4.416],[51.357,4.411],[51.35,4.392],[51.352,4.346],[51.369,4.29],[51.369,4.261],[51.384,4.249],[51.414,4.245],[51.419,4.235],[51.409,4.223],[51.405,4.201],[51.407,4.111],[51.419,4.07],[51.453,3.999],[51.456,3.957],[51.45,3.943],[51.405,3.902],[51.391,3.827],[51.412,3.789],[51.431,3.729],[51.454,3.69],[51.445,3.61],[51.459,3.535],[51.501,3.495],[51.53,3.451],[51.546,3.447],[51.555,3.458],[51.595,3.56],[51.611,3.851],[51.596,3.882],[51.569,3.906],[51.556,3.872],[51.549,3.872],[51.543,3.967],[51.531,4.016],[51.508,4.057],[51.458,4.09],[51.446,4.105],[51.441,4.129],[51.446,4.181],[51.44,4.2],[51.448,4.283],[51.471,4.297],[51.492,4.289],[51.508,4.268],[51.535,4.153],[51.535,4.091],[51.59,3.988],[51.611,4.068],[51.608,4.157],[51.59,4.207],[51.609,4.203],[51.617,4.19],[51.62,4.136],[51.639,4.113],[51.671,4.113],[51.684,4.143],[51.686,4.177],[51.704,4.141],[51.717,4.072],[51.73,4.057],[51.763,4.051],[51.784,4.034],[51.81,3.981],[51.801,3.963],[51.788,3.872],[51.816,3.862],[51.828,3.891],[51.84,3.954],[51.847,3.963],[51.844,4.016],[51.834,4.048],[51.844,4.078],[51.882,4.032],[51.896,4.032],[51.909,4.043],[51.98,4.01],[51.988,4.016],[51.994,4.022],[51.988,4.069],[51.992,4.108],[52.006,4.142],[52.113,4.285],[52.223,4.407],[52.336,4.508],[52.445,4.569],[52.481,4.577],[52.507,4.597],[52.701,4.639],[52.797,4.669],[52.863,4.712],[52.959,4.734],[52.968,4.745],[52.962,4.807],[52.968,4.817],[52.96,4.824],[52.93,4.809],[52.911,4.833],[52.904,4.874],[52.906,4.913],[52.936,4.978],[52.954,5.078],[53.083,5.313],[53.097,5.379],[53.122,5.4],[53.19,5.427],[53.221,5.447],[53.257,5.504],[53.267,5.541],[53.303,5.592],[53.312,5.66],[53.33,5.695],[53.406,5.981],[53.413,6.274],[53.399,6.312],[53.413,6.346],[53.439,6.494],[53.461,6.73],[53.451,6.829],[53.434,6.867],[53.352,6.901],[53.326,6.949],[53.306,7.02],[53.31,7.038],[53.302,7.058],[53.31,7.085],[53.303,7.085],[53.296,7.073],[53.267,7.081],[53.256,7.111],[53.245,7.195]],
+        [[51.375,3.349],[51.417,3.541],[51.391,3.605],[51.374,3.702],[51.35,3.756],[51.343,3.834],[51.372,3.956],[51.382,3.969],[51.402,3.975],[51.41,3.984],[51.41,4.006],[51.399,4.043],[51.371,4.07],[51.359,4.122],[51.358,4.157],[51.377,4.18],[51.368,4.221],[51.331,4.208],[51.297,4.169],[51.272,4.119],[51.233,3.995],[51.211,3.949],[51.205,3.809],[51.22,3.781],[51.255,3.776],[51.29,3.61],[51.281,3.514],[51.274,3.503],[51.24,3.501],[51.236,3.454],[51.247,3.392],[51.263,3.367],[51.289,3.353],[51.337,3.358],[51.375,3.349]],
+        [[51.686,4.037],[51.67,4.097],[51.654,4.099],[51.644,4.089],[51.633,4.055],[51.624,3.96],[51.642,3.902],[51.668,3.886],[51.676,3.87],[51.7,3.796],[51.678,3.765],[51.681,3.7],[51.693,3.687],[51.725,3.689],[51.74,3.726],[51.748,3.814],[51.741,3.94],[51.73,3.978],[51.686,4.037]],
+        [[53.111,4.893],[53.105,4.893],[53.105,4.913],[53.05,4.865],[53.027,4.818],[53.0,4.796],[52.994,4.762],[53.003,4.727],[53.028,4.708],[53.055,4.714],[53.108,4.758],[53.133,4.806],[53.188,4.854],[53.187,4.886],[53.181,4.89],[53.171,4.891],[53.166,4.886],[53.135,4.91],[53.119,4.91],[53.111,4.893]],
+        [[53.43,5.424],[53.436,5.437],[53.454,5.585],[53.434,5.562],[53.427,5.475],[53.413,5.482],[53.395,5.382],[53.353,5.208],[53.353,5.18],[53.368,5.168],[53.385,5.179],[53.397,5.232],[53.406,5.25],[53.423,5.407],[53.43,5.424]],
+        [[53.509,6.212],[53.514,6.311],[53.509,6.339],[53.502,6.339],[53.469,6.153],[53.454,6.133],[53.46,6.127],[53.468,6.133],[53.482,6.123],[53.495,6.148],[53.509,6.212]],
+        [[53.221,4.879],[53.254,4.921],[53.29,4.987],[53.314,5.054],[53.31,5.105],[53.303,5.105],[53.303,5.078],[53.292,5.036],[53.212,4.91],[53.221,4.879]],
+        [[53.468,5.674],[53.474,5.914],[53.461,5.955],[53.447,5.856],[53.447,5.753],[53.43,5.679],[53.434,5.654],[53.449,5.636],[53.463,5.642],[53.472,5.659],[53.468,5.674]],
+        [[53.557,6.441],[53.558,6.455],[53.544,6.51],[53.54,6.499],[53.543,6.461],[53.55,6.443],[53.557,6.441]],
+    ];
+    const BE_OUTLINE = [[51.088,2.522],[51.105,2.58],[51.17,2.716],[51.246,2.924],[51.33,3.125],[51.375,3.349],[51.337,3.358],[51.289,3.353],[51.263,3.367],[51.247,3.392],[51.236,3.454],[51.24,3.501],[51.274,3.503],[51.281,3.514],[51.29,3.61],[51.255,3.776],[51.22,3.781],[51.205,3.809],[51.206,3.927],[51.272,4.119],[51.297,4.169],[51.331,4.208],[51.368,4.221],[51.357,4.241],[51.328,4.256],[51.296,4.303],[51.284,4.308],[51.268,4.297],[51.271,4.308],[51.296,4.331],[51.309,4.289],[51.35,4.283],[51.369,4.261],[51.369,4.29],[51.352,4.346],[51.35,4.392],[51.357,4.411],[51.374,4.416],[51.41,4.38],[51.435,4.389],[51.443,4.377],[51.462,4.429],[51.474,4.483],[51.476,4.525],[51.468,4.533],[51.429,4.522],[51.42,4.541],[51.418,4.63],[51.426,4.654],[51.486,4.731],[51.495,4.779],[51.476,4.824],[51.461,4.826],[51.431,4.815],[51.414,4.823],[51.426,4.779],[51.425,4.768],[51.413,4.762],[51.408,4.783],[51.406,4.853],[51.392,4.91],[51.396,4.932],[51.411,4.957],[51.447,4.996],[51.474,5.012],[51.477,5.028],[51.462,5.06],[51.439,5.08],[51.406,5.065],[51.384,5.062],[51.375,5.068],[51.351,5.103],[51.313,5.123],[51.307,5.14],[51.308,5.197],[51.294,5.215],[51.259,5.215],[51.259,5.389],[51.288,5.472],[51.287,5.493],[51.262,5.535],[51.22,5.546],[51.208,5.568],[51.197,5.625],[51.179,5.659],[51.184,5.731],[51.152,5.781],[51.156,5.829],[51.139,5.841],[51.13,5.826],[51.119,5.823],[51.103,5.846],[51.097,5.805],[51.082,5.812],[51.061,5.799],[51.055,5.791],[51.061,5.78],[51.058,5.771],[51.035,5.764],[51.024,5.778],[50.959,5.722],[50.959,5.764],[50.912,5.722],[50.904,5.694],[50.853,5.622],[50.83,5.624],[50.815,5.641],[50.796,5.7],[50.761,5.688],[50.754,5.707],[50.754,5.728],[50.773,5.752],[50.752,5.793],[50.75,5.995],[50.743,5.994],[50.737,6.011],[50.709,6.012],[50.713,6.081],[50.642,6.161],[50.637,6.148],[50.622,6.159],[50.616,6.18],[50.614,6.249],[50.608,6.251],[50.587,6.233],[50.562,6.179],[50.544,6.161],[50.53,6.177],[50.518,6.171],[50.515,6.191],[50.507,6.183],[50.49,6.199],[50.486,6.217],[50.495,6.256],[50.481,6.337],[50.466,6.323],[50.447,6.332],[50.434,6.351],[50.368,6.338],[50.329,6.372],[50.315,6.375],[50.307,6.362],[50.309,6.299],[50.304,6.286],[50.286,6.269],[50.267,6.272],[50.257,6.253],[50.243,6.19],[50.223,6.157],[50.214,6.147],[50.205,6.16],[50.182,6.165],[50.169,6.152],[50.165,6.123],[50.145,6.116],[50.134,6.129],[50.12,6.117],[50.125,6.103],[50.151,6.097],[50.159,6.084],[50.151,6.061],[50.149,6.027],[50.154,6.014],[50.175,5.998],[50.166,5.962],[50.128,5.941],[50.097,5.872],[50.074,5.867],[50.047,5.838],[50.019,5.836],[50.002,5.803],[49.989,5.802],[49.978,5.813],[49.964,5.802],[49.947,5.764],[49.882,5.715],[49.858,5.758],[49.86,5.732],[49.845,5.727],[49.839,5.737],[49.834,5.725],[49.825,5.72],[49.8,5.728],[49.789,5.738],[49.773,5.778],[49.743,5.802],[49.722,5.805],[49.714,5.85],[49.7,5.857],[49.674,5.842],[49.667,5.846],[49.658,5.88],[49.644,5.885],[49.583,5.83],[49.577,5.847],[49.561,5.837],[49.545,5.814],[49.538,5.791],[49.549,5.746],[49.531,5.71],[49.544,5.645],[49.536,5.62],[49.514,5.602],[49.523,5.548],[49.495,5.478],[49.499,5.456],[49.508,5.45],[49.537,5.454],[49.546,5.45],[49.602,5.402],[49.613,5.383],[49.626,5.335],[49.613,5.322],[49.613,5.298],[49.626,5.291],[49.641,5.294],[49.648,5.306],[49.662,5.299],[49.691,5.259],[49.683,5.192],[49.687,5.169],[49.705,5.136],[49.753,5.082],[49.767,5.026],[49.797,4.971],[49.784,4.884],[49.787,4.858],[49.794,4.849],[49.832,4.849],[49.853,4.835],[49.892,4.859],[49.913,4.86],[49.932,4.845],[49.944,4.797],[49.958,4.784],[50.036,4.827],[50.064,4.827],[50.091,4.846],[50.084,4.863],[50.14,4.872],[50.148,4.863],[50.146,4.82],[50.161,4.816],[50.153,4.789],[50.084,4.682],[50.066,4.673],[50.048,4.681],[50.016,4.673],[49.989,4.657],[49.98,4.604],[49.936,4.465],[49.932,4.435],[49.96,4.278],[49.953,4.201],[49.975,4.132],[49.975,4.14],[50.004,4.133],[50.006,4.128],[50.025,4.137],[50.06,4.21],[50.127,4.181],[50.13,4.171],[50.124,4.14],[50.128,4.126],[50.205,4.153],[50.222,4.168],[50.242,4.201],[50.252,4.204],[50.258,4.198],[50.273,4.163],[50.27,4.15],[50.256,4.151],[50.252,4.144],[50.257,4.125],[50.295,4.098],[50.344,4.003],[50.325,3.896],[50.345,3.84],[50.346,3.755],[50.337,3.733],[50.298,3.697],[50.319,3.662],[50.446,3.644],[50.477,3.608],[50.487,3.564],[50.487,3.499],[50.493,3.487],[50.512,3.498],[50.52,3.477],[50.519,3.463],[50.502,3.429],[50.49,3.361],[50.507,3.3],[50.527,3.271],[50.57,3.264],[50.655,3.23],[50.672,3.244],[50.696,3.232],[50.705,3.224],[50.715,3.189],[50.769,3.146],[50.779,3.129],[50.784,3.103],[50.758,2.971],[50.736,2.93],[50.703,2.9],[50.697,2.887],[50.723,2.787],[50.733,2.768],[50.766,2.744],[50.789,2.707],[50.809,2.692],[50.816,2.62],[50.835,2.607],[50.845,2.587],[50.868,2.597],[50.912,2.577],[50.941,2.612],[50.961,2.608],[51.001,2.557],[51.065,2.537],[51.088,2.522]];
+    function insideRing(lat, lon, poly) {
+        let c = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const [ya, xa] = poly[i];
+            const [yb, xb] = poly[j];
+            if ((ya > lat) !== (yb > lat) && lon < ((xb - xa) * (lat - ya)) / (yb - ya) + xa) c = !c;
+        }
+        return c;
+    }
+    function countryAt(lat, lon) {
+        if (!isFinite(lat) || !isFinite(lon)) return 'nl';
+        if (NL_OUTLINES.some((r) => insideRing(lat, lon, r))) return 'nl';
+        if (insideRing(lat, lon, BE_OUTLINE)) return 'be';
+        return lon > 5.8 && lat > 50.3 && lat < 53.7 ? 'de' : 'nl';
+    }
 
     /* ------------------------------------------------------------------------
      * STATE
@@ -116,6 +150,7 @@ const MKS = (() => {
             cfg: r.cfg,
             esc,
             nl,
+            countryAt,
             get active() { return isEnabled(def) && r.running; },
             log: (...a) => console.log(tag, css, ...a),
             warn: (...a) => console.warn(`[${def.name}]`, ...a),
@@ -3344,6 +3379,10 @@ MKS.module({
                 ['18', '18 Zuid-Holland Zuid'], ['19', '19 Zeeland'], ['20', '20 Midden- en West-Brabant'], ['21', '21 Brabant-Noord'],
                 ['22', '22 Brabant-Zuidoost'], ['23', '23 Limburg-Noord'], ['24', '24 Limburg-Zuid'], ['25', '25 Flevoland']],
             help: 'Voor gebouwen waarvan de plaatsnaam niet herkend wordt.' },
+        { key: 'foreign', label: 'Duitse en Belgische roepnamen over de grens', type: 'bool', default: true,
+            help: 'Brandweer-, ambulance- en politieposten in Duitsland of België krijgen roepnamen in het systeem van dat land, met verzonnen nummers: '
+                + '"Florian Kleve 1/46-1 HLF 20", "Rettung Gronau 1/83-1 RTW", "Lommel AP 11", "PZ Lommel COMBI 11". Het land volgt uit de ligging; '
+                + 'een post precies op de grens kan aan de verkeerde kant vallen.' },
         { key: 'pollMin', label: 'Zoeken naar nieuwe voertuigen', type: 'number', default: 1, min: 1, max: 60, step: 1, unit: 'min' },
         { key: 'rescanMin', label: 'Volledige controle', type: 'number', default: 30, min: 5, max: 240, step: 5, unit: 'min' },
         { key: 'throttleSec', label: 'Pauze tussen hernoemingen', type: 'number', default: 1.5, min: 0.5, max: 10, step: 0.5, unit: 'sec' },
@@ -4174,6 +4213,138 @@ MKS.module({
         };
 
         /* ========================================================================
+         * CROSS-BORDER POSTS — German and Belgian call signs
+         * A fire, ambulance or police post across the border gets that country's
+         * call-sign format with made-up numbers (like the NL fallback). The
+         * country comes from ctx.countryAt (core), so a post right on the border
+         * (Vaals, Baarle) can land on the wrong side.
+         * DE: "Florian <Ort> <Wache>/<Kennzahl>-<n> <Typ>" (Kennzahlen as used in
+         * most states: 11 ELW 1, 46 HLF 20, 83 RTW, ...). BE: no published national
+         * scheme, so "<Ort> <Typ> <post><n>" with the Flemish vehicle abbreviations.
+         * ==================================================================== */
+        const countryCache = new Map();
+        function countryOf(building) {
+            const lat = Number(building.latitude);
+            const lon = Number(building.longitude);
+            if (!isFinite(lat) || !isFinite(lon)) return 'nl';
+            const key = `${lat},${lon}`;
+            if (countryCache.has(key)) return countryCache.get(key);
+            const c = ctx.countryAt(lat, lon);
+            countryCache.set(key, c);
+            return c;
+        }
+        // Which scheme a building's vehicles follow: 'de'/'be' only for fire,
+        // ambulance and police posts across the border with the setting on.
+        function schemeOf(building) {
+            if (!ctx.cfg.foreign) return 'nl';
+            if (!['fire', 'ambulance', 'police'].includes(classifyDiscipline(building.building_type))) return 'nl';
+            return countryOf(building);
+        }
+
+        // Service words in front of the place name, per country (normalized form).
+        const DE_PREFIX = /^(freiwillige feuerwehr|berufsfeuerwehr|feuerwehr|feuerwache|ff|bf|lz|loschzug|loeschzug|rettungswache|rettungsdienst|rw|rettung|polizeiwache|polizeiinspektion|polizei|pw|pi)$/;
+        const BE_PREFIX = /^(brandweerzone|brandweerpost|brandweer|hulpverleningszone|hvz|zone|post|ambulancepost|ziekenwagen|ambulance|politiezone|politiepost|politie|pz|commissariaat)$/;
+        // The place for the call sign: the caption minus leading service words, in
+        // the caption's own spelling, at most three words ("Polizeiwache Emmerich am Rhein" -> "Emmerich am Rhein").
+        function foreignPlace(building, country) {
+            const re = country === 'de' ? DE_PREFIX : BE_PREFIX;
+            const words = String(building.caption || '').trim().split(/\s+/);
+            while (words.length > 1) {
+                if (re.test(normalize(words[0]))) { words.shift(); continue; }
+                if (re.test(normalize(`${words[0]} ${words[1]}`))) { words.splice(0, 2); continue; }
+                break;
+            }
+            const place = words.slice(0, 3).join(' ').replace(/[^\p{L}\p{N}\- ]/gu, '').trim();
+            return place || 'Post';
+        }
+
+        // NL game vehicle_type -> [Kennzahl, Typ]. Unlisted fire types: 56 GW.
+        const DE_FIRE = {
+            0: ['48', 'TSF'], 1: ['46', 'HLF 20'], 2: ['33', 'DLK 23/12'], 3: ['11', 'ELW 1'], 4: ['52', 'RW'],
+            5: ['57', 'GW-A'], 6: ['23', 'TLF 3000'], 7: ['23', 'TLF 3000'], 8: ['23', 'TLF 3000'], 9: ['42', 'LF 10'],
+            10: ['64', 'SW 2000'], 11: ['59', 'GW-Mess'], 12: ['22', 'TLF-W'], 14: ['22', 'TLF-W'], 15: ['22', 'TLF-W'],
+            17: ['43', 'LF 20'], 18: ['34', 'TMF'], 19: ['10', 'KdoW'], 20: ['19', 'MTW'], 21: ['19', 'MTW'],
+            24: ['10', 'KdoW-AGS'], 26: ['66', 'WLF'], 27: ['66', 'AB-Atemschutz'], 29: ['66', 'AB-Wasser'], 31: ['12', 'ELW 2'],
+            32: ['66', 'AB-ELW'], 33: ['58', 'GW-W'], 34: ['24', 'TLF 4000'], 36: ['79', 'MZB'], 41: ['25', 'FLF'],
+            42: ['25', 'FLF'], 43: ['25', 'FLF'], 44: ['11', 'ELW 1'], 45: ['66', 'AB-Pumpe'], 49: ['58', 'GW-W'],
+            50: ['43', 'LF 20'], 51: ['66', 'AB-Rüst'], 56: ['10', 'KdoW-PR'], 61: ['66', 'AB-Schlauch'], 62: ['46', 'HLF 20'],
+            68: ['56', 'GW-Schaum'], 69: ['66', 'AB-Schaum'], 70: ['56', 'GW-Schaum'], 76: ['19', 'ATV'], 77: ['79', 'MZB'],
+            86: ['19', 'MTW-Wald'], 87: ['10', 'KdoW-Wald'], 88: ['19', 'MTW-Wald'], 89: ['22', 'TLF-W'], 90: ['46', 'HLF 20'],
+            91: ['66', 'AB-Rüst'], 92: ['19', 'MTW-SEEBA'], 93: ['46', 'HLF 20'], 94: ['56', 'GW-SEEBA'], 128: ['19', 'MTW-Drohne'],
+            132: ['46', 'HLF 20'], 133: ['43', 'LF 20'], 139: ['43', 'LF 20'], 142: ['43', 'LF 20'], 152: ['43', 'LF 20'],
+        };
+        const DE_RESCUE = {
+            16: ['83', 'RTW'], 30: ['85', 'KTW'], 37: ['82', 'NEF'], 38: ['10', 'OrgL'], 52: ['82', 'NEF'], 57: ['10', 'OrgL'],
+            63: ['82', 'NEF'], 100: ['89', 'GW-San'], 101: ['89', 'GW-San'], 102: ['83', 'RTW'], 103: ['87', 'ITW'],
+        };
+        const DE_POLICE = {
+            'NH': 'FuStW', 'NH-OV': 'Zivil', 'OVD-P': 'DGL', 'DM-P': 'Krad', 'HK9': 'DHF', 'BIKE': 'Fahrrad',
+            'AV': 'GefKw', 'ME-CO': 'BePo', 'ME-FB': 'BePo', 'ME-AE': 'BFE', 'ME-WW': 'WaWe', 'BER': 'Reiter', 'BER-AH': 'Reiter',
+            'DRONE': 'Drohne', 'AT-C': 'SEK', 'AT-O': 'SEK', 'AT-M': 'SEK', 'SIV': 'SIV', 'VOA': 'VU',
+        };
+        // Belgium: Flemish abbreviations (AP autopomp, TW tankwagen, AL autoladder, ...).
+        const BE_FIRE = {
+            0: 'AP', 1: 'AP', 2: 'AL', 3: 'OFF', 4: 'HV', 5: 'AB', 6: 'LAP', 7: 'LAP', 8: 'LAP', 9: 'AP', 10: 'SW',
+            11: 'MEET', 12: 'BBT', 14: 'BBT', 15: 'BBT', 17: 'AP', 18: 'HW', 19: 'OFF', 20: 'PV', 21: 'PV', 24: 'GEVST',
+            26: 'CT', 27: 'CT-AB', 29: 'CT-TW', 31: 'CP', 32: 'CT-CP', 33: 'DUIK', 34: 'TW', 36: 'BOOT', 41: 'CRASH',
+            42: 'CRASH', 43: 'CRASH', 44: 'OFF', 45: 'CT-POMP', 49: 'DUIK', 50: 'AP', 51: 'CT-HV', 56: 'VOORL', 61: 'CT-SW',
+            62: 'AP', 68: 'SCHUIM', 69: 'CT-SCHUIM', 70: 'SCHUIM', 76: 'QUAD', 77: 'BOOT', 86: 'PV', 87: 'OFF', 88: 'PV',
+            89: 'BBT', 90: 'AP', 91: 'CT-HV', 92: 'USAR', 93: 'AP', 94: 'USAR', 128: 'DRONE', 132: 'AP', 133: 'AP',
+        };
+        const BE_RESCUE = {
+            16: 'AMB', 30: 'NDZV', 37: 'MUG', 38: 'DIR-MED', 52: 'PIT', 57: 'DIR-MED', 63: 'PIT',
+            100: 'PSM', 101: 'PSM', 102: 'AMB', 103: 'MUG',
+        };
+        const BE_POLICE = {
+            'NH': 'COMBI', 'NH-OV': 'ANONIEM', 'OVD-P': 'OBP', 'DM-P': 'MOTO', 'HK9': 'HOND', 'BIKE': 'FIETS',
+            'AV': 'TRANSPORT', 'DRONE': 'DRONE', 'BER': 'RUITERIJ', 'BER-AH': 'RUITERIJ',
+        };
+
+        function foreignTarget(building, vehicle, country) {
+            const vt = Number(vehicle.vehicle_type);
+            // The vehicle decides the service: an ambulance at a fire station is still "Rettung".
+            let discipline = classifyDiscipline(building.building_type);
+            if (vt in DE_RESCUE) discipline = 'ambulance';
+            else if (vt in DE_FIRE) discipline = 'fire';
+            else if (vt in POLICE_TYPE_ID_TO_ROLE) discipline = 'police';
+            const place = foreignPlace(building, country);
+            const post = getOrAssignPostNumber(`${country}:${discipline}:${normalize(place)}`, building.id);
+            let label;
+            let kennung = '';
+            if (discipline === 'police') {
+                // Same role codes as the Dutch police names, then translated.
+                const role = POLICE_TYPE_ID_TO_ROLE[vt] || 'NH';
+                label = (country === 'de' ? DE_POLICE : BE_POLICE)[role] || role;
+            } else if (country === 'de') {
+                [kennung, label] = (discipline === 'fire' ? DE_FIRE : DE_RESCUE)[vt] || (discipline === 'fire' ? ['56', 'GW'] : ['83', 'RTW']);
+            } else {
+                label = (discipline === 'fire' ? BE_FIRE : BE_RESCUE)[vt] || (discipline === 'fire' ? 'AP' : 'AMB');
+            }
+            // Police cars of one station share one row of numbers (/11, /12, ...).
+            const seqKey = `${country}:${building.id}:${discipline === 'police' ? 'pol' : kennung || label}`;
+            const seq = nextSeq(seqKey);
+            let name;
+            let re;
+            if (country === 'de') {
+                const tier = discipline === 'fire' ? 'Florian' : discipline === 'ambulance' ? 'Rettung' : 'Polizei';
+                const head = `${tier} ${place} ${post}/`;
+                if (discipline === 'police') {
+                    // Police: "<Wache>/11", "/12", ... per role.
+                    name = `${head}${10 + seq} ${label}`;
+                    re = new RegExp(`^${escRe(head)}(\\d+) ${escRe(label)}$`);
+                    return { name, seqKey, exact: false, country, fits: (c) => { const m = (c || '').match(re); return m && Number(m[1]) > 10 ? { seq: Number(m[1]) - 10, exact: false } : null; } };
+                }
+                name = `${head}${kennung}-${seq} ${label}`;
+                re = new RegExp(`^${escRe(`${head}${kennung}-`)}(\\d+) ${escRe(label)}$`);
+            } else {
+                const prefix = discipline === 'police' ? `PZ ${place}` : place;
+                name = `${prefix} ${label} ${post}${seq}`;
+                re = new RegExp(`^${escRe(`${prefix} ${label} ${post}`)}(\\d+)$`);
+            }
+            return { name, seqKey, exact: false, country, fits: fitsBy(re) };
+        }
+
+        /* ========================================================================
          * NAME GENERATION ENGINE
          * ==================================================================== */
 
@@ -4435,6 +4606,8 @@ MKS.module({
                 return { name: MANUAL_VEHICLE_OVERRIDES[vehicle.id], seqKey: null, exact: true, manual: true };
             }
             if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID) return policeHeliTarget(vehicle);
+            const scheme = schemeOf(building);
+            if (scheme !== 'nl') return foreignTarget(building, vehicle, scheme);
             const discipline = classifyDiscipline(building.building_type);
             if (discipline === 'fire') {
                 const exactData = findFireStationData(building);
@@ -4760,6 +4933,15 @@ MKS.module({
             for (const vehicle of vehicles) {
                 const a = assignments[vehicle.id];
                 if (Number(vehicle.vehicle_type) === POLICE_HELI_TYPE_ID && a && !POLICE_HELI_LIST.includes(a.name)) delete assignments[vehicle.id];
+            }
+
+            // A post across the border (or the setting switched): names made under the
+            // other country's scheme are computed again.
+            for (const vehicle of vehicles) {
+                const a = assignments[vehicle.id];
+                const building = buildingsById[vehicle.building_id];
+                if (a && building && !a.manual && Number(vehicle.vehicle_type) !== POLICE_HELI_TYPE_ID
+                    && (a.country || 'nl') !== schemeOf(building)) delete assignments[vehicle.id];
             }
 
             let ovrNamedFound = 0;
@@ -12785,6 +12967,15 @@ MKS.module({
                 if (counts) inFlight++;
                 return runFrame(job).finally(() => { if (counts) inFlight--; });
             }
+            // The mission heading without the scripts and links inside it (the pumpkin's click
+            // handler sits in the h1 and ended up in log names).
+            function missionTitle(doc) {
+                const h = doc.getElementById('missionH1');
+                if (!h) return '';
+                const c = h.cloneNode(true);
+                c.querySelectorAll('script, style, a').forEach((x) => x.remove());
+                return c.textContent.replace(/\s+/g, ' ').trim();
+            }
             // Halloween 2026 (temporary): a mission page can carry a pumpkin (#easter-egg-link).
             // Any mission page we open or read gets it claimed, the same POST the game's click
             // sends, once per mission, until PUMPKIN_UNTIL. Remove after the event.
@@ -12794,7 +12985,7 @@ MKS.module({
                 if (Date.now() > PUMPKIN_UNTIL || !doc || pumpkinTried.has(String(id))) return;
                 if (!doc.getElementById('easter-egg-link')) return;
                 pumpkinTried.add(String(id));
-                name = name || (doc.getElementById('missionH1')?.textContent || '').replace(/\s+/g, ' ').trim();
+                name = name || missionTitle(doc);
                 const token = document.querySelector('meta[name=csrf-token]')?.content || '';
                 fetch(`/missions/${id}/claim_found_object`, { method: 'POST', credentials: 'same-origin',
                     headers: { 'X-CSRF-Token': token, 'X-Requested-With': 'XMLHttpRequest' } })
@@ -12951,7 +13142,7 @@ MKS.module({
                             await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
                             await sleep(300);
                         }
-                        const name = (doc.getElementById('missionH1')?.textContent || titleOf(e)).replace(/\s+/g, ' ').trim();
+                        const name = missionTitle(doc) || titleOf(e).replace(/\s+/g, ' ').trim();
                         addLog(name, `klaar op patiënten na: ${back.length} voertuig(en) terug naar post`, 'ok');
                         recordEvent({ kind: 'sendback', id, name, n: back.length, vehicles: back.map((x) => x.name).slice(0, 10) });
                     } catch (err) { ctx.warn('send back', id, err); }
@@ -15708,6 +15899,9 @@ MKS.module({
             ambulancepost: { levels: 1, first: 16 },
             politiebureau: { levels: 0, first: 22 },
         };
+        // New buildings report to the meldkamer of their country (ctx.countryAt); the
+        // first one in the list when this one is not found.
+        const MELDKAMER = { nl: 'Meldkamer Amerongen', de: 'Feuerwehr Zentralwerkstatt', be: 'PASI Cité - VOPO Cité' };
         // Spots built on in the last 30 minutes: the API can take a while to list the new
         // building, and without this the next round could build on the same post again.
         function recentSpots() {
@@ -15895,7 +16089,9 @@ MKS.module({
                     fd.set('building[latitude]', String(post[0]));
                     fd.set('building[longitude]', String(post[1]));
                     fd.set('build_with_coins', '');
-                    const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
+                    const options = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].filter((o) => o.value);
+                    const wanted = norm(MELDKAMER[ctx.countryAt(post[0], post[1])] || '');
+                    const ls = (wanted && options.find((o) => norm(o.textContent).includes(wanted))) || options[0];
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
                     state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2], 30 * 60000]];
@@ -16496,7 +16692,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261030192606' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261031142726' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16716,7 +16912,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261030192606',
+                version: '1.7.0.20261031142726',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {

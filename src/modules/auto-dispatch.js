@@ -1708,6 +1708,15 @@ MKS.module({
                 if (counts) inFlight++;
                 return runFrame(job).finally(() => { if (counts) inFlight--; });
             }
+            // The mission heading without the scripts and links inside it (the pumpkin's click
+            // handler sits in the h1 and ended up in log names).
+            function missionTitle(doc) {
+                const h = doc.getElementById('missionH1');
+                if (!h) return '';
+                const c = h.cloneNode(true);
+                c.querySelectorAll('script, style, a').forEach((x) => x.remove());
+                return c.textContent.replace(/\s+/g, ' ').trim();
+            }
             // Halloween 2026 (temporary): a mission page can carry a pumpkin (#easter-egg-link).
             // Any mission page we open or read gets it claimed, the same POST the game's click
             // sends, once per mission, until PUMPKIN_UNTIL. Remove after the event.
@@ -1717,7 +1726,7 @@ MKS.module({
                 if (Date.now() > PUMPKIN_UNTIL || !doc || pumpkinTried.has(String(id))) return;
                 if (!doc.getElementById('easter-egg-link')) return;
                 pumpkinTried.add(String(id));
-                name = name || (doc.getElementById('missionH1')?.textContent || '').replace(/\s+/g, ' ').trim();
+                name = name || missionTitle(doc);
                 const token = document.querySelector('meta[name=csrf-token]')?.content || '';
                 fetch(`/missions/${id}/claim_found_object`, { method: 'POST', credentials: 'same-origin',
                     headers: { 'X-CSRF-Token': token, 'X-Requested-With': 'XMLHttpRequest' } })
@@ -1874,7 +1883,7 @@ MKS.module({
                             await fetch(x.a.getAttribute('href'), { credentials: 'same-origin', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
                             await sleep(300);
                         }
-                        const name = (doc.getElementById('missionH1')?.textContent || titleOf(e)).replace(/\s+/g, ' ').trim();
+                        const name = missionTitle(doc) || titleOf(e).replace(/\s+/g, ' ').trim();
                         addLog(name, `klaar op patiënten na: ${back.length} voertuig(en) terug naar post`, 'ok');
                         recordEvent({ kind: 'sendback', id, name, n: back.length, vehicles: back.map((x) => x.name).slice(0, 10) });
                     } catch (err) { ctx.warn('send back', id, err); }

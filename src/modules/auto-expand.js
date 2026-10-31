@@ -1728,6 +1728,9 @@ MKS.module({
             ambulancepost: { levels: 1, first: 16 },
             politiebureau: { levels: 0, first: 22 },
         };
+        // New buildings report to the meldkamer of their country (ctx.countryAt); the
+        // first one in the list when this one is not found.
+        const MELDKAMER = { nl: 'Meldkamer Amerongen', de: 'Feuerwehr Zentralwerkstatt', be: 'PASI Cité - VOPO Cité' };
         // Spots built on in the last 30 minutes: the API can take a while to list the new
         // building, and without this the next round could build on the same post again.
         function recentSpots() {
@@ -1915,7 +1918,9 @@ MKS.module({
                     fd.set('building[latitude]', String(post[0]));
                     fd.set('building[longitude]', String(post[1]));
                     fd.set('build_with_coins', '');
-                    const ls = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].find((o) => o.value);
+                    const options = [...form.querySelectorAll('select[name="building[leitstelle_building_id]"] option')].filter((o) => o.value);
+                    const wanted = norm(MELDKAMER[ctx.countryAt(post[0], post[1])] || '');
+                    const ls = (wanted && options.find((o) => norm(o.textContent).includes(wanted))) || options[0];
                     if (ls) fd.set('building[leitstelle_building_id]', ls.value);
                     fd.set('commit', btn.value);
                     state.recentSpots = [...(state.recentSpots || []), [post[0], post[1], Date.now(), post[2], 30 * 60000]];
