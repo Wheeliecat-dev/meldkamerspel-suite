@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261031142656 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261031230325 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261031142656';
+    const VERSION = '1.7.0.20261031230325';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -4245,7 +4245,7 @@ MKS.module({
         const DE_PREFIX = /^(freiwillige feuerwehr|berufsfeuerwehr|feuerwehr|feuerwache|ff|bf|lz|loschzug|loeschzug|rettungswache|rettungsdienst|rw|rettung|polizeiwache|polizeiinspektion|polizei|pw|pi)$/;
         const BE_PREFIX = /^(brandweerzone|brandweerpost|brandweer|hulpverleningszone|hvz|zone|post|ambulancepost|ziekenwagen|ambulance|politiezone|politiepost|politie|pz|commissariaat)$/;
         // The place for the call sign: the caption minus leading service words, in
-        // the caption's own spelling, at most two words ("Feuerwache Kleve-Kellen" -> "Kleve-Kellen").
+        // the caption's own spelling, at most three words ("Polizeiwache Emmerich am Rhein" -> "Emmerich am Rhein").
         function foreignPlace(building, country) {
             const re = country === 'de' ? DE_PREFIX : BE_PREFIX;
             const words = String(building.caption || '').trim().split(/\s+/);
@@ -4254,7 +4254,7 @@ MKS.module({
                 if (re.test(normalize(`${words[0]} ${words[1]}`))) { words.splice(0, 2); continue; }
                 break;
             }
-            const place = words.slice(0, 2).join(' ').replace(/[^\p{L}\p{N}\- ]/gu, '').trim();
+            const place = words.slice(0, 3).join(' ').replace(/[^\p{L}\p{N}\- ]/gu, '').trim();
             return place || 'Post';
         }
 
@@ -4301,10 +4301,14 @@ MKS.module({
         };
 
         function foreignTarget(building, vehicle, country) {
-            const discipline = classifyDiscipline(building.building_type);
+            const vt = Number(vehicle.vehicle_type);
+            // The vehicle decides the service: an ambulance at a fire station is still "Rettung".
+            let discipline = classifyDiscipline(building.building_type);
+            if (vt in DE_RESCUE) discipline = 'ambulance';
+            else if (vt in DE_FIRE) discipline = 'fire';
+            else if (vt in POLICE_TYPE_ID_TO_ROLE) discipline = 'police';
             const place = foreignPlace(building, country);
             const post = getOrAssignPostNumber(`${country}:${discipline}:${normalize(place)}`, building.id);
-            const vt = Number(vehicle.vehicle_type);
             let label;
             let kennung = '';
             if (discipline === 'police') {
@@ -4316,7 +4320,8 @@ MKS.module({
             } else {
                 label = (discipline === 'fire' ? BE_FIRE : BE_RESCUE)[vt] || (discipline === 'fire' ? 'AP' : 'AMB');
             }
-            const seqKey = `${country}:${building.id}:${kennung || label}`;
+            // Police cars of one station share one row of numbers (/11, /12, ...).
+            const seqKey = `${country}:${building.id}:${discipline === 'police' ? 'pol' : kennung || label}`;
             const seq = nextSeq(seqKey);
             let name;
             let re;
@@ -15895,7 +15900,7 @@ MKS.module({
             politiebureau: { levels: 0, first: 22 },
         };
         // New buildings report to the meldkamer of their country (ctx.countryAt); the
-        // first one in the list when this one is not found.
+        // first one in the list when this one is not found. fixMeldkamers corrects it later.
         const MELDKAMER = { nl: 'Meldkamer Amerongen', de: 'Feuerwehr Zentralwerkstatt', be: 'PASI Cité - VOPO Cité' };
         // Spots built on in the last 30 minutes: the API can take a while to list the new
         // building, and without this the next round could build on the same post again.
@@ -16182,6 +16187,42 @@ MKS.module({
                     addLog(`werving mislukt: ${b.caption} (${e.message})`, 'warn');
                 }
                 n++;
+                await sleep(800);
+            }
+        }
+
+        // Every building under the meldkamer of its country (MELDKAMER). The game ignores the
+        // meldkamer sent with a new building and files it under the first one by name, so it
+        // is set afterwards through the edit form. Two tries per building, then left alone.
+        async function fixMeldkamers(data) {
+            const lsId = {};
+            for (const [c, name] of Object.entries(MELDKAMER)) {
+                const ls = data.buildings.find((b) => b.building_type === 1 && norm(b.caption || '').includes(norm(name)));
+                if (ls) lsId[c] = ls.id;
+            }
+            state.lsTries = state.lsTries || {};
+            let n = 0;
+            for (const b of data.buildings) {
+                if (n >= 5 || stopped) break;
+                if (b.building_type === 1) continue;
+                const want = lsId[ctx.countryAt(Number(b.latitude), Number(b.longitude))];
+                if (!want || b.leitstelle_building_id === want || (state.lsTries[b.id] || 0) >= 2) continue;
+                state.lsTries[b.id] = (state.lsTries[b.id] || 0) + 1;
+                save();
+                n++;
+                try {
+                    const doc = await getDoc(`/buildings/${b.id}/edit`);
+                    const form = doc.querySelector(`#edit_building_${b.id}`) || doc.forms[0];
+                    if (!form || !form.querySelector('select[name="building[leitstelle_building_id]"]')) throw new Error('geen meldkamerkeuze op de bewerkpagina');
+                    // Without the empty image upload: as text it makes the game answer 500.
+                    const fd = new URLSearchParams([...new FormData(form)].filter(([, v]) => typeof v === 'string'));
+                    fd.set('building[leitstelle_building_id]', String(want));
+                    await hit(form.getAttribute('action') || `/buildings/${b.id}`, fd);
+                    const ls = data.buildings.find((x) => x.id === want);
+                    addLog(`meldkamer: ${b.caption} naar ${ls ? ls.caption : want}`, 'idle');
+                } catch (e) {
+                    addLog(`meldkamer wijzigen mislukt: ${b.caption} (${e.message})`, 'warn');
+                }
                 await sleep(800);
             }
         }
@@ -16536,6 +16577,7 @@ MKS.module({
             try {
                 const data = await loadData();
                 if (ctx.cfg.doHire) await fixHiring(data);
+                await fixMeldkamers(data);
                 const spendable = data.credits - ctx.cfg.buffer;
                 recordEarn(data.total);
                 skipped = [];
@@ -16687,7 +16729,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261031142656' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261031230325' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16907,7 +16949,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261031142656',
+                version: '1.7.0.20261031230325',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {

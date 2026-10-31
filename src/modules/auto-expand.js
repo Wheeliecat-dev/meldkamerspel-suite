@@ -1729,7 +1729,7 @@ MKS.module({
             politiebureau: { levels: 0, first: 22 },
         };
         // New buildings report to the meldkamer of their country (ctx.countryAt); the
-        // first one in the list when this one is not found.
+        // first one in the list when this one is not found. fixMeldkamers corrects it later.
         const MELDKAMER = { nl: 'Meldkamer Amerongen', de: 'Feuerwehr Zentralwerkstatt', be: 'PASI Cité - VOPO Cité' };
         // Spots built on in the last 30 minutes: the API can take a while to list the new
         // building, and without this the next round could build on the same post again.
@@ -2016,6 +2016,42 @@ MKS.module({
                     addLog(`werving mislukt: ${b.caption} (${e.message})`, 'warn');
                 }
                 n++;
+                await sleep(800);
+            }
+        }
+
+        // Every building under the meldkamer of its country (MELDKAMER). The game ignores the
+        // meldkamer sent with a new building and files it under the first one by name, so it
+        // is set afterwards through the edit form. Two tries per building, then left alone.
+        async function fixMeldkamers(data) {
+            const lsId = {};
+            for (const [c, name] of Object.entries(MELDKAMER)) {
+                const ls = data.buildings.find((b) => b.building_type === 1 && norm(b.caption || '').includes(norm(name)));
+                if (ls) lsId[c] = ls.id;
+            }
+            state.lsTries = state.lsTries || {};
+            let n = 0;
+            for (const b of data.buildings) {
+                if (n >= 5 || stopped) break;
+                if (b.building_type === 1) continue;
+                const want = lsId[ctx.countryAt(Number(b.latitude), Number(b.longitude))];
+                if (!want || b.leitstelle_building_id === want || (state.lsTries[b.id] || 0) >= 2) continue;
+                state.lsTries[b.id] = (state.lsTries[b.id] || 0) + 1;
+                save();
+                n++;
+                try {
+                    const doc = await getDoc(`/buildings/${b.id}/edit`);
+                    const form = doc.querySelector(`#edit_building_${b.id}`) || doc.forms[0];
+                    if (!form || !form.querySelector('select[name="building[leitstelle_building_id]"]')) throw new Error('geen meldkamerkeuze op de bewerkpagina');
+                    // Without the empty image upload: as text it makes the game answer 500.
+                    const fd = new URLSearchParams([...new FormData(form)].filter(([, v]) => typeof v === 'string'));
+                    fd.set('building[leitstelle_building_id]', String(want));
+                    await hit(form.getAttribute('action') || `/buildings/${b.id}`, fd);
+                    const ls = data.buildings.find((x) => x.id === want);
+                    addLog(`meldkamer: ${b.caption} naar ${ls ? ls.caption : want}`, 'idle');
+                } catch (e) {
+                    addLog(`meldkamer wijzigen mislukt: ${b.caption} (${e.message})`, 'warn');
+                }
                 await sleep(800);
             }
         }
@@ -2370,6 +2406,7 @@ MKS.module({
             try {
                 const data = await loadData();
                 if (ctx.cfg.doHire) await fixHiring(data);
+                await fixMeldkamers(data);
                 const spendable = data.credits - ctx.cfg.buffer;
                 recordEarn(data.total);
                 skipped = [];
