@@ -337,6 +337,28 @@ MKS.module({
         state.spent = state.spent || {};
         state.wishes = state.wishes || {};
         const save = () => { try { GM_setValue(STATE_KEY, JSON.stringify(state)); } catch (e) { ctx.warn('state not saved', e); } };
+        // Page freezes: every long task (50 ms+, the page could not react) is booked on the
+        // round step that ran then, or "buiten ronde" when this module was idle (another
+        // script or the game itself). Uploaded with the state, to find what blocks the page.
+        let perfPhase = 'buiten ronde';
+        const phase = (name) => { perfPhase = name; };
+        const resetPerf = () => { state.perf = { since: Date.now(), phases: {}, worst: [] }; };
+        if (!state.perf || Date.now() - state.perf.since > 2 * 86400000) resetPerf();
+        let perfObs = null;
+        try {
+            perfObs = new PerformanceObserver((list) => {
+                for (const e of list.getEntries()) {
+                    const name = busy ? perfPhase : 'buiten ronde';
+                    const p = (state.perf.phases[name] = state.perf.phases[name] || [0, 0, 0]);
+                    p[0]++; p[1] += Math.round(e.duration); p[2] = Math.max(p[2], Math.round(e.duration));
+                    if (e.duration >= 1000) {
+                        state.perf.worst.unshift([Date.now(), Math.round(e.duration), name]);
+                        state.perf.worst.length = Math.min(state.perf.worst.length, 30);
+                    }
+                }
+            });
+            perfObs.observe({ type: 'longtask', buffered: false });
+        } catch (e) { ctx.warn('longtask observer not available', e); }
         function addLog(text, tone = 'ok', cost = 0) {
             state.log.unshift({ at: Date.now(), text, tone, cost });
             if (state.log.length > 300) state.log.length = 300;
@@ -1810,8 +1832,10 @@ MKS.module({
                     }
                     if (!best) skipped.push(`Groei: ${g.name}: geen vrije echte post meer in ${city.name}, verder rond je gebouwen`);
                 }
+                let n = 0;
                 if (!best) for (const p of uniq) {
                     if (p[2] !== CAT_OF[g.types[0]]) continue;
+                    if (++n % 300 === 0) await sleep(0); // thousands of posts: let the page breathe
                     const at = [p[0], p[1]];
                     if (owned.some((o) => km(o, at) < 0.3)) continue;
                     // Not on top of one of this kind (3 km at least, so it covers new ground),
@@ -2404,9 +2428,13 @@ MKS.module({
             busy = true;
             takeLock();
             try {
+                phase('gegevens laden');
                 const data = await loadData();
+                phase('werving');
                 if (ctx.cfg.doHire) await fixHiring(data);
+                phase('meldkamers');
                 await fixMeldkamers(data);
+                phase('voorbereiden');
                 const spendable = data.credits - ctx.cfg.buffer;
                 recordEarn(data.total);
                 skipped = [];
@@ -2415,12 +2443,15 @@ MKS.module({
                 prepSweep(data);
                 emptySweep(data);
                 // Running projects first: their free steps now, their paid step before new needs.
+                phase('projecten');
                 next = await advanceProjects(data);
+                phase('parkeerplaatsen opvullen');
                 const fill = !next ? await planFill(data) : null;
                 if (fill) {
                     next = fill;
                     ranking = [{ ...fill, eta: etaFor(fill.cost, data.credits) }];
                 }
+                phase('focus');
                 let hc = !next && ctx.cfg.hcFocus ? await planHcFocus(data) : null;
                 if (!(hc && (hc.steps.length || hc.pending)) && !next && ctx.cfg.lvlFocus) {
                     hc = await planLvlFocus(data);
@@ -2436,8 +2467,10 @@ MKS.module({
                     // Plan the most valuable needs, then take the step with the most blocked
                     // credits per credit spent (a free training step wins outright).
                     ranking = [];
+                    phase('tekorten en spreiden');
                     const cands = applyCover(candidates(readNeeds()), data);
                     if (ctx.cfg.doVehicles) {
+                        phase('parkeerplaatsen scannen');
                         await scanSpots(data);
                         for (const r of await planSpots(cands, data)) ranking.push(r);
                     }
@@ -2445,10 +2478,12 @@ MKS.module({
                     // classroom, a building type that is not built) do not use up a place, or a
                     // round with the top 6 all waiting for a classroom bought nothing at all
                     // while MICU, DB-DRONE and OvD-P further down could be bought.
+                    phase('plannen');
                     let viable = 0;
                     for (const c of cands.slice(0, 40)) {
                         if (stopped) return;
                         if (viable >= (ctx.cfg.aiOn && ctx.cfg.aiKey ? Math.max(ctx.cfg.planDepth, 12) : ctx.cfg.planDepth)) break;
+                        phase(`plannen: ${c.kind}`);
                         const plan = c.kind === 'beds' ? await planBeds(c, data)
                             : c.kind === 'ext' ? await planExtension(c, data)
                             : c.kind === 'unlock' ? await planUnlock(c, data) : await planVehicle(c, data);
@@ -2457,8 +2492,11 @@ MKS.module({
                         ranking.push({ need: c.name, value: c.value, ...plan, ratio: c.value / Math.max(plan.cost, 2000) });
                     }
                     updateBlocked();
+                    phase('scholen');
                     for (const r of await planSchools(data)) ranking.push(r);
+                    phase('groei');
                     for (const r of await planGrow(data)) ranking.push(r);
+                    phase('AI');
                     ranking.sort((a, b) => b.ratio - a.ratio);
                     for (const r of ranking) r.eta = etaFor(r.cost, data.credits);
                     next = ranking[0] || null;
@@ -2489,6 +2527,7 @@ MKS.module({
                     ctx.status(`Spaart voor ${next.label}: ${ctx.nl(next.cost)} nodig, ${ctx.nl(Math.max(0, spendable))} vrij boven de buffer. Genoeg over ${eta}.`, { tone: 'idle' });
                     return;
                 }
+                phase('kopen');
                 ctx.status(`Bezig: ${next.label}`, { tone: 'busy', dock: true });
                 lastSaid = '';
                 await next.run();
@@ -2545,9 +2584,11 @@ MKS.module({
                 const fn = where && (where.match(/at (?:async )?([\w.$]+) /) || [])[1];
                 addLog(`fout: ${e.message}${fn ? ` (in ${fn})` : ''}`, 'error');
             } finally {
-                busy = false;
+                phase('opslaan en scherm');
                 save();
                 ctx.refresh();
+                busy = false;
+                phase('buiten ronde');
             }
         }
 
@@ -2664,6 +2705,7 @@ MKS.module({
         return {
             stop() {
                 stopped = true;
+                if (perfObs) perfObs.disconnect();
                 clearTimeout(first);
                 clearInterval(timer);
                 clearInterval(heartbeat);
