@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261101010926 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261104163708 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261101010926';
+    const VERSION = '1.7.0.20261104163708';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11453,6 +11453,8 @@ MKS.module({
         // Names the game uses in "Benodigde X" and in the red "Missende voertuigen"
         // box -> requirement key. Solved from 229 help pages against /einsaetze.json.
         const LABELS = {
+            // "1 Elk voertuig" (Splinter in oog): anything will do, a single ambulance is the right one.
+            'elk voertuig': 'ambulances',
             'tankautospuiten': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
             "ovd-b's": 'battalion_chief_vehicles', 'water': 'water_needed', 'tankautospuiten (terreinvaardig)': 'brush_truck',
             'hulpverleningsvoertuigen': 'heavy_rescue_vehicles', 'signalisatie voertuigen': 'traffic_unit', 'noodhulpeenheden': 'police_cars',
@@ -11601,7 +11603,8 @@ MKS.module({
             if (PRISONERS.test(body)) { body = body.replace(PRISONERS, ''); addPrisonerCar(out); }
             body = body.replace(/^[^:]*:\s*/, '').replace(/^[\s,]+|[\s,]+$/g, '').trim();
             for (const item of body.split(/,\s*(?=[\d.]+\s)/)) {
-                const m = item.trim().match(/^([\d.]+)\s+(.+?)\.?$/);
+                // "Elk voertuig" can come without a count.
+                const m = item.trim().replace(/^elk voertuig/i, '1 $&').match(/^([\d.]+)\s+(.+?)\.?$/);
                 if (!m) { if (item.trim()) out.unknown.push(item.trim()); continue; }
                 const count = Number(m[1].replace(/\./g, ''));
                 const key = keyForName(m[2], typeIds);
@@ -11933,6 +11936,7 @@ MKS.module({
                         // "We missen: Pomp Capaciteit: 2.000"
                         const pump = t.match(/pomp\s*capaciteit:?\s*([\d.]+)/i);
                         if (PRISONERS.test(t)) addPrisonerCar(plan);
+                        else if (/elk voertuig/i.test(t)) plan.slots.rtw = Math.max(plan.slots.rtw || 0, 1);
                         else if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
                         else if (pump) plan.slots.water_damage_pump_value = (plan.slots.water_damage_pump_value || 0) + Number(pump[1].replace(/\./g, ''));
                         else if (amount) {
@@ -14289,7 +14293,7 @@ MKS.module({
         // Same keys as before, so saved values stay; only order, groups and texts changed.
         { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 0, max: 100000000, step: 10000, unit: 'credits',
             help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
-        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
+        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 0.25, max: 120, step: 0.25, unit: 'min', help: 'Kleinste stap: 0,25 min (15 seconden). Een ronde die langer duurt, loopt gewoon eerst af.' },
 
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
@@ -15450,7 +15454,7 @@ MKS.module({
         // The building of `pool` with the biggest gap to `have`, weighed by how built-up its area is.
         function bestGap(pool, have, data) {
             if (!denseCache) denseCache = new Map();
-            const all = data.buildings.map(posOf);
+            const all = data.buildings.filter((b) => b.building_type !== 1).map(posOf);
             let best = null;
             for (const b of pool) {
                 const at = posOf(b);
@@ -16060,7 +16064,9 @@ MKS.module({
             // Real posts around every own building (1x1 degree tiles, each fetched once).
             const seen = new Set();
             const posts = [];
-            for (const b of data.buildings) {
+            // A meldkamer is no foothold: one placed far away must not pull new posts towards it.
+            const anchors = data.buildings.filter((b) => b.building_type !== 1);
+            for (const b of anchors) {
                 const key = `${Math.floor(Number(b.latitude))}_${Math.floor(Number(b.longitude))}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
@@ -16071,6 +16077,7 @@ MKS.module({
             if (city) for (const p of await postsNear(city.center)) posts.push(p);
             const uniq = [...new Set(posts)]; // neighbouring tiles overlap
             const owned = [...data.buildings.map(posOf), ...recentSpots()];
+            const grownFrom = [...anchors.map(posOf), ...recentSpots()];
             // Build mode: only the kinds ticked under it, taking turns.
             const kinds = !ctx.cfg.buildMode ? GROW
                 : [...GROW, GROW_HOSPITAL].filter((g) => ctx.cfg[GROW_KEY[g.name]] !== false && (g !== GROW_HOSPITAL || ctx.cfg.buildHosp));
@@ -16096,22 +16103,37 @@ MKS.module({
                     }
                     if (!best) skipped.push(`Groei: ${g.name}: geen vrije echte post meer in ${city.name}, verder rond je gebouwen`);
                 }
-                let n = 0;
+                // Long drives bucketed per 0.5 x 0.8 degree cell, so each post only looks at its neighbours.
+                const cell = (lat, lon) => `${Math.floor(lat / 0.5)}_${Math.floor(lon / 0.8)}`;
+                const driveCells = new Map();
+                for (const d of drives) {
+                    const k = cell(d[0], d[1]);
+                    if (!driveCells.has(k)) driveCells.set(k, []);
+                    driveCells.get(k).push(d);
+                }
+                let slice = performance.now();
                 if (!best) for (const p of uniq) {
                     if (p[2] !== CAT_OF[g.types[0]]) continue;
-                    if (++n % 300 === 0) await sleep(0); // thousands of posts: let the page breathe
+                    // Thousands of posts: give the page a turn every 40 ms so it never freezes.
+                    if (performance.now() - slice > 40) { await sleep(0); slice = performance.now(); }
                     const at = [p[0], p[1]];
-                    if (owned.some((o) => km(o, at) < 0.3)) continue;
                     // Not on top of one of this kind (3 km at least, so it covers new ground),
                     // and of those the one nearest to anything you have: the network grows
                     // outward step by step instead of jumping to far gaps (long drives).
-                    const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
+                    let gap = 99;
+                    for (const o of mine) { const k = km(o, at); if (k < gap) gap = k; if (gap < 3) break; }
                     if (gap < 3) continue;
-                    const near = Math.min(...owned.map((o) => km(o, at)));
+                    let near = 99;
+                    for (const o of grownFrom) { const k = km(o, at); if (k < near) near = k; if (near < 0.3) break; }
+                    if (near < 0.3 || owned.some((o) => km(o, at) < 0.3)) continue;
+                    if (best && !best.score && near >= best.near && !driveCells.size) continue;
                     // Long drives of this kind nearby (Automatisch alarmeren): the km a post
                     // here would have saved in the last 7 days. The spot that saves the most wins.
                     let saved = 0, trips = 0;
-                    for (const d of drives) {
+                    const ci = Math.floor(at[0] / 0.5), cj = Math.floor(at[1] / 0.8);
+                    const close = [];
+                    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) close.push(...(driveCells.get(`${i}_${j}`) || []));
+                    for (const d of close) {
                         if (Math.abs(d[0] - at[0]) > 0.5 || Math.abs(d[1] - at[1]) > 0.8) continue;
                         const gain = d[4] - km(at, [d[0], d[1]]) * 1.3; // road is longer than a straight line
                         if (gain > 3) { saved += gain; trips++; }
@@ -16394,7 +16416,8 @@ MKS.module({
         async function loadData() {
             const [buildings, vehicles, credits] = await Promise.all([api('/api/buildings'), api('/api/vehicles'), api('/api/credits')]);
             const byId = Object.fromEntries(buildings.map((b) => [b.id, b]));
-            const ls = buildings.find((b) => b.building_type === 1) || buildings[0];
+            // The oldest meldkamer is home: a new one elsewhere must not move the fallback spot for building.
+            const ls = buildings.filter((b) => b.building_type === 1).sort((a, b) => a.id - b.id)[0] || buildings[0];
             return { buildings, vehicles, byId, credits: credits.credits_user_current, total: credits.credits_user_total, home: ls ? posOf(ls) : [52.1, 5.3] };
         }
 
@@ -16863,7 +16886,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261101010926' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261104163708' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -17084,7 +17107,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261101010926',
+                version: '1.7.0.20261104163708',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {

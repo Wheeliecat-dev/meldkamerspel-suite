@@ -344,7 +344,8 @@ MKS.module({
             if (PRISONERS.test(body)) { body = body.replace(PRISONERS, ''); addPrisonerCar(out); }
             body = body.replace(/^[^:]*:\s*/, '').replace(/^[\s,]+|[\s,]+$/g, '').trim();
             for (const item of body.split(/,\s*(?=[\d.]+\s)/)) {
-                const m = item.trim().match(/^([\d.]+)\s+(.+?)\.?$/);
+                // "Elk voertuig" can come without a count.
+                const m = item.trim().replace(/^elk voertuig/i, '1 $&').match(/^([\d.]+)\s+(.+?)\.?$/);
                 if (!m) { if (item.trim()) out.unknown.push(item.trim()); continue; }
                 const count = Number(m[1].replace(/\./g, ''));
                 const key = keyForName(m[2], typeIds);
@@ -676,6 +677,7 @@ MKS.module({
                         // "We missen: Pomp Capaciteit: 2.000"
                         const pump = t.match(/pomp\s*capaciteit:?\s*([\d.]+)/i);
                         if (PRISONERS.test(t)) addPrisonerCar(plan);
+                        else if (/elk voertuig/i.test(t)) plan.slots.rtw = Math.max(plan.slots.rtw || 0, 1);
                         else if (/person/i.test(p.getAttribute('data-requirement-type')) || /^missende? personeel/i.test(t)) addPersonnel(plan, personnelItems(t));
                         else if (pump) plan.slots.water_damage_pump_value = (plan.slots.water_damage_pump_value || 0) + Number(pump[1].replace(/\./g, ''));
                         else if (amount) {
