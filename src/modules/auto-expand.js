@@ -25,7 +25,7 @@ MKS.module({
         // Same keys as before, so saved values stay; only order, groups and texts changed.
         { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 0, max: 100000000, step: 10000, unit: 'credits',
             help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
-        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
+        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 0.25, max: 120, step: 0.25, unit: 'min', help: 'Kleinste stap: 0,25 min (15 seconden). Een ronde die langer duurt, loopt gewoon eerst af.' },
 
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '

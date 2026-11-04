@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261101005522 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261104123714 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261101005522';
+    const VERSION = '1.7.0.20261104123714';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11306,6 +11306,10 @@ MKS.module({
             help: 'Een nieuwe inzet met zoveel patiënten of meer krijgt een OvD-G mee, ook als de inzet er zelf niet om vraagt, '
                 + 'als die vrij is en binnen de maximale afstand. '
                 + 'Geen OvD-G vrij: de rest gaat toch. 0 = uit.' },
+        { key: 'patientLane', parent: 'patients', label: 'Eigen venster voor patiëntenzorg', type: 'bool', default: true,
+            help: 'Een gestarte inzet die alleen nog op patiëntenzorg wacht (ambulance, MMT, OvD-G) krijgt die uit een eigen verborgen venster, '
+                + 'naast de gewone ronde. Zo wachten patiënten niet achter de grote nieuwe inzetten, en de grote inzetten niet achter de patiënten. '
+                + 'Wat al onderweg is gaat er af.' },
         { key: 'bigCredits', group: 'Grote inzetten', label: 'Grote inzet vanaf', type: 'number', default: 15000, min: 0, max: 100000, step: 500, unit: 'credits',
             help: 'Inzetten gaan altijd op volgorde van credits, hoogste eerst. Wordt een grote inzet overgeslagen omdat er iets te weinig is, '
                 + 'dan houdt het zijn zeldzame voertuigen vast: kleinere inzetten krijgen die even niet. Alleen voor inzetten met minstens twee keer zoveel credits. 0 = niets vasthouden.' },
@@ -11332,7 +11336,7 @@ MKS.module({
             help: 'Eén voertuig naar gedeelde teaminzetten en teamevenementen. Klik op de naam voor de voertuigtypes en uitleg.' },
         { key: 'teamFull', parent: 'teamMissions', label: 'Teaminzetten en -evenementen: alles sturen wat nodig is', type: 'bool', default: false,
             help: 'Niet één voertuig, maar alles wat de teaminzet nog mist, zoals bij je eigen inzetten: de rode melding "Missende voertuigen", '
-                + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn. Maximale afstand en '
+                + 'patiënten, of de hele inzet als er nog niemand is. Wacht zolang er voertuigen onderweg zijn (patiëntenzorg gaat meteen). Maximale afstand en '
                 + '"Alleen als alles beschikbaar is" gelden ook hier. Geldt ook voor teamevenementen en geplande teaminzetten.' },
         { key: 'eventFocus', parent: 'teamMissions', label: 'Focus: teamevenementen', type: 'bool', default: false,
             help: 'Alles op één teamevenement: het best betalende dat nog iets mist. Het krijgt wat het nog mist (de rode melding, of de hele inzet als er nog niemand is), '
@@ -11449,6 +11453,8 @@ MKS.module({
         // Names the game uses in "Benodigde X" and in the red "Missende voertuigen"
         // box -> requirement key. Solved from 229 help pages against /einsaetze.json.
         const LABELS = {
+            // "1 Elk voertuig" (Splinter in oog): anything will do, a single ambulance is the right one.
+            'elk voertuig': 'ambulances',
             'tankautospuiten': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
             "ovd-b's": 'battalion_chief_vehicles', 'water': 'water_needed', 'tankautospuiten (terreinvaardig)': 'brush_truck',
             'hulpverleningsvoertuigen': 'heavy_rescue_vehicles', 'signalisatie voertuigen': 'traffic_unit', 'noodhulpeenheden': 'police_cars',
@@ -11875,7 +11881,7 @@ MKS.module({
                 // before sending them left missions open a long time: send those now, unless
                 // one of that kind is already on its way.
                 let earlyCare = null;
-                if (driving && missingText && job.topUp) {
+                if (driving && missingText && job.topUp && !job.patientOnly) {
                     const drivingTypes = new Set([...document.querySelectorAll('#mission_vehicle_driving a[vehicle_type_id]')].map((a) => a.getAttribute('vehicle_type_id')));
                     const items = [...box.querySelectorAll('[data-requirement-type]')]
                         .filter((x) => x.getAttribute('data-requirement-type') !== 'vehicles')
@@ -11889,8 +11895,14 @@ MKS.module({
                 // A team event in focus has other players driving there all the time: waiting
                 // for that meant 106 waits in 3 hours on one Natuurbrand. With a red box it
                 // goes now, minus what is on its way (below).
-                const pastDriving = job.dropFar && missingText && !earlyCare;
-                if (driving && !earlyCare && !pastDriving) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
+                const pastDriving = job.dropFar && missingText && !earlyCare && !job.patientOnly;
+                // Patients do not wait for the fire trucks still driving: their ambulance, MMT
+                // and OvD-G go now, minus those already on their way (below). Waiting for
+                // everything to arrive left patient top-ups behind for many minutes.
+                const earlyPatients = job.patients && !!pText && !pNeed.unknown.length && !job.patientVt
+                    && (job.patientOnly || (driving && !earlyCare && !pastDriving));
+                if (job.patientOnly && !earlyPatients) { report('skip', { reason: pNeed.unknown.length ? `patiënten, kan niet sturen: ${pNeed.unknown.join(', ')}` : 'geen patiëntenzorg meer nodig' }); return; }
+                if (driving && !earlyCare && !pastDriving && !earlyPatients) { report('wait', { reason: 'wacht: voertuigen onderweg' }); return; }
                 if (mode === 'full' && present) { report('skip', { reason: 'al voertuigen ter plaatse, geen rode melding', covered: true }); return; }
                 if (mode !== 'full' && !job.topUp) { report('skip', { reason: 'rode melding, bijsturen staat uit' }); return; }
                 if (pNeed.unknown.length) {
@@ -11900,10 +11912,10 @@ MKS.module({
                 if (!job.fast) await loadAllVehicles();
                 dropAvoided(job.avoid); // loadAllVehicles can add rows again
 
-                let plan = mode === 'patients' ? { slots: {}, vt: {}, vtCaptions: {} }
+                let plan = mode === 'patients' || earlyPatients ? { slots: {}, vt: {}, vtCaptions: {} }
                     : { slots: job.slots || {}, vt: job.vt || {}, vtCaptions: job.vtCaptions || {} };
                 if (earlyCare) plan = earlyCare;
-                else if (mode === 'missing') {
+                else if (mode === 'missing' && !earlyPatients) {
                     // Vehicle type captions in this window, for names that are a type ("DB-PC-LOG").
                     const typeIds = {};
                     document.querySelectorAll('input.vehicle_checkbox[vehicle_type_id]').forEach((c) => {
@@ -11989,6 +12001,21 @@ MKS.module({
                     // "8x We benodigen: MMT-Arts" does not mean 8 helicopters: send one, and
                     // another in a later round while the patients still ask for it.
                     if (pNeed.mmt) attrs.nef = Math.max(Number(attrs.nef) || 0, 1);
+                    if (earlyPatients) {
+                        // Each ambulance, MMT or OvD-G on its way takes one of these off.
+                        const CARE = ['rtw', 'nef', 'kdow_orgl'];
+                        const fits = {};
+                        document.querySelectorAll('input.vehicle_checkbox[vehicle_type_id]').forEach((c) => {
+                            const t = c.getAttribute('vehicle_type_id');
+                            if (!fits[t]) fits[t] = CARE.filter((k) => c.getAttribute(k) != null && c.getAttribute(k) !== '0');
+                        });
+                        for (const a of document.querySelectorAll('#mission_vehicle_driving a[vehicle_type_id]')) {
+                            const k = (fits[a.getAttribute('vehicle_type_id')] || []).find((x) => attrs[x] > 0);
+                            if (k) attrs[k]--;
+                        }
+                        for (const k of CARE) if (!(attrs[k] > 0)) delete attrs[k];
+                        if (!Object.keys(attrs).length) { report('wait', { reason: 'wacht: patiëntenzorg al onderweg' }); return; }
+                    }
                 }
                 // Many patients on a new mission: an OvD-G along if one is free and near
                 // enough (ovdgFrom or more patients), asked for or not. Optional: without one the rest still goes.
@@ -12800,6 +12827,10 @@ MKS.module({
             // "Arrestanten moeten vervoerd worden." in the list: a police car is (or will
             // be) stuck there until it gets a cell.
             const prisonersWaiting = (e) => /arrestanten moeten/i.test(sidebarMissing(e));
+            // A started mission that only waits for patient care (ambulance, MMT, OvD-G): the
+            // patient window's work, so it does not queue behind the big new missions.
+            const patientOnly = (e) => ctx.cfg.patients && e.getAttribute('data-mission-state-filter') !== 'unattended'
+                && !sidebarMissing(e) && !!sidebarPatients(e) && !PATIENT_VT[e.getAttribute('mission_type_id')];
 
             function candidates() {
                 const now = Date.now();
@@ -12811,6 +12842,7 @@ MKS.module({
                     const t = tried.get(e.getAttribute('mission_id'));
                     return !t || now - t > ctx.cfg.retryMin * 60000;
                 }).filter((e) => !(ctx.cfg.quickLane && !ctx.cfg.singleCar && !onQuickHold(e) && (isQuick(e) || isTopUp(e))))
+                    .filter((e) => !(ctx.cfg.patientLane && patientOnly(e)))
                     .sort((a, b) => (ctx.cfg.transport ? prisonersWaiting(b) - prisonersWaiting(a) : 0)
                     || creditsOf(b) - creditsOf(a)) // arrestants first (a cell takes seconds), then big missions
                     .concat(plannedCandidates(now));
@@ -13183,7 +13215,7 @@ MKS.module({
             let reloadWanted = false;
             function reloadWhenIdle() {
                 reloadWanted = true;
-                if (busy || teamBusy || quickBusy) return;
+                if (busy || teamBusy || quickBusy || patientBusy) return;
                 onPageHide();
                 location.reload();
             }
@@ -13427,6 +13459,61 @@ MKS.module({
                 if (reloadWanted && !busy && !teamBusy) reloadWhenIdle();
             }
 
+            // The patient loop: its own hidden window for started missions that only wait for
+            // patient care (patientOnly). cycle() leaves those alone; the mission the other
+            // loop is on right now (mainId / patientId) is skipped by both.
+            let patientBusy = false, patientTimer = null, patientKick = null, patientId = null, mainId = null;
+            const patientTried = new Map(); // mission id -> look again after
+            async function patientCycle() {
+                if (!running || stopped || patientBusy || reloadWanted || !ctx.cfg.patients || !ctx.cfg.patientLane) return;
+                patientBusy = true;
+                try {
+                    if (!missions) return;
+                    const now = Date.now();
+                    for (const [id, t] of patientTried) if (t < now - 3600000) patientTried.delete(id);
+                    const todo = [...document.querySelectorAll('#mission_list .missionSideBarEntry[mission_type_id]')]
+                        .filter((e) => patientOnly(e) && e.getAttribute('mission_id') !== mainId && !((patientTried.get(e.getAttribute('mission_id')) || 0) > now))
+                        .filter((e) => !ctx.cfg.onlyVisible || getComputedStyle(e).display !== 'none')
+                        .sort((a, b) => creditsOf(b) - creditsOf(a)).slice(0, 5);
+                    for (const entry of todo) {
+                        if (!running || stopped || reloadWanted || !ctx.cfg.patientLane) return;
+                        const hourAgo = Date.now() - 3600000;
+                        while (sent.length && sent[0] < hourAgo) sent.shift();
+                        if (sent.length + inFlight >= ctx.cfg.maxPerHour) return;
+                        const id = entry.getAttribute('mission_id');
+                        if (id === mainId) continue;
+                        const name = titleOf(entry);
+                        const credits = creditsOf(entry);
+                        const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
+                        const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
+                        patientId = id;
+                        const res = await runJob({ id, token: Date.now(), slots: {}, vt: {}, vtCaptions: {}, patientOnly: true,
+                            maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: false, patients: true, patientText: sidebarPatients(entry), topUp: true,
+                            ignoreShort: [], bigPatients: 0, reserved: reservedFor(id, credits, true), ownJobOnly: ownJobOnly(),
+                            ovdgFrom: 0, avoid: avoidCars(), transport: false, release: false, noRedirect: Object.keys(redirectedIds()) }).finally(() => { patientId = null; });
+                        recordEvent({ kind: 'mission', lane: 'patients', id, name, type: keyOf(entry), credits, pos, result: res.result, mode: res.mode, n: res.n, km: res.km, reason: res.reason });
+                        if (res.result === 'sent' || res.result === 'unconfirmed') {
+                            stats.sent++;
+                            sent.push(Date.now());
+                            patientTried.set(id, Date.now() + 60000); // the lines update once they arrive
+                            addLog(name, `patiëntenzorg${res.result === 'sent' ? '' : ' (niet bevestigd)'}: ${res.n} voertuig(en), verste ${Number(res.km).toFixed(1)} km`, 'ok');
+                        } else if (res.result === 'wait') {
+                            patientTried.set(id, Date.now() + 60000);
+                        } else if (res.result === 'skip') {
+                            stats.skipped++;
+                            patientTried.set(id, Date.now() + ctx.cfg.retryMin * 60000);
+                            if (!/geen patiëntenzorg meer nodig/.test(String(res.reason || ''))) addLog(name, `patiënten overgeslagen: ${res.reason}`, 'idle');
+                        } else {
+                            stats.errors++;
+                            patientTried.set(id, Date.now() + ctx.cfg.retryMin * 60000);
+                            addLog(name, `patiënten fout: ${res.reason}`, 'error');
+                        }
+                        await sleep(ctx.cfg.pauseSec * 1000);
+                    }
+                } catch (e) { ctx.err(e); addLog('Patiëntenzorg', `fout: ${e.message}`, 'error'); } finally { patientBusy = false; saveSession(); }
+                if (reloadWanted && !busy && !teamBusy && !quickBusy) reloadWhenIdle();
+            }
+
             // The team loop runs next to cycle(), in its own hidden window, on its own timer.
             let teamBusy = false, teamTimer = null, teamKick = null, teamErrors = 0, teamPauseUntil = 0;
             // Nothing of the chosen types free for team missions or for events: that kind waits
@@ -13633,6 +13720,7 @@ MKS.module({
                         const lat = Number(entry.getAttribute('latitude')), lon = Number(entry.getAttribute('longitude'));
                         curPos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null;
                         curCredits = credits;
+                        if (id === patientId) continue; // the patient window is on it right now
                         tried.set(id, Date.now());
                         const patientText = ctx.cfg.patients ? sidebarPatients(entry) : '';
                         const red = ctx.cfg.topUp && (sidebarMissing(entry) || patientText);
@@ -13696,11 +13784,12 @@ MKS.module({
                         }
 
                         status(`Bezig: ${name}`, 'busy');
+                        mainId = id;
                         const res = await runJob({ id, token: Date.now(), slots: p.slots, vt: p.vt, vtCaptions: p.vtCaptions,
                             maxKm: ctx.cfg.maxKm, airKm: ctx.cfg.airKm, needAll: ctx.cfg.needAll, patients: ctx.cfg.patients, patientText, topUp: ctx.cfg.topUp,
                             ignoreShort: String(ctx.cfg.ignoreShort || '').split(',').map((s) => s.trim()).filter(Boolean),
                             bigPatients: Number(ctx.cfg.bigPatients) || 0, reserved: reservedFor(id, credits, true), ownJobOnly: ownJobOnly(),
-                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], noRedirect: Object.keys(redirectedIds()), optionalAmb: !!amb0 });
+                            ovdgFrom: Number(ctx.cfg.ovdgFrom) || 0, avoid: avoidCars(), transport: ctx.cfg.transport, destCost: Number(ctx.cfg.destCost), destKm: Number(ctx.cfg.destKm), ownKm: Number(ctx.cfg.ownKm), release: ctx.cfg.release, anyDept: ctx.cfg.anyDept, patientVt: PATIENT_VT[entry.getAttribute('mission_type_id')], noRedirect: Object.keys(redirectedIds()), optionalAmb: !!amb0 }).finally(() => { mainId = null; });
                         // Sent short (needAll off) or skipped: both say what to buy.
                         if (!isPlanned(entry)) recordResult(res, id, name);
                         recordEvent({ kind: 'mission', id, name, type: keyOf(entry), credits, pos: curPos, result: res.result, mode: res.mode, n: res.n, km: res.km,
@@ -13788,6 +13877,8 @@ MKS.module({
                 teamKick = setTimeout(teamCycle, 5000);
                 teamTimer = setInterval(teamCycle, ctx.cfg.scanSec * 1000);
                 quickTimer = setInterval(quickCycle, 6000);
+                patientKick = setTimeout(patientCycle, 2500);
+                patientTimer = setInterval(patientCycle, 8000);
             }
 
             function stop(text) {
@@ -13797,6 +13888,8 @@ MKS.module({
                 clearInterval(teamTimer);
                 clearTimeout(teamKick);
                 clearInterval(quickTimer);
+                clearInterval(patientTimer);
+                clearTimeout(patientKick);
                 clearInterval(heartbeat);
                 releaseLock();
                 addLog('—', text || 'gestopt', text ? 'error' : 'idle');
@@ -14015,6 +14108,8 @@ MKS.module({
                     clearInterval(teamTimer);
                     clearTimeout(teamKick);
                     clearInterval(quickTimer);
+                    clearInterval(patientTimer);
+                    clearTimeout(patientKick);
                     clearInterval(heartbeat);
                     saveSession();
                     releaseLock();
@@ -14196,7 +14291,7 @@ MKS.module({
         // Same keys as before, so saved values stay; only order, groups and texts changed.
         { group: 'Geld', key: 'buffer', label: 'Buffer (nooit uitgeven)', type: 'number', default: 100000, min: 0, max: 100000000, step: 10000, unit: 'credits',
             help: 'Zoveel blijft altijd staan. 0 = alles mag op.' },
-        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 1, max: 120, step: 1, unit: 'min' },
+        { group: 'Geld', parent: 'buffer', key: 'intervalMin', label: 'Eén aankoop per', type: 'number', default: 3, min: 0.25, max: 120, step: 0.25, unit: 'min', help: 'Kleinste stap: 0,25 min (15 seconden). Een ronde die langer duurt, loopt gewoon eerst af.' },
 
         { group: 'Wat het mag kopen', key: 'hcFocus', label: 'Focus: alles naar ziekenhuizen en cellen', type: 'bool', default: false,
             help: 'Elke credit gaat naar ziekenhuizen (levels voor meer bedden, ontbrekende afdelingen) en cellen (celuitbreidingen bij politiebureaus), '
@@ -15357,7 +15452,7 @@ MKS.module({
         // The building of `pool` with the biggest gap to `have`, weighed by how built-up its area is.
         function bestGap(pool, have, data) {
             if (!denseCache) denseCache = new Map();
-            const all = data.buildings.map(posOf);
+            const all = data.buildings.filter((b) => b.building_type !== 1).map(posOf);
             let best = null;
             for (const b of pool) {
                 const at = posOf(b);
@@ -15967,7 +16062,9 @@ MKS.module({
             // Real posts around every own building (1x1 degree tiles, each fetched once).
             const seen = new Set();
             const posts = [];
-            for (const b of data.buildings) {
+            // A meldkamer is no foothold: one placed far away must not pull new posts towards it.
+            const anchors = data.buildings.filter((b) => b.building_type !== 1);
+            for (const b of anchors) {
                 const key = `${Math.floor(Number(b.latitude))}_${Math.floor(Number(b.longitude))}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
@@ -15978,6 +16075,7 @@ MKS.module({
             if (city) for (const p of await postsNear(city.center)) posts.push(p);
             const uniq = [...new Set(posts)]; // neighbouring tiles overlap
             const owned = [...data.buildings.map(posOf), ...recentSpots()];
+            const grownFrom = [...anchors.map(posOf), ...recentSpots()];
             // Build mode: only the kinds ticked under it, taking turns.
             const kinds = !ctx.cfg.buildMode ? GROW
                 : [...GROW, GROW_HOSPITAL].filter((g) => ctx.cfg[GROW_KEY[g.name]] !== false && (g !== GROW_HOSPITAL || ctx.cfg.buildHosp));
@@ -16003,22 +16101,37 @@ MKS.module({
                     }
                     if (!best) skipped.push(`Groei: ${g.name}: geen vrije echte post meer in ${city.name}, verder rond je gebouwen`);
                 }
-                let n = 0;
+                // Long drives bucketed per 0.5 x 0.8 degree cell, so each post only looks at its neighbours.
+                const cell = (lat, lon) => `${Math.floor(lat / 0.5)}_${Math.floor(lon / 0.8)}`;
+                const driveCells = new Map();
+                for (const d of drives) {
+                    const k = cell(d[0], d[1]);
+                    if (!driveCells.has(k)) driveCells.set(k, []);
+                    driveCells.get(k).push(d);
+                }
+                let slice = performance.now();
                 if (!best) for (const p of uniq) {
                     if (p[2] !== CAT_OF[g.types[0]]) continue;
-                    if (++n % 300 === 0) await sleep(0); // thousands of posts: let the page breathe
+                    // Thousands of posts: give the page a turn every 40 ms so it never freezes.
+                    if (performance.now() - slice > 40) { await sleep(0); slice = performance.now(); }
                     const at = [p[0], p[1]];
-                    if (owned.some((o) => km(o, at) < 0.3)) continue;
                     // Not on top of one of this kind (3 km at least, so it covers new ground),
                     // and of those the one nearest to anything you have: the network grows
                     // outward step by step instead of jumping to far gaps (long drives).
-                    const gap = mine.length ? Math.min(...mine.map((o) => km(o, at))) : 99;
+                    let gap = 99;
+                    for (const o of mine) { const k = km(o, at); if (k < gap) gap = k; if (gap < 3) break; }
                     if (gap < 3) continue;
-                    const near = Math.min(...owned.map((o) => km(o, at)));
+                    let near = 99;
+                    for (const o of grownFrom) { const k = km(o, at); if (k < near) near = k; if (near < 0.3) break; }
+                    if (near < 0.3 || owned.some((o) => km(o, at) < 0.3)) continue;
+                    if (best && !best.score && near >= best.near && !driveCells.size) continue;
                     // Long drives of this kind nearby (Automatisch alarmeren): the km a post
                     // here would have saved in the last 7 days. The spot that saves the most wins.
                     let saved = 0, trips = 0;
-                    for (const d of drives) {
+                    const ci = Math.floor(at[0] / 0.5), cj = Math.floor(at[1] / 0.8);
+                    const close = [];
+                    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) close.push(...(driveCells.get(`${i}_${j}`) || []));
+                    for (const d of close) {
                         if (Math.abs(d[0] - at[0]) > 0.5 || Math.abs(d[1] - at[1]) > 0.8) continue;
                         const gain = d[4] - km(at, [d[0], d[1]]) * 1.3; // road is longer than a straight line
                         if (gain > 3) { saved += gain; trips++; }
@@ -16301,7 +16414,8 @@ MKS.module({
         async function loadData() {
             const [buildings, vehicles, credits] = await Promise.all([api('/api/buildings'), api('/api/vehicles'), api('/api/credits')]);
             const byId = Object.fromEntries(buildings.map((b) => [b.id, b]));
-            const ls = buildings.find((b) => b.building_type === 1) || buildings[0];
+            // The oldest meldkamer is home: a new one elsewhere must not move the fallback spot for building.
+            const ls = buildings.filter((b) => b.building_type === 1).sort((a, b) => a.id - b.id)[0] || buildings[0];
             return { buildings, vehicles, byId, credits: credits.credits_user_current, total: credits.credits_user_total, home: ls ? posOf(ls) : [52.1, 5.3] };
         }
 
@@ -16770,7 +16884,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261101005522' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261104123714' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -16991,7 +17105,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261101005522',
+                version: '1.7.0.20261104123714',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {

@@ -194,6 +194,8 @@ MKS.module({
         // Names the game uses in "Benodigde X" and in the red "Missende voertuigen"
         // box -> requirement key. Solved from 229 help pages against /einsaetze.json.
         const LABELS = {
+            // "1 Elk voertuig" (Splinter in oog): anything will do, a single ambulance is the right one.
+            'elk voertuig': 'ambulances',
             'tankautospuiten': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
             "ovd-b's": 'battalion_chief_vehicles', 'water': 'water_needed', 'tankautospuiten (terreinvaardig)': 'brush_truck',
             'hulpverleningsvoertuigen': 'heavy_rescue_vehicles', 'signalisatie voertuigen': 'traffic_unit', 'noodhulpeenheden': 'police_cars',
