@@ -1,0 +1,36 @@
+name: Build beta userscript
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "build.js"
+      - ".github/workflows/build-beta.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-beta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build beta
+        run: node build.js
+      - name: Commit generated userscript
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/meldkamerspel-suite-beta.user.js dist/lib/
+          if git diff --cached --quiet; then
+            echo "No generated changes."
+          else
+            git commit -m "Build beta userscript"
+            git push
+          fi
