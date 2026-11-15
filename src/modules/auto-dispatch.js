@@ -1760,7 +1760,7 @@ MKS.module({
                 foundObjectTried.add(String(id));
                 name = name || missionTitle(doc);
                 const token = document.querySelector('meta[name=csrf-token]')?.content || '';
-                fetch(`/missions/${id}/claim_found_object`, { method: 'POST', credentials: 'same-origin',
+                fetch(`/missions/${id}/claim_found_object_sync`, { method: 'POST', credentials: 'same-origin',
                     headers: { 'X-CSRF-Token': token, 'X-Requested-With': 'XMLHttpRequest' } })
                     .then((r) => addLog(name || `inzet ${id}`, r.ok ? 'snoepje gevonden' : `snoepje niet gelukt (${r.status})`, r.ok ? 'ok' : 'warn'))
                     .catch(() => {});
