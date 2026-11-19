@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261115150838 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261119230619 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261115150838';
+    const VERSION = '1.7.0.20261119230619';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11455,7 +11455,8 @@ MKS.module({
         const LABELS = {
             // "1 Elk voertuig" (Splinter in oog): anything will do, a single ambulance is the right one.
             'elk voertuig': 'ambulances',
-            'tankautospuiten': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
+            'we missen: 1 waterpomp': 'firetrucks',
+            'tankautospuiten': 'firetrucks', 'waterpomp': 'firetrucks', 'waterpompen': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
             "ovd-b's": 'battalion_chief_vehicles', 'water': 'water_needed', 'tankautospuiten (terreinvaardig)': 'brush_truck',
             'hulpverleningsvoertuigen': 'heavy_rescue_vehicles', 'signalisatie voertuigen': 'traffic_unit', 'noodhulpeenheden': 'police_cars',
             'schuimblusvoertuig': 'foam', 'svm': 'foam_needed', "hovd's": 'mobile_command_vehicles', 'biketeams': 'bike_police',
@@ -11599,7 +11600,15 @@ MKS.module({
         // Items start with a number; names can contain commas themselves.
         function fromMissing(text, typeIds) {
             const out = { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
-            let body = String(text).replace(/\s+/g, ' ');
+            let body = String(text).replace(/\s+/g, ' ').trim();
+            // The red notification can say "We missen: 1 Waterpomp" (or any
+            // other count). Treat the full phrase as a fire-engine requirement,
+            // preserving the requested number: 2 means two TS/TST slots, etc.
+            const waterPump = body.match(/^we missen:\s*([\d.]+)\s+waterpompen?\.?$/i);
+            if (waterPump) {
+                out.slots.fire = Number(waterPump[1].replace(/\./g, ''));
+                return out;
+            }
             if (PRISONERS.test(body)) { body = body.replace(PRISONERS, ''); addPrisonerCar(out); }
             body = body.replace(/^[^:]*:\s*/, '').replace(/^[\s,]+|[\s,]+$/g, '').trim();
             for (const item of body.split(/,\s*(?=[\d.]+\s)/)) {
@@ -16884,7 +16893,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261115150838' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261119230619' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -17105,7 +17114,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261115150838',
+                version: '1.7.0.20261119230619',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {
