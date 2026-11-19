@@ -1,4 +1,4 @@
-/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261104163708 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
+/* Wheeliecat's Meldkamerspel Scripts (beta) v1.7.0.20261119230539 — https://github.com/Wheeliecat-dev/meldkamerspel-suite */
 
 /* eslint-disable no-console */
 /* ============================================================================
@@ -43,7 +43,7 @@ const MKS = (() => {
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
     const IS_TOP = window.top === window.self;
-    const VERSION = '1.7.0.20261104163708';
+    const VERSION = '1.7.0.20261119230539';
     const CHANNEL = 'beta';
     const STATE_KEY = 'mks.suite.v1';
     const LAST_KEY = 'mks.suite.lastView';
@@ -11455,7 +11455,8 @@ MKS.module({
         const LABELS = {
             // "1 Elk voertuig" (Splinter in oog): anything will do, a single ambulance is the right one.
             'elk voertuig': 'ambulances',
-            'tankautospuiten': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
+            'we missen: 1 waterpomp': 'firetrucks',
+            'tankautospuiten': 'firetrucks', 'waterpomp': 'firetrucks', 'waterpompen': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
             "ovd-b's": 'battalion_chief_vehicles', 'water': 'water_needed', 'tankautospuiten (terreinvaardig)': 'brush_truck',
             'hulpverleningsvoertuigen': 'heavy_rescue_vehicles', 'signalisatie voertuigen': 'traffic_unit', 'noodhulpeenheden': 'police_cars',
             'schuimblusvoertuig': 'foam', 'svm': 'foam_needed', "hovd's": 'mobile_command_vehicles', 'biketeams': 'bike_police',
@@ -13010,27 +13011,25 @@ MKS.module({
                 c.querySelectorAll('script, style, a').forEach((x) => x.remove());
                 return c.textContent.replace(/\s+/g, ' ').trim();
             }
-            // Halloween 2026 (temporary): a mission page can carry a pumpkin (#easter-egg-link).
-            // Any mission page we open or read gets it claimed, the same POST the game's click
-            // sends, once per mission, until PUMPKIN_UNTIL. Remove after the event.
-            const PUMPKIN_UNTIL = Date.parse('2026-10-31T19:30:00+01:00');
-            const pumpkinTried = new Set();
-            function claimPumpkin(id, doc, name) {
-                if (Date.now() > PUMPKIN_UNTIL || !doc || pumpkinTried.has(String(id))) return;
+            // Found-object event (e.g. candies): claim any item exposed as #easter-egg-link.
+            // The game uses the same claim endpoint for the item's click; try once per mission.
+            const foundObjectTried = new Set();
+            function claimFoundObject(id, doc, name) {
+                if (!doc || foundObjectTried.has(String(id))) return;
                 if (!doc.getElementById('easter-egg-link')) return;
-                pumpkinTried.add(String(id));
+                foundObjectTried.add(String(id));
                 name = name || missionTitle(doc);
                 const token = document.querySelector('meta[name=csrf-token]')?.content || '';
-                fetch(`/missions/${id}/claim_found_object`, { method: 'POST', credentials: 'same-origin',
+                fetch(`/missions/${id}/claim_found_object_sync`, { method: 'POST', credentials: 'same-origin',
                     headers: { 'X-CSRF-Token': token, 'X-Requested-With': 'XMLHttpRequest' } })
-                    .then((r) => addLog(name || `inzet ${id}`, r.ok ? 'pompoen gevonden' : `pompoen niet gelukt (${r.status})`, r.ok ? 'ok' : 'warn'))
+                    .then((r) => addLog(name || `inzet ${id}`, r.ok ? 'snoepje gevonden' : `snoepje niet gelukt (${r.status})`, r.ok ? 'ok' : 'warn'))
                     .catch(() => {});
             }
             function runFrame(job) {
                 return new Promise((resolve) => {
                     const frame = document.createElement('iframe');
                     if (job.kind !== 'transport') {
-                        frame.addEventListener('load', () => { try { claimPumpkin(job.id, frame.contentDocument); } catch (e) { /* ignore */ } });
+                        frame.addEventListener('load', () => { try { claimFoundObject(job.id, frame.contentDocument); } catch (e) { /* ignore */ } });
                     }
                     frame.name = WORKER + JSON.stringify(job);
                     frame.setAttribute('aria-hidden', 'true');
@@ -13161,7 +13160,7 @@ MKS.module({
                         const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
                         if (!r.ok) continue;
                         const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-                        claimPumpkin(id, doc);
+                        claimFoundObject(id, doc);
                         const bar = doc.getElementById(`mission_bar_${id}`);
                         if (!isDone(bar)) continue;
                         // Anything still asked for in the red box: the mission is not done.
@@ -13319,7 +13318,7 @@ MKS.module({
                 const r = await fetch(`/missions/${id}`, { credentials: 'same-origin' });
                 if (!r.ok) return null;
                 const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-                claimPumpkin(id, doc);
+                claimFoundObject(id, doc);
                 if (doc.querySelector('#mission_vehicle_driving tbody tr, #mission_vehicle_at_mission tbody tr')) return { busy: true };
                 // Patients on a mission that also needs a police car or fire engine: they need an
                 // ambulance too, and the window adds one per untreated patient. Only a mission
@@ -16886,7 +16885,7 @@ MKS.module({
                 return l && l.inst !== INSTANCE && Date.now() - l.at < 30000 ? l : null;
             } catch (e) { return null; }
         }
-        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261104163708' })); } catch (e) { /* ignore */ } };
+        const takeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ inst: INSTANCE, at: Date.now(), since: STARTED, url: location.pathname + location.search, version: '1.7.0.20261119230539' })); } catch (e) { /* ignore */ } };
         const heartbeat = setInterval(() => { if (!lockHolder()) takeLock(); }, 10000);
         // Let go on reload or close, or the reloaded page waits 30 s for its own old lock
         // ("Draait al in een ander tabblad" with only one tab open).
@@ -17107,7 +17106,7 @@ MKS.module({
             const strip = (o) => { try { return JSON.parse(JSON.stringify(o)); } catch (e) { return null; } };
             return {
                 at: new Date().toISOString(),
-                version: '1.7.0.20261104163708',
+                version: '1.7.0.20261119230539',
                 page: location.pathname,
                 income: incomeSummary(),
                 dispatch: {
