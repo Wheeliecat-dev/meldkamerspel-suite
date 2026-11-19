@@ -341,7 +341,15 @@ MKS.module({
         // Items start with a number; names can contain commas themselves.
         function fromMissing(text, typeIds) {
             const out = { slots: {}, vt: {}, vtCaptions: {}, unknown: [] };
-            let body = String(text).replace(/\s+/g, ' ');
+            let body = String(text).replace(/\s+/g, ' ').trim();
+            // The red notification can say "We missen: 1 Waterpomp" (or any
+            // other count). Treat the full phrase as a fire-engine requirement,
+            // preserving the requested number: 2 means two TS/TST slots, etc.
+            const waterPump = body.match(/^we missen:\s*([\d.]+)\s+waterpompen?\.?$/i);
+            if (waterPump) {
+                out.slots.fire = Number(waterPump[1].replace(/\./g, ''));
+                return out;
+            }
             if (PRISONERS.test(body)) { body = body.replace(PRISONERS, ''); addPrisonerCar(out); }
             body = body.replace(/^[^:]*:\s*/, '').replace(/^[\s,]+|[\s,]+$/g, '').trim();
             for (const item of body.split(/,\s*(?=[\d.]+\s)/)) {
