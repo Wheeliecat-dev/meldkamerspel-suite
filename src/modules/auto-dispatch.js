@@ -196,6 +196,7 @@ MKS.module({
         const LABELS = {
             // "1 Elk voertuig" (Splinter in oog): anything will do, a single ambulance is the right one.
             'elk voertuig': 'ambulances',
+            'we missen: 1 waterpomp': 'firetrucks',
             'tankautospuiten': 'firetrucks', 'waterpomp': 'firetrucks', 'waterpompen': 'firetrucks', 'slangenwagens': 'water_tankers', 'redvoertuigen': 'platform_trucks',
             "ovd-b's": 'battalion_chief_vehicles', 'water': 'water_needed', 'tankautospuiten (terreinvaardig)': 'brush_truck',
             'hulpverleningsvoertuigen': 'heavy_rescue_vehicles', 'signalisatie voertuigen': 'traffic_unit', 'noodhulpeenheden': 'police_cars',
